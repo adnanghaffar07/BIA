@@ -8,12 +8,21 @@ import {
   CircularProgress,
   Typography,
   Snackbar,
+  Grid,
+  ButtonGroup,
+  Button,
+  Chip,
 } from '@mui/material';
 import SearchForm from '@/components/SearchForm';
 import LeadsTable from '@/components/LeadsTable';
+import LeadCardWithGrade from '@/components/LeadCardWithGrade';
 import { Lead, LeadFilters } from '@/types/lead';
 import LeadService from '@/services/lead.service';
 import { ERROR_MESSAGES } from '@/lib/constants';
+import ViewListIcon from '@mui/icons-material/ViewList';
+import ViewAgendaIcon from '@mui/icons-material/ViewAgenda';
+
+type ViewMode = 'table' | 'grid';
 
 export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -21,6 +30,7 @@ export default function LeadsPage() {
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<LeadFilters>({});
   const [payload, setPayload] = useState<any>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: '',

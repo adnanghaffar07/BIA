@@ -9,17 +9,22 @@ import {
   Button,
   Container,
 } from '@mui/material';
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { useRouter } from 'next/navigation';
+import LogoutIcon from '@mui/icons-material/Logout';
+import { useAuth } from '@/context/AuthContext';
 
 export default function Navbar() {
-  const pathname = usePathname();
+  const router = useRouter();
+  const { logout, user } = useAuth();
 
-  const isActive = (path: string) => pathname === path;
+  const handleLogout = () => {
+    logout();
+    router.push('/login');
+  };
 
   return (
     <AppBar position="sticky" sx={{ boxShadow: 2 }}>
-      <Container maxWidth="lg">
+      <Container maxWidth="lg" sx={{ width: '100%' }}>
         <Toolbar disableGutters>
           <Typography
             variant="h6"
@@ -35,43 +40,33 @@ export default function Navbar() {
             🏢 BIA
           </Typography>
 
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <Button
-              component={Link}
-              href="/"
-              color="inherit"
-              sx={{
-                textTransform: 'none',
-                fontSize: '1rem',
-                borderBottom: isActive('/') ? '2px solid white' : 'none',
-                paddingBottom: isActive('/') ? '8px' : '10px',
-                transition: 'all 0.3s ease',
-                '&:hover': {
-                  borderBottom: '2px solid white',
-                  paddingBottom: '8px',
-                },
-              }}
-            >
-              Home
-            </Button>
+          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+            {user && (
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'white',
+                  fontSize: '0.9rem',
+                }}
+              >
+                {user.email}
+              </Typography>
+            )}
 
             <Button
-              component={Link}
-              href="/leads"
+              onClick={handleLogout}
               color="inherit"
+              startIcon={<LogoutIcon />}
               sx={{
                 textTransform: 'none',
                 fontSize: '1rem',
-                borderBottom: isActive('/leads') ? '2px solid white' : 'none',
-                paddingBottom: isActive('/leads') ? '8px' : '10px',
                 transition: 'all 0.3s ease',
                 '&:hover': {
-                  borderBottom: '2px solid white',
-                  paddingBottom: '8px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.15)',
                 },
               }}
             >
-              Leads
+              Logout
             </Button>
           </Box>
         </Toolbar>
