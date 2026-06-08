@@ -99,13 +99,6 @@ export default function LoginPage() {
             </Alert>
           )}
 
-          {/* Demo Credentials Info */}
-          <Alert severity="info" sx={{ mb: 3 }}>
-            <Typography variant="caption">
-              <strong>Demo Credentials:</strong> Any email/password combination works. Try admin@example.com / password
-            </Typography>
-          </Alert>
-
           {/* Login Form */}
           <Box component="form" onSubmit={handleSubmit}>
             <TextField
@@ -116,12 +109,14 @@ export default function LoginPage() {
               onChange={(e) => setEmail(e.target.value)}
               margin="normal"
               placeholder="your@email.com"
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <EmailIcon sx={{ color: '#667eea', mr: 1 }} />
-                  </InputAdornment>
-                ),
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <EmailIcon sx={{ color: '#667eea', mr: 1 }} />
+                    </InputAdornment>
+                  ),
+                },
               }}
               disabled={isLoading}
             />
@@ -134,12 +129,14 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               margin="normal"
               placeholder="••••••••"
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <LockIcon sx={{ color: '#667eea', mr: 1 }} />
-                  </InputAdornment>
-                ),
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <LockIcon sx={{ color: '#667eea', mr: 1 }} />
+                    </InputAdornment>
+                  ),
+                },
               }}
               disabled={isLoading}
             />
@@ -168,16 +165,8 @@ export default function LoginPage() {
           </Box>
 
           {/* Footer */}
-          <Typography
-            variant="caption"
-            sx={{
-              display: 'block',
-              textAlign: 'center',
-              color: 'textSecondary',
-              mt: 3,
-            }}
-          >
-            This is a demo application with dummy authentication
+          <Typography variant="caption" sx={{ display: 'block', textAlign: 'center', color: 'text.secondary', mt: 3 }}>
+            Burlington Insurance Agency — Lead Management Platform
           </Typography>
         </Card>
       </Container>

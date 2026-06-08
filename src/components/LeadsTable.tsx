@@ -2,145 +2,179 @@
 
 import React, { useState, Fragment, useEffect, useMemo } from 'react';
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Paper,
-  IconButton,
-  Box,
-  TablePagination,
-  CircularProgress,
-  Typography,
-  Button,
-  Stack,
-  Collapse,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  Paper, IconButton, Box, TablePagination, CircularProgress,
+  Typography, Button, Stack, Collapse, Chip,
 } from '@mui/material';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import GetAppIcon from '@mui/icons-material/GetApp';
+import HomeWorkIcon from '@mui/icons-material/HomeWork';
+import AutorenewIcon from '@mui/icons-material/Autorenew';
 import { Lead } from '@/types/lead';
+import { LeadGrade } from '@/types/grade';
 import { formatCurrency } from '@/utils/formatAddress';
 import { exportLeadsToCSV } from '@/utils/csvExport';
 import PropertyDetailsContent from '@/components/PropertyDetailsContent';
+import LeadGradeBadge from '@/components/LeadGradeBadge';
+import CarrierEligibilityBadge from '@/components/CarrierEligibilityBadge';
 
 interface LeadsTableProps {
-  leads: Lead[];
+  leads: any[]; // accepts both Lead and DB lead shapes
   loading?: boolean;
-  /** Matches API fetch size from search — keeps table page size in sync */
   fetchSize?: number;
   onPageChange?: (page: number) => void;
   onRowsPerPageChange?: (rowsPerPage: number) => void;
 }
 
-function getLeadRowKey(lead: Lead, index: number): string {
+function getLeadRowKey(lead: any, index: number): string {
   return lead.propertyId || lead.id || `lead-row-${index}`;
 }
 
-const COLUMN_COUNT = 10;
-
-/** Distinct from layout page bg (#f5f5f5) and table paper (white) */
+const COLUMN_COUNT = 12;
 const EXPANDED_ROW_BG = '#e3edf7';
 const EXPANDED_ROW_HEADER_BG = '#d4e4f5';
 
-function getOwnerDisplayName(lead: Lead): string {
+function getOwnerDisplayName(lead: any): string {
   if (lead.companyName) return lead.companyName;
-  if (lead.owner1LastName) return lead.owner1LastName;
+  const first = lead.owner1FirstName || '';
+  const last = lead.owner1LastName || '';
+  if (first || last) return `${first} ${last}`.trim();
   return '—';
 }
 
-function LeadRow({ lead }: { lead: Lead }) {
-  const [open, setOpen] = useState(false);
+function getAddress(lead: any) {
+  // Supports both raw API shape (lead.address.street) and DB shape (lead.addressStreet)
+  return {
+    street: lead.address?.street || lead.addressStreet || '—',
+    city: lead.address?.city || lead.addressCity || '—',
+    state: lead.address?.state || lead.addressState || 'NJ',
+    zip: lead.address?.zip || lead.addressZip || '',
+  };
+}
 
-  const toggleOpen = () => setOpen((prev) => !prev);
+function EngineChip({ engine }: { engine: number | null | undefined }) {
+  if (!engine) return <Typography variant="caption" color="textSecondary">—</Typography>;
+  return (
+    <Chip
+      icon={engine === 1 ? <HomeWorkIcon sx={{ fontSize: '0.8rem !important' }} /> : <AutorenewIcon sx={{ fontSize: '0.8rem !important' }} />}
+      label={engine === 1 ? 'New Purchase' : 'Renewal'}
+      size="small"
+      sx={{
+        backgroundColor: engine === 1 ? '#e8f5e9' : '#fff3e0',
+        color: engine === 1 ? '#2e7d32' : '#e65100',
+        border: `1px solid ${engine === 1 ? '#a5d6a7' : '#ffcc80'}`,
+        fontSize: '0.7rem',
+        height: 22,
+        '& .MuiChip-icon': { color: engine === 1 ? '#2e7d32' : '#e65100' },
+      }}
+    />
+  );
+}
+
+function LeadRow({ lead }: { lead: any }) {
+  const [open, setOpen] = useState(false);
+  const addr = getAddress(lead);
+  const grade = lead.grade as LeadGrade | null;
 
   return (
     <Fragment>
       <TableRow
         hover
-        onClick={toggleOpen}
+        onClick={() => setOpen((p) => !p)}
         sx={{
           cursor: 'pointer',
           backgroundColor: open ? EXPANDED_ROW_HEADER_BG : 'background.paper',
-          '& > td': {
-            borderBottom: open ? 'none' : undefined,
-            backgroundColor: 'inherit',
-          },
+          '& > td': { borderBottom: open ? 'none' : undefined, backgroundColor: 'inherit' },
         }}
       >
         <TableCell padding="checkbox" sx={{ width: 48 }}>
-          <IconButton
-            aria-label={open ? 'Collapse row' : 'Expand row'}
-            size="small"
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleOpen();
-            }}
-          >
+          <IconButton size="small" onClick={(e) => { e.stopPropagation(); setOpen((p) => !p); }}>
             {open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
           </IconButton>
         </TableCell>
+
+        {/* Grade */}
+        <TableCell sx={{ width: 140 }}>
+          {grade ? (
+            <LeadGradeBadge grade={grade} size="small" showLabel={false} />
+          ) : (
+            <Typography variant="caption" color="textSecondary">—</Typography>
+          )}
+        </TableCell>
+
+        {/* Owner */}
         <TableCell>
           <Stack spacing={0}>
-            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-              {getOwnerDisplayName(lead)}
-            </Typography>
-            {lead.companyName && lead.owner1LastName && (
-              <Typography variant="caption" color="textSecondary">
-                {lead.owner1LastName}
-              </Typography>
-            )}
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>{getOwnerDisplayName(lead)}</Typography>
           </Stack>
         </TableCell>
+
+        {/* Address */}
         <TableCell>
           <Stack spacing={0}>
-            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-              {lead.address?.street || '—'}
-            </Typography>
-            <Typography variant="caption" color="textSecondary">
-              {lead.address?.zip}
-            </Typography>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>{addr.street}</Typography>
+            <Typography variant="caption" color="textSecondary">{addr.zip}</Typography>
           </Stack>
         </TableCell>
+
+        {/* City/State */}
+        <TableCell>{addr.city}, {addr.state}</TableCell>
+
+        {/* Engine */}
+        <TableCell><EngineChip engine={lead.engine} /></TableCell>
+
+        {/* Carriers */}
         <TableCell>
-          {lead.address?.city}, {lead.address?.state}
+          <CarrierEligibilityBadge
+            travelersEligible={lead.travelersEligible}
+            travelersNotes={lead.travelersNotes}
+            plymouthEligible={lead.plymouthEligible}
+            plymouthNotes={lead.plymouthNotes}
+          />
         </TableCell>
-        <TableCell>
-          {lead.propertyType || lead.propertyUse || 'N/A'}
-        </TableCell>
-        <TableCell align="center">{lead.bedrooms ?? '-'}</TableCell>
-        <TableCell align="center">{lead.bathrooms ?? '-'}</TableCell>
+
+        {/* Indicative Premium */}
         <TableCell align="right">
-          {lead.estimatedValue ? formatCurrency(lead.estimatedValue) : '-'}
+          {lead.expectedPremium ? (
+            <Stack alignItems="flex-end" spacing={0}>
+              <Typography variant="body2" sx={{ fontWeight: 600, color: '#1b5e20' }}>
+                {formatCurrency(lead.expectedPremium)}/yr
+              </Typography>
+              <Typography variant="caption" color="textSecondary">
+                {lead.lowPremium ? `${formatCurrency(lead.lowPremium)} – ${formatCurrency(lead.highPremium)}` : ''}
+              </Typography>
+            </Stack>
+          ) : (
+            <Typography variant="caption" color="textSecondary">—</Typography>
+          )}
         </TableCell>
+
+        {/* Est. Value */}
+        <TableCell align="right">
+          {(lead.estimatedValue || lead.address?.estimatedValue)
+            ? formatCurrency(lead.estimatedValue)
+            : '-'}
+        </TableCell>
+
+        {/* Sq Ft */}
         <TableCell align="right">
           {lead.squareFeet ? lead.squareFeet.toLocaleString() : '-'}
         </TableCell>
-        <TableCell>{lead.landUse || '—'}</TableCell>
+
+        {/* Beds / Baths */}
+        <TableCell align="center">{lead.bedrooms ?? '-'}</TableCell>
+        <TableCell align="center">{lead.bathrooms ?? '-'}</TableCell>
       </TableRow>
+
+      {/* Expanded detail row */}
       <TableRow sx={{ backgroundColor: open ? EXPANDED_ROW_BG : 'inherit' }}>
         <TableCell
           colSpan={COLUMN_COUNT}
-          sx={{
-            py: 0,
-            px: 0,
-            borderBottom: open ? undefined : 'none',
-            backgroundColor: open ? EXPANDED_ROW_BG : 'inherit',
-          }}
+          sx={{ py: 0, px: 0, borderBottom: open ? undefined : 'none', backgroundColor: open ? EXPANDED_ROW_BG : 'inherit' }}
         >
           <Collapse in={open} timeout="auto" unmountOnExit>
-            <Box
-              sx={{
-                px: 3,
-                pb: 3,
-                pt: 1,
-                backgroundColor: EXPANDED_ROW_BG,
-                borderTop: '1px solid',
-                borderColor: '#b6cce8',
-              }}
-            >
+            <Box sx={{ px: 3, pb: 3, pt: 1, backgroundColor: EXPANDED_ROW_BG, borderTop: '1px solid', borderColor: '#b6cce8' }}>
               <PropertyDetailsContent property={lead} />
             </Box>
           </Collapse>
@@ -159,152 +193,82 @@ export default function LeadsTable({
 }: LeadsTableProps) {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(fetchSize);
-
   const totalRows = leads.length;
-
-  const maxPage = useMemo(
-    () => Math.max(0, Math.ceil(totalRows / rowsPerPage) - 1),
-    [totalRows, rowsPerPage]
-  );
-
+  const maxPage = useMemo(() => Math.max(0, Math.ceil(totalRows / rowsPerPage) - 1), [totalRows, rowsPerPage]);
   const safePage = Math.min(page, maxPage);
 
-  // Reset to first page when a new result set is loaded
-  useEffect(() => {
-    setPage(0);
-  }, [leads]);
+  useEffect(() => { setPage(0); }, [leads]);
+  useEffect(() => { if (fetchSize > 0) { setRowsPerPage(fetchSize); setPage(0); } }, [fetchSize]);
+  useEffect(() => { if (page > maxPage) setPage(maxPage); }, [page, maxPage]);
 
-  // Align rows-per-page with search "Results per page" when it changes
-  useEffect(() => {
-    if (fetchSize > 0) {
-      setRowsPerPage(fetchSize);
-      setPage(0);
-    }
-  }, [fetchSize]);
-
-  // Keep page index valid when rows shrink (filters, smaller fetch, etc.)
-  useEffect(() => {
-    if (page > maxPage) {
-      setPage(maxPage);
-    }
-  }, [page, maxPage]);
-
-  const handleChangePage = (_event: unknown, newPage: number) => {
-    setPage(newPage);
-    onPageChange?.(newPage);
-  };
-
-  const handleChangeRowsPerPage = (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const newRowsPerPage = parseInt(event.target.value, 10);
-    setRowsPerPage(newRowsPerPage);
-    setPage(0);
-    onRowsPerPageChange?.(newRowsPerPage);
-  };
-
-  const handleExportCSV = () => {
-    exportLeadsToCSV(leads);
-  };
-
-  const paginatedLeads = leads.slice(
-    safePage * rowsPerPage,
-    safePage * rowsPerPage + rowsPerPage
-  );
-
+  const paginatedLeads = leads.slice(safePage * rowsPerPage, safePage * rowsPerPage + rowsPerPage);
   const rangeStart = totalRows === 0 ? 0 : safePage * rowsPerPage + 1;
   const rangeEnd = Math.min((safePage + 1) * rowsPerPage, totalRows);
 
   if (loading && leads.length === 0) {
-    return (
-      <Paper sx={{ p: 4, display: 'flex', justifyContent: 'center' }}>
-        <CircularProgress />
-      </Paper>
-    );
+    return <Paper sx={{ p: 4, display: 'flex', justifyContent: 'center' }}><CircularProgress /></Paper>;
   }
 
   if (leads.length === 0) {
     return (
       <Paper sx={{ p: 4, textAlign: 'center' }}>
-        <Typography color="textSecondary" sx={{ mb: 2 }}>
-          No properties found
-        </Typography>
-        <Typography variant="body2" color="textSecondary">
-          Try adjusting your search filters
-        </Typography>
+        <Typography color="textSecondary" sx={{ mb: 1 }}>No leads found</Typography>
+        <Typography variant="body2" color="textSecondary">Try adjusting your filters or fetching more records</Typography>
       </Paper>
     );
   }
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h6">
-          Total Leads: {totalRows}
-          {loading && totalRows > 0 && (
-            <CircularProgress size={16} sx={{ ml: 1.5, verticalAlign: 'middle' }} />
-          )}
+          {totalRows.toLocaleString()} Leads
+          {loading && totalRows > 0 && <CircularProgress size={16} sx={{ ml: 1.5, verticalAlign: 'middle' }} />}
         </Typography>
-        <Button
-          variant="outlined"
-          startIcon={<GetAppIcon />}
-          onClick={handleExportCSV}
-          size="small"
-        >
+        <Button variant="outlined" startIcon={<GetAppIcon />} onClick={() => exportLeadsToCSV(leads)} size="small">
           Export CSV
         </Button>
       </Box>
 
       <Typography variant="body2" color="textSecondary" sx={{ mb: 1 }}>
-        Click a row to expand and view full property details
+        Click any row to expand full property details
       </Typography>
 
       <TableContainer component={Paper}>
-        <Table stickyHeader>
+        <Table stickyHeader size="small">
           <TableHead>
-            <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
+            <TableRow>
               <TableCell sx={{ width: 48 }} />
-              <TableCell sx={{ fontWeight: 'bold' }}>Owner Name</TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }}>Address</TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }}>City/State</TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }}>Type</TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }} align="center">
-                Beds
-              </TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }} align="center">
-                Baths
-              </TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }} align="right">
-                Est. Value
-              </TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }} align="right">
-                Sq Ft
-              </TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }}>Land Use</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', minWidth: 110 }}>Grade</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', minWidth: 140 }}>Owner</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', minWidth: 160 }}>Address</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', minWidth: 130 }}>City / State</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', minWidth: 130 }}>Pipeline</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', minWidth: 120 }}>Carriers</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', minWidth: 140 }} align="right">Est. Premium</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', minWidth: 110 }} align="right">Est. Value</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', minWidth: 80 }} align="right">Sq Ft</TableCell>
+              <TableCell sx={{ fontWeight: 'bold' }} align="center">Beds</TableCell>
+              <TableCell sx={{ fontWeight: 'bold' }} align="center">Baths</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {paginatedLeads.map((lead, index) => (
-              <LeadRow
-                key={`${getLeadRowKey(lead, safePage * rowsPerPage + index)}`}
-                lead={lead}
-              />
+              <LeadRow key={getLeadRowKey(lead, safePage * rowsPerPage + index)} lead={lead} />
             ))}
           </TableBody>
         </Table>
       </TableContainer>
 
       <TablePagination
-        rowsPerPageOptions={[5, 10, 20, 25, 50, 100]}
+        rowsPerPageOptions={[10, 20, 25, 50, 100]}
         component="div"
         count={totalRows}
         rowsPerPage={rowsPerPage}
         page={safePage}
-        onPageChange={handleChangePage}
-        onRowsPerPageChange={handleChangeRowsPerPage}
-        labelDisplayedRows={() =>
-          `${rangeStart}-${rangeEnd} of ${totalRows}`
-        }
+        onPageChange={(_e, p) => { setPage(p); onPageChange?.(p); }}
+        onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); onRowsPerPageChange?.(parseInt(e.target.value, 10)); }}
+        labelDisplayedRows={() => `${rangeStart}–${rangeEnd} of ${totalRows}`}
         showFirstButton
         showLastButton
       />

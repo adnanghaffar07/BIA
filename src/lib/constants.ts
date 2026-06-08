@@ -7,7 +7,7 @@ export const API_CONFIG = {
 
 // Pagination
 export const PAGINATION = {
-  DEFAULT_LIMIT: 20,
+  DEFAULT_LIMIT: 100,
   MAX_LIMIT: 100,
   MIN_LIMIT: 1,
 };

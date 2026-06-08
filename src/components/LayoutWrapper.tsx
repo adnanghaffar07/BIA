@@ -18,7 +18,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const publicRoutes = ['/login'];
   
   // Routes that require authentication
-  const protectedRoutes = ['/', '/dashboard', '/leads'];
+  const protectedRoutes = ['/', '/dashboard', '/leads', '/queue'];
 
   useEffect(() => {
     if (isLoading) return;

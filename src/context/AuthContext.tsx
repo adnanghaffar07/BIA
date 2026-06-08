@@ -2,11 +2,20 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 
+export type UserRole = 'superadmin' | 'admin';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+}
+
 interface AuthContextType {
   isAuthenticated: boolean;
-  user: { email: string } | null;
+  user: AuthUser | null;
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   isLoading: boolean;
 }
 
@@ -14,39 +23,39 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [user, setUser] = useState<{ email: string } | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Check if user is logged in on mount
+  // Verify session with server on mount
   useEffect(() => {
-    const storedAuth = localStorage.getItem('auth');
-    const storedUser = localStorage.getItem('user');
-    if (storedAuth === 'true' && storedUser) {
-      setUser(JSON.parse(storedUser));
-      setIsAuthenticated(true);
-    }
-    setIsLoading(false);
+    fetch('/api/auth/me')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success && d.user) {
+          setUser(d.user);
+          setIsAuthenticated(true);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setIsLoading(false));
   }, []);
 
   const login = async (email: string, password: string) => {
-    // Dummy authentication - accept any email/password combo
-    // In a real app, this would call an API endpoint
-    if (email && password) {
-      const userData = { email };
-      setUser(userData);
-      setIsAuthenticated(true);
-      localStorage.setItem('auth', 'true');
-      localStorage.setItem('user', JSON.stringify(userData));
-    } else {
-      throw new Error('Invalid credentials');
-    }
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Login failed');
+    setUser(data.user);
+    setIsAuthenticated(true);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     setUser(null);
     setIsAuthenticated(false);
-    localStorage.removeItem('auth');
-    localStorage.removeItem('user');
   };
 
   return (
@@ -58,8 +67,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (context === undefined) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 }

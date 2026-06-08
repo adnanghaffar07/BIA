@@ -1,0 +1,149 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Lead {
+  id                  String    @id
+  propertyId          String    @unique
+
+  // Address
+  addressStreet       String
+  addressCity         String
+  addressState        String    @default("NJ")
+  addressZip          String
+  addressCounty       String?
+  addressFull         String?
+
+  // Mailing address
+  mailStreet          String?
+  mailCity            String?
+  mailState           String?
+  mailZip             String?
+
+  // Property details
+  propertyType        String?
+  propertyUse         String?
+  propertyUseCode     Int?
+  landUse             String?
+  yearBuilt           Int?
+  squareFeet          Int?
+  lotSquareFeet       Int?
+  bedrooms            Int?
+  bathrooms           Float?
+  stories             Float?
+  unitsCount          Int?
+  roomsCount          Int?
+
+  // Amenities
+  garage              Boolean?
+  pool                Boolean?
+  deck                Boolean?
+  patio               Boolean?
+  basement            Boolean?
+  airConditioning     Boolean?
+
+  // Financial
+  estimatedValue      Float?
+  assessedValue       Float?
+  lastSaleAmount      Float?
+  lastSaleDate        String?
+  estimatedEquity     Float?
+  openMortgageBalance Float?
+  lenderName          String?
+  mortgageType        String?
+
+  // Owner
+  owner1LastName      String?
+  owner1FirstName     String?
+  companyName         String?
+  ownerOccupied       Boolean?
+  corporateOwned      Boolean?
+  absenteeOwner       Boolean?
+  investorBuyer       Boolean?
+
+  // Property conditions
+  vacant              Boolean?
+  preForeclosure      Boolean?
+  foreclosure         Boolean?
+  reo                 Boolean?
+  highEquity          Boolean?
+  floodZone           Boolean?
+  floodZoneType       String?
+  hoa                 Boolean?
+
+  // Location
+  latitude            Float?
+  longitude           Float?
+  fips                String?
+  apn                 String?
+
+  // Dates
+  recordingDate       String?
+  lastUpdateDate      String?
+
+  // Skip trace (populated only after carrier qualification)
+  skipTraced          Boolean   @default(false)
+  skipTracedAt        DateTime?
+  phone1              String?
+  phone2              String?
+  email1              String?
+  email2              String?
+
+  // CRM pipeline
+  engine              Int?
+  renewalTargetDate   DateTime?
+
+  // Lead grade
+  grade               String?
+
+  // Carrier eligibility
+  travelersEligible   String?
+  travelersNotes      Json?     // Array of reason strings
+  plymouthEligible    String?
+  plymouthNotes       Json?     // Array of reason strings
+
+  // Indicative premium
+  lowPremium          Float?
+  expectedPremium     Float?
+  highPremium         Float?
+  pricingConfidence   Int?
+
+  // Workflow status
+  status              String    @default("new")
+
+  // Producer workflow
+  producerEmail       String?
+  posQuoteNumber      String?
+  posCarrier          String?
+  boundPremium        Float?
+  boundDate           DateTime?
+  authorizationDate   DateTime?
+
+  // Raw API data (native Postgres Json — no stringify needed)
+  rawData             Json
+
+  // Timestamps
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  activities          Activity[]
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id])
+
+  type      String
+  content   String
+  metadata  Json?    // Native Postgres Json
+  createdBy String?
+
+  createdAt DateTime @default(now())
+}

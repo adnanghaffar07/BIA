@@ -53,7 +53,7 @@ export default function Navbar() {
               </Typography>
             )}
 
-            <Button
+            {/* <Button
               onClick={handleLogout}
               color="inherit"
               startIcon={<LogoutIcon />}
@@ -67,7 +67,7 @@ export default function Navbar() {
               }}
             >
               Logout
-            </Button>
+            </Button> */}
           </Box>
         </Toolbar>
       </Container>

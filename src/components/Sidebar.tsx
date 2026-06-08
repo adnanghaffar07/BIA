@@ -6,6 +6,7 @@ import {
   Drawer,
   List,
   ListItem,
+  ListItemButton,
   ListItemIcon,
   ListItemText,
   Divider,
@@ -18,40 +19,41 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import PeopleIcon from '@mui/icons-material/People';
+import QueueIcon from '@mui/icons-material/PlaylistAddCheck';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MenuIcon from '@mui/icons-material/Menu';
 import CloseIcon from '@mui/icons-material/Close';
 import { useAuth } from '@/context/AuthContext';
+import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 
 const DRAWER_WIDTH = 260;
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [mobileOpen, setMobileOpen] = React.useState(false);
 
   const isActive = (path: string) => pathname === path;
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     router.push('/login');
   };
 
-  const menuItems = [
-    {
-      label: 'Dashboard',
-      icon: <DashboardIcon />,
-      path: '/',
-    },
-    {
-      label: 'Leads',
-      icon: <PeopleIcon />,
-      path: '/leads',
-    },
+  const baseItems = [
+    { label: 'Dashboard',   icon: <DashboardIcon />, path: '/' },
+    { label: 'Leads',       icon: <PeopleIcon />,    path: '/leads' },
+    { label: 'Lead Queues', icon: <QueueIcon />,     path: '/queue' },
   ];
+
+  const adminItems = user?.role === 'superadmin'
+    ? [{ label: 'User Management', icon: <ManageAccountsIcon />, path: '/admin/users' }]
+    : [];
+
+  const menuItems = [...baseItems, ...adminItems];
 
   const drawerContent = (
     <Box
@@ -82,41 +84,32 @@ export default function Sidebar() {
       {/* Navigation Menu */}
       <List sx={{ flex: 1, pt: 2 }}>
         {menuItems.map((item, index) => (
-          <ListItem
-            button
-            component={Link}
-            href={item.path}
-            key={index}
-            selected={isActive(item.path)}
-            onClick={() => isMobile && setMobileOpen(false)}
-            sx={{
-              color: 'white',
-              borderLeft: isActive(item.path) ? '4px solid #64b5f6' : '4px solid transparent',
-              backgroundColor: isActive(item.path) ? 'rgba(100, 181, 246, 0.1)' : 'transparent',
-              mb: 1,
-              mx: 1,
-              borderRadius: '8px',
-              transition: 'all 0.3s ease',
-              '&:hover': {
-                backgroundColor: 'rgba(100, 181, 246, 0.15)',
-                borderLeft: '4px solid #64b5f6',
-              },
-            }}
-          >
-            <ListItemIcon
+          <ListItem key={index} disablePadding sx={{ mb: 1, mx: 1 }}>
+            <ListItemButton
+              component={Link}
+              href={item.path}
+              selected={isActive(item.path)}
+              onClick={() => isMobile && setMobileOpen(false)}
               sx={{
-                color: isActive(item.path) ? '#64b5f6' : 'white',
-                minWidth: 40,
+                color: 'white',
+                borderLeft: isActive(item.path) ? '4px solid #64b5f6' : '4px solid transparent',
+                backgroundColor: isActive(item.path) ? 'rgba(100, 181, 246, 0.1)' : 'transparent',
+                borderRadius: '8px',
+                transition: 'all 0.3s ease',
+                '&:hover': {
+                  backgroundColor: 'rgba(100, 181, 246, 0.15)',
+                  borderLeft: '4px solid #64b5f6',
+                },
               }}
             >
-              {item.icon}
-            </ListItemIcon>
-            <ListItemText
-              primary={item.label}
-              primaryTypographyProps={{
-                fontWeight: isActive(item.path) ? 'bold' : 'normal',
-              }}
-            />
+              <ListItemIcon sx={{ color: isActive(item.path) ? '#64b5f6' : 'white', minWidth: 40 }}>
+                {item.icon}
+              </ListItemIcon>
+              <ListItemText
+                primary={item.label}
+                slotProps={{ primary: { fontWeight: isActive(item.path) ? 'bold' : 'normal' } }}
+              />
+            </ListItemButton>
           </ListItem>
         ))}
       </List>
@@ -126,8 +119,7 @@ export default function Sidebar() {
 
       {/* Logout Section */}
       <Box sx={{ p: 2 }}>
-        <ListItem
-          button
+        <ListItemButton
           onClick={handleLogout}
           sx={{
             color: 'white',
@@ -145,9 +137,9 @@ export default function Sidebar() {
           </ListItemIcon>
           <ListItemText
             primary="Logout"
-            primaryTypographyProps={{ fontWeight: 'bold' }}
+            slotProps={{ primary: { fontWeight: 'bold' } }}
           />
-        </ListItem>
+        </ListItemButton>
       </Box>
     </Box>
   );

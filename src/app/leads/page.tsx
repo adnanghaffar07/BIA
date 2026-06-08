@@ -2,140 +2,55 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  Container,
-  Box,
-  Alert,
-  CircularProgress,
-  Typography,
-  Snackbar,
-  Grid,
-  ButtonGroup,
-  Button,
-  Chip,
+  Container, Box, Alert, CircularProgress, Typography,
+  Snackbar, Tabs, Tab, Chip,
 } from '@mui/material';
+import HomeWorkIcon from '@mui/icons-material/HomeWork';
+import AutorenewIcon from '@mui/icons-material/Autorenew';
+import AllInboxIcon from '@mui/icons-material/AllInbox';
 import SearchForm from '@/components/SearchForm';
 import LeadsTable from '@/components/LeadsTable';
-import LeadCardWithGrade from '@/components/LeadCardWithGrade';
-import { Lead, LeadFilters } from '@/types/lead';
-import LeadService from '@/services/lead.service';
+import { LeadFilters } from '@/types/lead';
 import { ERROR_MESSAGES } from '@/lib/constants';
-import ViewListIcon from '@mui/icons-material/ViewList';
-import ViewAgendaIcon from '@mui/icons-material/ViewAgenda';
 
-type ViewMode = 'table' | 'grid';
+type TabValue = 'all' | 'engine1' | 'engine2';
 
 export default function LeadsPage() {
-  const [leads, setLeads] = useState<Lead[]>([]);
+  const [allLeads, setAllLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<LeadFilters>({});
-  const [payload, setPayload] = useState<any>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('grid');
-  const [snackbar, setSnackbar] = useState({
-    open: false,
-    message: '',
-    severity: 'success' as 'success' | 'error' | 'warning' | 'info',
-  });
+  const [activeTab, setActiveTab] = useState<TabValue>('all');
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
 
-  // Fetch properties on component mount
   useEffect(() => {
-    fetchProperties(filters);
+    fetchLeads(filters);
   }, []);
 
-  const fetchProperties = async (currentFilters: LeadFilters) => {
+  const fetchLeads = async (currentFilters: LeadFilters) => {
     try {
       setLoading(true);
       setError(null);
 
-      // Build request payload
-      const requestPayload = {
-        ids_only: false,
-        obfuscate: false,
-        summary: false,
-        size: currentFilters.size || 20,
-      };
-      
-      setPayload(requestPayload);
-      console.log('🚀 Fetching properties with payload:', requestPayload);
-
-      // Call API with payload - pass size as query parameter
-      const apiUrl = new URL('/api/leads', typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
-      apiUrl.searchParams.append('size', requestPayload.size.toString());
-
-      const response = await fetch(apiUrl.toString(), {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch properties');
+      const url = new URL('/api/leads', window.location.origin);
+      url.searchParams.set('size', String(currentFilters.size || 20));
+      if (currentFilters.engine) {
+        url.searchParams.set('engine', String(currentFilters.engine));
       }
 
-      const result = await response.json();
-      
+      const res = await fetch(url.toString());
+      if (!res.ok) throw new Error('Failed to fetch leads');
+
+      const result = await res.json();
       if (result.success) {
-        let properties = result.data || [];
-
-        // Apply filters
-        if (currentFilters.propertyType) {
-          properties = LeadService.filterProperties(
-            properties,
-            (prop) => prop.propertyType === currentFilters.propertyType
-          );
-        }
-
-        if (currentFilters.landUse) {
-          properties = LeadService.filterProperties(
-            properties,
-            (prop) => prop.landUse === currentFilters.landUse
-          );
-        }
-
-        if (currentFilters.minBedrooms) {
-          properties = LeadService.filterByMinBedrooms(
-            properties,
-            currentFilters.minBedrooms
-          );
-        }
-
-        if (currentFilters.minBathrooms) {
-          properties = LeadService.filterByMinBathrooms(
-            properties,
-            currentFilters.minBathrooms
-          );
-        }
-
-        if (currentFilters.minValue || currentFilters.maxValue) {
-          properties = LeadService.filterByValueRange(
-            properties,
-            currentFilters.minValue,
-            currentFilters.maxValue
-          );
-        }
-
-        if (currentFilters.investorBuyer) {
-          properties = LeadService.filterInvestorProperties(properties);
-        }
-
-        if (currentFilters.highEquity) {
-          properties = LeadService.filterHighEquityProperties(properties);
-        }
-
-        if (currentFilters.preForeclosure) {
-          properties = LeadService.filterPreForeclosureProperties(properties);
-        }
-
-        setLeads(properties);
+        setAllLeads(result.data || []);
       } else {
-        throw new Error(result.error || 'Failed to fetch properties');
+        throw new Error(result.error || 'Failed to fetch leads');
       }
     } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : ERROR_MESSAGES.FETCH_LEADS_FAILED;
-      setError(errorMessage);
-      showSnackbar(errorMessage, 'error');
+      const msg = err instanceof Error ? err.message : ERROR_MESSAGES.FETCH_LEADS_FAILED;
+      setError(msg);
+      setSnackbar({ open: true, message: msg, severity: 'error' });
     } finally {
       setLoading(false);
     }
@@ -143,95 +58,100 @@ export default function LeadsPage() {
 
   const handleSearch = (newFilters: LeadFilters) => {
     setFilters(newFilters);
-    // Pass filters directly to fetchProperties instead of relying on state
-    fetchProperties(newFilters);
+    fetchLeads(newFilters);
   };
 
-  const handleDelete = async (id: string) => {
-    if (
-      !confirm(
-        'Are you sure you want to delete this property record?'
-      )
-    ) {
-      return;
-    }
+  // Filter leads by pipeline engine for tabs
+  const engine1Leads = allLeads.filter((l) => l.engine === 1);
+  const engine2Leads = allLeads.filter((l) => l.engine === 2);
 
-    try {
-      // TODO: Implement delete when API supports it
-      setLeads(leads.filter((lead) => lead.id !== id));
-      showSnackbar('Property record deleted successfully', 'success');
-    } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : ERROR_MESSAGES.DELETE_LEAD_FAILED;
-      showSnackbar(errorMessage, 'error');
-    }
-  };
-
-  const showSnackbar = (
-    message: string,
-    severity: 'success' | 'error' | 'warning' | 'info'
-  ) => {
-    setSnackbar({
-      open: true,
-      message,
-      severity,
-    });
-  };
-
-  const handleCloseSnackbar = () => {
-    setSnackbar({ ...snackbar, open: false });
-  };
+  const displayLeads =
+    activeTab === 'engine1' ? engine1Leads :
+    activeTab === 'engine2' ? engine2Leads :
+    allLeads;
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" component="h1" sx={{ mb: 2, fontWeight: 'bold' }}>
-          🏘️ Property Search
+    <Container maxWidth="xl" sx={{ py: 4 }}>
+      {/* Header */}
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h4" component="h1" sx={{ fontWeight: 'bold', mb: 0.5 }}>
+          NJ Lead Pipeline
         </Typography>
         <Typography variant="body1" color="textSecondary">
-          Search and browse properties from the Real Estate API
+          New Jersey homeowner insurance leads — enriched, graded, and carrier-checked
         </Typography>
       </Box>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
-
-      {/* {payload && (
-        <Alert severity="info" sx={{ mb: 3 }}>
-          <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
-            📤 Last Request Payload:
-          </Typography>
-          <Box
-            component="pre"
-            sx={{
-              backgroundColor: '#f5f5f5',
-              p: 1.5,
-              borderRadius: 1,
-              fontSize: '0.75rem',
-              overflow: 'auto',
-              maxHeight: '200px',
-            }}
-          >
-            {JSON.stringify(payload, null, 2)}
-          </Box>
-          <Typography variant="caption" color="textSecondary" sx={{ mt: 1, display: 'block' }}>
-            ℹ️ Check the browser console for full request/response logs
-          </Typography>
-        </Alert>
-      )} */}
+      {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
 
       <SearchForm onSearch={handleSearch} loading={loading} />
 
-      {loading && !leads.length ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+      {/* Pipeline Tabs */}
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+        <Tabs value={activeTab} onChange={(_e, v) => setActiveTab(v)} aria-label="pipeline tabs">
+          <Tab
+            icon={<AllInboxIcon />}
+            iconPosition="start"
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                All Leads
+                <Chip label={allLeads.length} size="small" sx={{ height: 18, fontSize: '0.7rem' }} />
+              </Box>
+            }
+            value="all"
+          />
+          <Tab
+            icon={<HomeWorkIcon />}
+            iconPosition="start"
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                Engine 1 — New Purchase
+                <Chip
+                  label={engine1Leads.length}
+                  size="small"
+                  sx={{ height: 18, fontSize: '0.7rem', backgroundColor: '#c8e6c9', color: '#1b5e20' }}
+                />
+              </Box>
+            }
+            value="engine1"
+          />
+          <Tab
+            icon={<AutorenewIcon />}
+            iconPosition="start"
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                Engine 2 — Renewal
+                <Chip
+                  label={engine2Leads.length}
+                  size="small"
+                  sx={{ height: 18, fontSize: '0.7rem', backgroundColor: '#fff3e0', color: '#e65100' }}
+                />
+              </Box>
+            }
+            value="engine2"
+          />
+        </Tabs>
+      </Box>
+
+      {/* Tab description */}
+      {activeTab === 'engine1' && (
+        <Alert severity="success" sx={{ mb: 2 }}>
+          <strong>Engine 1 — New Purchase:</strong> Homeowners with a mortgage originated within the last 90 days. Highest priority — actively shopping for insurance.
+        </Alert>
+      )}
+      {activeTab === 'engine2' && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <strong>Engine 2 — Renewal / Win-Back:</strong> Mortgage originations from 2022–2025. Targeted ~90 days before their expected policy renewal date.
+        </Alert>
+      )}
+
+      {loading && allLeads.length === 0 ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
           <CircularProgress />
         </Box>
       ) : (
         <LeadsTable
-          leads={leads}
+          leads={displayLeads}
           loading={loading}
           fetchSize={filters.size ?? 20}
         />
@@ -239,15 +159,11 @@ export default function LeadsPage() {
 
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={handleCloseSnackbar}
+        autoHideDuration={5000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
       >
-        <Alert
-          onClose={handleCloseSnackbar}
-          severity={snackbar.severity}
-          sx={{ width: '100%' }}
-        >
+        <Alert onClose={() => setSnackbar({ ...snackbar, open: false })} severity={snackbar.severity}>
           {snackbar.message}
         </Alert>
       </Snackbar>

@@ -1,88 +1,125 @@
-import { Lead } from './lead';
-import { LeadGrade } from './grade';
+import { Lead } from '@/types/lead';
+import { LeadGrade } from '@/types/grade';
+import { CarrierEligibilityResult } from '@/types/carrier';
+import { checkCarrierEligibility } from './carrier.service';
 
-/**
- * Critical fields that must be present for a lead to be quoted
- */
-const CRITICAL_FIELDS = [
-  'owner1LastName',
-  'address.street',
-  'address.city',
-  'address.state',
-  'address.zip',
-  'lastSaleAmount',
-  'estimatedValue',
+// ─── Critical fields ──────────────────────────────────────────────────────────
+//
+// These are the fields a producer MUST have to open a carrier portal and generate
+// a quote. Missing any of these = the lead cannot be quoted without intervention.
+//
+// Each entry has:
+//   path       — field name on the lead object (supports dot-notation for nested)
+//   altPath    — flat DB field name (leads from Neon come back with flat column names)
+//   label      — human-readable name shown in the UI
+//   critical   — true = 1 missing field drops to Grade C; false = Grade B
+
+const CRITICAL_FIELDS: Array<{
+  path: string;
+  altPath?: string;
+  label: string;
+  critical: boolean;
+}> = [
+  // ── Property identification ──────────────────────────────────────────────
+  { path: 'owner1LastName',   label: 'Owner last name',    critical: true  },
+  { path: 'address.street',   altPath: 'addressStreet',    label: 'Street address',   critical: true  },
+  { path: 'address.zip',      altPath: 'addressZip',       label: 'ZIP code',         critical: true  },
+  { path: 'address.city',     altPath: 'addressCity',      label: 'City',             critical: false },
+
+  // ── Property data needed to quote ────────────────────────────────────────
+  { path: 'estimatedValue',   label: 'Estimated property value',   critical: true  },
+  { path: 'yearBuilt',        label: 'Year built (roof age proxy)', critical: true  },
+  { path: 'squareFeet',       label: 'Square footage (for RCE)',    critical: true  },
+
+  // ── Useful but can be answered at the portal ──────────────────────────────
+  { path: 'propertyType',     label: 'Property type',     critical: false },
+  { path: 'bedrooms',         label: 'Bedrooms',          critical: false },
 ];
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 /**
- * Evaluate the completeness of a lead and assign a grade
- * A = All critical fields present (Quote Ready)
- * B = Missing 1 critical field
- * C = Missing 2+ critical fields
- * D = Invalid or disqualified
+ * Read a field from a lead — tries the primary path first, then the flat altPath.
+ * Handles both nested API objects (address.zip) and flat DB records (addressZip).
  */
-export function calculateLeadGrade(lead: Lead): LeadGrade {
-  // Check if lead is disqualified (basic validation)
-  if (!lead || !lead.id || !lead.propertyId) {
-    return 'D';
+function getValue(lead: any, path: string, altPath?: string): any {
+  const nested = path.split('.').reduce((cur: any, key: string) => cur?.[key], lead);
+  if (nested != null && nested !== '') return nested;
+  if (altPath) {
+    const flat = lead[altPath];
+    if (flat != null && flat !== '') return flat;
   }
+  return null;
+}
 
-  // Check property type filter (should be residential for insurance)
-  if (lead.propertyUse && !['Residential', 'Single Family'].includes(lead.propertyUse)) {
-    return 'D';
-  }
+// ─── Public exports ───────────────────────────────────────────────────────────
 
-  // Count missing critical fields
-  let missingFieldsCount = 0;
+/**
+ * Calculate the carrier-aware lead grade per BIA Blueprint:
+ *
+ *   D — Fails ALL carrier appetite rules (geographic or underwriting)
+ *   C — Passes ≥1 carrier but has 2+ missing pertinent fields
+ *   B — Passes ≥1 carrier but has exactly 1 missing pertinent field
+ *   A — Passes ≥1 carrier AND all pertinent fields present (Quote-Ready)
+ *
+ * Pre-computed eligibility can be passed in to avoid double-evaluation.
+ */
+export function calculateLeadGrade(
+  lead: Lead,
+  eligibility?: CarrierEligibilityResult
+): LeadGrade {
+  if (!lead || !(lead.propertyId || (lead as any).propertyId)) return 'D';
 
-  for (const field of CRITICAL_FIELDS) {
-    const value = getNestedValue(lead, field);
-    if (!value) {
-      missingFieldsCount++;
-    }
-  }
+  const carrierResult = eligibility ?? checkCarrierEligibility(lead);
 
-  // Assign grade based on missing fields
-  if (missingFieldsCount === 0) {
-    return 'A'; // Quote Ready
-  } else if (missingFieldsCount === 1) {
-    return 'B'; // Missing 1 field
-  } else if (missingFieldsCount <= 3) {
-    return 'C'; // Missing multiple fields
-  } else {
-    return 'D'; // Too many missing fields - disqualified
-  }
+  // D — no carrier will write this property
+  if (!carrierResult.passesAnyCarrier) return 'D';
+
+  // Count missing pertinent fields
+  const missingCount = CRITICAL_FIELDS.filter(
+    ({ path, altPath }) => !getValue(lead, path, altPath)
+  ).length;
+
+  if (missingCount === 0) return 'A'; // Quote-Ready — all fields present
+  if (missingCount === 1) return 'B'; // Minor — exactly 1 field missing
+  return 'C';                          // Needs information — 2+ fields missing
 }
 
 /**
- * Get nested object value using dot notation
- */
-function getNestedValue(obj: any, path: string): any {
-  return path.split('.').reduce((current, prop) => current?.[prop], obj);
-}
-
-/**
- * Get missing critical fields for a lead
+ * Get the list of missing field labels for a lead.
  */
 export function getMissingFields(lead: Lead): string[] {
-  const missing: string[] = [];
-
-  for (const field of CRITICAL_FIELDS) {
-    const value = getNestedValue(lead, field);
-    if (!value) {
-      missing.push(field);
-    }
-  }
-
-  return missing;
+  return CRITICAL_FIELDS
+    .filter(({ path, altPath }) => !getValue(lead, path, altPath))
+    .map(({ label }) => label);
 }
 
 /**
- * Calculate percentage of complete fields
+ * Get the list of missing CRITICAL (non-recoverable) field labels.
+ */
+export function getMissingCriticalFields(lead: Lead): string[] {
+  return CRITICAL_FIELDS
+    .filter(({ path, altPath, critical }) => critical && !getValue(lead, path, altPath))
+    .map(({ label }) => label);
+}
+
+/**
+ * Get the percentage of pertinent fields that are complete.
  */
 export function getCompletenessPercentage(lead: Lead): number {
-  const totalFields = CRITICAL_FIELDS.length;
-  const missingCount = getMissingFields(lead).length;
-  const completedCount = totalFields - missingCount;
-  return Math.round((completedCount / totalFields) * 100);
+  const total = CRITICAL_FIELDS.length;
+  const missing = CRITICAL_FIELDS.filter(
+    ({ path, altPath }) => !getValue(lead, path, altPath)
+  ).length;
+  return Math.round(((total - missing) / total) * 100);
+}
+
+/**
+ * Whether a lead can have skip trace run on it.
+ * Skip trace is gated: only run on leads that pass at least one carrier.
+ */
+export function canRunSkipTrace(lead: Lead, eligibility?: CarrierEligibilityResult): boolean {
+  if ((lead as any).skipTraced) return false;
+  const result = eligibility ?? checkCarrierEligibility(lead);
+  return result.passesAnyCarrier;
 }

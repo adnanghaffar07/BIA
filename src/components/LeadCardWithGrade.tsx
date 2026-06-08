@@ -66,7 +66,7 @@ export default function LeadCardWithGrade({ lead, onClick }: LeadCardWithGradePr
 
         {/* Property Info Grid */}
         <Grid container spacing={1} sx={{ mb: 2 }}>
-          <Grid item xs={6}>
+          <Grid size={6}>
             <Box sx={{ p: 1, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
               <Typography variant="caption" color="textSecondary" sx={{ display: 'block' }}>
                 Estimated Value
@@ -76,7 +76,7 @@ export default function LeadCardWithGrade({ lead, onClick }: LeadCardWithGradePr
               </Typography>
             </Box>
           </Grid>
-          <Grid item xs={6}>
+          <Grid size={6}>
             <Box sx={{ p: 1, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
               <Typography variant="caption" color="textSecondary" sx={{ display: 'block' }}>
                 Year Built
