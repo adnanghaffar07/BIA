@@ -1,16 +1,27 @@
-import { neon } from '@neondatabase/serverless';
+import { neon, Pool, neonConfig } from '@neondatabase/serverless';
 
 /**
- * Singleton Neon SQL client for Next.js API routes.
- * Uses Neon's native HTTP transport — no persistent TCP connection,
- * so there is no "connection closed" issue on Neon's idle timeout.
+ * `sql` — tagged-template client for static/simple one-off queries.
+ * Usage: const rows = await sql`SELECT 1`;
+ *
+ * `pool` — Pool client for parameterized queries via pool.query(sql, params).
+ * Uses Neon's HTTP transport (no persistent TCP), safe on serverless.
  */
-const globalForSql = globalThis as unknown as {
+
+neonConfig.fetchConnectionCache = true;
+
+// Tagged-template client (used for static queries in storage.service.ts)
+const globalForNeon = globalThis as unknown as {
   sql: ReturnType<typeof neon> | undefined;
+  pool: Pool | undefined;
 };
 
-export const sql = globalForSql.sql ?? neon(process.env.DATABASE_URL!);
+export const sql = globalForNeon.sql ?? neon(process.env.DATABASE_URL!);
+export const pool = globalForNeon.pool ?? new Pool({ connectionString: process.env.DATABASE_URL! });
 
-if (process.env.NODE_ENV !== 'production') globalForSql.sql = sql;
+if (process.env.NODE_ENV !== 'production') {
+  globalForNeon.sql = sql;
+  globalForNeon.pool = pool;
+}
 
 export default sql;

@@ -1,17 +1,13 @@
 import { Lead } from '@/types/lead';
 import { CarrierRuleResult, CarrierEligibilityResult, EligibilityStatus } from '@/types/carrier';
 
-// ─── Geographic Out-of-Appetite Zip Codes ────────────────────────────────────
+// ─── Target Zip Codes ────────────────────────────────────────────────────────
 //
-// Source: Plymouth Rock Assurance NJ appetite guide.
-// Applied identically to Travelers per BIA directive (Jun 2026) — both carriers
-// share the same coastal exposure restrictions in Monmouth / Ocean County.
-// Will be refined when the Travelers territory rep provides their formal guide.
+// BIA focus territory (Jun 2026): leads are only sourced from these ZIP codes.
+// No geographic disqualification is applied — carrier eligibility is determined
+// solely by property characteristics (roof age, value, flood zone, etc.).
 //
-// These zips represent high coastal-exposure areas where neither carrier
-// will write standard homeowners at competitive rates.
-//
-const OUT_OF_APPETITE_ZIPS = new Set([
+export const TARGET_ZIPS = new Set([
   '07722', // Colts Neck
   '07724', // Eatontown
   '07726', // Englishtown / Manalapan
@@ -62,13 +58,6 @@ function getPropertyAge(lead: Lead): number | null {
   return new Date().getFullYear() - lead.yearBuilt;
 }
 
-/** Returns true if the lead's zip code is in the shared out-of-appetite list */
-function isOutOfAppetiteZip(lead: Lead): boolean {
-  // Support both nested address object (API shape) and flat DB fields
-  const zip = (lead.address?.zip || (lead as any).addressZip || '').trim().replace(/\D/g, '').slice(0, 5);
-  return zip.length === 5 && OUT_OF_APPETITE_ZIPS.has(zip);
-}
-
 // ─── TRAVELERS NJ Homeowners ──────────────────────────────────────────────────
 //
 // Source: Travelers Quantum Home 2.0 Personal Lines Manual
@@ -104,14 +93,6 @@ export function checkTravelersEligibility(lead: Lead): CarrierRuleResult {
   };
 
   // ── Hard disqualifiers ────────────────────────────────────────────────────
-
-  // Geographic exclusion — coastal Monmouth/Ocean County zips (shared with Plymouth Rock)
-  if (isOutOfAppetiteZip(lead)) {
-    const zip = lead.address?.zip || (lead as any).addressZip || 'unknown';
-    makeIneligible(
-      `ZIP ${zip} is outside Travelers NJ coastal appetite (Monmouth/Ocean County exclusion zone)`
-    );
-  }
 
   if (!isResidential(lead)) {
     makeIneligible(`Non-residential property use: "${lead.propertyUse || lead.propertyType}"`);
@@ -207,14 +188,6 @@ export function checkPlymouthRockEligibility(lead: Lead): CarrierRuleResult {
   const currentYear = new Date().getFullYear();
 
   // ── Hard disqualifiers ────────────────────────────────────────────────────
-
-  // Geographic exclusion — same coastal NJ zip list as Travelers
-  if (isOutOfAppetiteZip(lead)) {
-    const zip = lead.address?.zip || (lead as any).addressZip || 'unknown';
-    makeIneligible(
-      `ZIP ${zip} is outside Plymouth Rock NJ coastal appetite (Monmouth/Ocean County exclusion zone)`
-    );
-  }
 
   if (!isResidential(lead)) {
     makeIneligible(`Non-residential property use: "${lead.propertyUse || lead.propertyType}"`);

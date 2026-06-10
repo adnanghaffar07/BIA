@@ -5,7 +5,7 @@ const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || 'bia-crm-secret-change-in-production-2026'
 );
 
-const PUBLIC_PATHS = ['/login', '/api/auth/login'];
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/enrich'];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

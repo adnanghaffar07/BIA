@@ -1,4 +1,4 @@
-import sql from '@/lib/neon';
+import sql, { pool } from '@/lib/neon';
 import { LeadStatus } from '@/types/lead';
 import { assignPipelineEngine, getRenewalTargetDate } from './pipeline.service';
 
@@ -22,7 +22,17 @@ const LEAD_COLS = [
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'lowPremium', 'expectedPremium', 'highPremium', 'pricingConfidence', 'status',
   'producerEmail', 'posQuoteNumber', 'posCarrier', 'boundPremium', 'boundDate',
-  'authorizationDate', 'createdAt', 'updatedAt',
+  'authorizationDate', 'coastDistanceMiles', 'coastExposure',
+  'varianceNotes', 'varianceReason', 'varianceAmount',
+  // §10A sourcing
+  'sourceVendor', 'cohortTag',
+  // §10B rating
+  'roofYear', 'constructionType', 'protectionClass', 'priorCarrier', 'priorPremium', 'indicativeBasis',
+  // §10D producer workflow
+  'queueEnteredAt', 'firstRpcAt', 'contactAttempts', 'authorizationMethod',
+  // §10E moat
+  'posQuotePremium', 'quotedAt', 'variancePct', 'lostReason', 'lostStage',
+  'createdAt', 'updatedAt',
 ] as const;
 
 const LEAD_COLS_SQL = LEAD_COLS.map((c) => `"${c}"`).join(', ');
@@ -34,6 +44,12 @@ const CRM_ONLY_FIELDS = new Set([
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'lowPremium', 'expectedPremium', 'highPremium', 'pricingConfidence',
   'producerEmail', 'posQuoteNumber', 'posCarrier', 'boundPremium', 'boundDate', 'authorizationDate',
+  'coastDistanceMiles', 'coastExposure', 'varianceNotes', 'varianceReason', 'varianceAmount',
+  // new funnel fields
+  'sourceVendor', 'cohortTag',
+  'roofYear', 'constructionType', 'protectionClass', 'priorCarrier', 'priorPremium', 'indicativeBasis',
+  'queueEnteredAt', 'firstRpcAt', 'contactAttempts', 'authorizationMethod',
+  'posQuotePremium', 'quotedAt', 'variancePct', 'lostReason', 'lostStage',
 ]);
 
 // ─── Value helpers ───────────────────────────────────────────────────────────
@@ -140,10 +156,10 @@ function mapApiPropertyToDb(property: any): Record<string, any> {
 function buildInsert(payload: Record<string, any>): [string, any[]] {
   const now = new Date().toISOString();
   const row = { ...payload, createdAt: now, updatedAt: now };
-  const keys = Object.keys(row).filter((k) => row[k] !== undefined);
+  const keys = Object.keys(row).filter((k) => row[k as keyof typeof row] !== undefined);
   const cols = keys.map((k) => `"${k}"`).join(', ');
   const params = keys.map((_, i) => `$${i + 1}`).join(', ');
-  const values = keys.map((k) => toSql(row[k]));
+  const values = keys.map((k) => toSql(row[k as keyof typeof row]));
   return [`INSERT INTO "Lead" (${cols}) VALUES (${params})`, values];
 }
 
@@ -194,7 +210,7 @@ export async function upsertLeads(properties: any[]): Promise<{
     if (!propertyId) { skipped++; continue; }
 
     try {
-      const rows = await sql.query(
+      const { rows } = await pool.query(
         `SELECT "id", "owner1LastName", "engine", "renewalTargetDate",
                 "status", "grade", "skipTraced", "skipTracedAt",
                 "phone1", "phone2", "email1", "email2",
@@ -210,7 +226,7 @@ export async function upsertLeads(properties: any[]): Promise<{
 
       if (!existing) {
         const [query, values] = buildInsert(payload);
-        await sql.query(query, values);
+        await pool.query(query, values);
         created++;
       } else {
         const incomingOwner = (property.owner1LastName || '').toLowerCase();
@@ -220,11 +236,11 @@ export async function upsertLeads(properties: any[]): Promise<{
         if (ownerChanged) {
           const newId = `${propertyId}-${property.recordingDate || Date.now()}`;
           const [query, values] = buildInsert({ ...payload, id: newId });
-          await sql.query(query, values);
+          await pool.query(query, values);
           created++;
         } else {
           const [query, values] = buildApiUpdate(payload, propertyId, existing);
-          await sql.query(query, values);
+          await pool.query(query, values);
           updated++;
         }
       }
@@ -242,6 +258,11 @@ export async function getLeadsFromDb(filters?: {
   engine?: number;
   grade?: string;
   status?: string;
+  /** Exclude leads with these statuses — e.g. ['bound','lost'] for the active queue */
+  excludeStatuses?: string[];
+  /** 'xdate' = renewalTargetDate ASC NULLS LAST (producer priority queue)
+   *  'updated' = updatedAt DESC (default / admin view) */
+  orderBy?: 'xdate' | 'updated';
   limit?: number;
   offset?: number;
 }): Promise<any[]> {
@@ -260,24 +281,37 @@ export async function getLeadsFromDb(filters?: {
     params.push(filters.status);
     conditions.push(`"status" = $${params.length}`);
   }
+  if (filters?.excludeStatuses?.length) {
+    const placeholders = filters.excludeStatuses.map((_, i) => `$${params.length + i + 1}`).join(', ');
+    filters.excludeStatuses.forEach((s) => params.push(s));
+    conditions.push(`"status" NOT IN (${placeholders})`);
+  }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  // Producer priority queue: sort by x-date proximity (soonest first), nulls last
+  // Admin/default: sort by most recently updated
+  const orderClause = filters?.orderBy === 'xdate'
+    ? `ORDER BY "renewalTargetDate" ASC NULLS LAST, "createdAt" DESC`
+    : `ORDER BY "updatedAt" DESC`;
+
   params.push(filters?.limit ?? 100, filters?.offset ?? 0);
 
   const query = `
     SELECT ${LEAD_COLS_SQL}
     FROM "Lead"
     ${where}
-    ORDER BY "updatedAt" DESC
+    ${orderClause}
     LIMIT $${params.length - 1} OFFSET $${params.length}
   `;
 
-  return sql.query(query, params) as Promise<any[]>;
+  const { rows } = await pool.query(query, params);
+  return rows;
 }
 
 /** Get a single lead by propertyId, including its activity log. */
 export async function getLeadByPropertyId(propertyId: string): Promise<any | null> {
-  const rows = await sql.query(
+  const { rows } = await pool.query(
     `SELECT l.*,
             COALESCE(
               json_agg(
@@ -305,6 +339,7 @@ export async function getLeadByPropertyId(propertyId: string): Promise<any | nul
 export async function updateLead(
   propertyId: string,
   data: Partial<{
+    // core CRM
     status: LeadStatus; grade: string;
     travelersEligible: string; travelersNotes: any;
     plymouthEligible: string; plymouthNotes: any;
@@ -313,6 +348,18 @@ export async function updateLead(
     phone1: string; phone2: string; email1: string; email2: string;
     producerEmail: string; posQuoteNumber: string; posCarrier: string;
     boundPremium: number; boundDate: Date; authorizationDate: Date;
+    coastDistanceMiles: number; coastExposure: string;
+    varianceNotes: string; varianceReason: string; varianceAmount: number;
+    // §10A sourcing
+    sourceVendor: string; cohortTag: string;
+    // §10B rating
+    roofYear: number; constructionType: string; protectionClass: string;
+    priorCarrier: string; priorPremium: number; indicativeBasis: string;
+    // §10D producer workflow
+    queueEnteredAt: Date; firstRpcAt: Date; contactAttempts: number; authorizationMethod: string;
+    // §10E moat
+    posQuotePremium: number; quotedAt: Date; variancePct: number;
+    lostReason: string; lostStage: string;
   }>,
 ): Promise<void> {
   const entries = Object.entries(data).filter(([, v]) => v !== undefined);
@@ -322,7 +369,7 @@ export async function updateLead(
   const sets = entries.map(([k], i) => `"${k}" = $${i + 1}`).join(', ');
   const values = [...entries.map(([, v]) => toSql(v)), propertyId];
 
-  await sql.query(
+  await pool.query(
     `UPDATE "Lead" SET ${sets} WHERE "propertyId" = $${entries.length + 1}`,
     values,
   );
@@ -338,43 +385,144 @@ export async function addActivity(
 ): Promise<void> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  await sql.query(
+  await pool.query(
     `INSERT INTO "Activity" ("id", "leadId", "type", "content", "metadata", "createdBy", "createdAt")
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [id, leadId, type, content, metadata ? JSON.stringify(metadata) : null, createdBy ?? null, now],
   );
 }
 
-/** Get pipeline summary counts for the dashboard — single query, 8x faster than before. */
+/** Get pipeline summary counts for the dashboard — single query covering both funnels. */
 export async function getPipelineSummary() {
   const rows = await sql`
     SELECT
-      COUNT(*)                                    AS total,
-      COUNT(*) FILTER (WHERE "engine" = 1)        AS engine1,
-      COUNT(*) FILTER (WHERE "engine" = 2)        AS engine2,
-      COUNT(*) FILTER (WHERE "grade" = 'A')       AS "gradeA",
-      COUNT(*) FILTER (WHERE "grade" = 'B')       AS "gradeB",
-      COUNT(*) FILTER (WHERE "grade" = 'C')       AS "gradeC",
-      COUNT(*) FILTER (WHERE "grade" = 'D')       AS "gradeD",
-      COUNT(*) FILTER (WHERE "status" = 'bound')  AS bound
+      -- totals
+      COUNT(*)                                                                   AS total,
+      COUNT(*) FILTER (WHERE "engine" = 1)                                      AS engine1,
+      COUNT(*) FILTER (WHERE "engine" = 2)                                      AS engine2,
+
+      -- grades
+      COUNT(*) FILTER (WHERE "grade" = 'A')                                     AS "gradeA",
+      COUNT(*) FILTER (WHERE "grade" = 'B')                                     AS "gradeB",
+      COUNT(*) FILTER (WHERE "grade" = 'C')                                     AS "gradeC",
+      COUNT(*) FILTER (WHERE "grade" = 'D')                                     AS "gradeD",
+
+      -- Funnel 1 — Sourcing stages
+      COUNT(*) FILTER (WHERE "grade" IN ('A','B','C'))                          AS "inAppetite",
+      COUNT(*) FILTER (WHERE "grade" = 'A')                                     AS "ratingComplete",
+      COUNT(*) FILTER (
+        WHERE "grade" = 'A'
+          AND ("phone1" IS NOT NULL OR "email1" IS NOT NULL)
+      )                                                                          AS contactable,
+
+      -- Funnel 2 — Producer stages (cumulative from quote-ready)
+      COUNT(*) FILTER (
+        WHERE "grade" = 'A'
+          AND "status" IN ('contacted','qualified','quote_sent','bound')
+      )                                                                          AS "rightPartyContact",
+      COUNT(*) FILTER (
+        WHERE "grade" = 'A'
+          AND ("authorizationDate" IS NOT NULL
+               OR "status" IN ('qualified','quote_sent','bound'))
+      )                                                                          AS "authorizedToQuote",
+      COUNT(*) FILTER (
+        WHERE "grade" = 'A'
+          AND ("posQuoteNumber" IS NOT NULL
+               OR "status" IN ('quote_sent','bound'))
+      )                                                                          AS "quotedPos",
+      COUNT(*) FILTER (WHERE "status" = 'bound')                                AS bound,
+
+      -- ── Stock health ─────────────────────────────────────────────────────
+      -- Active quote-ready leads not yet closed (the buffer)
+      COUNT(*) FILTER (
+        WHERE "grade" = 'A'
+          AND "status" NOT IN ('bound','lost')
+      )                                                                          AS "quoteReadyActive",
+
+      -- Working stock: leads actively in-flight (producer has touched them)
+      COUNT(*) FILTER (
+        WHERE "grade" = 'A'
+          AND "status" IN ('contacted','qualified','quote_sent')
+      )                                                                          AS "workingStock",
+
+      -- Binds in the last 30 days — the flow denominator for stock/flow ratio
+      COUNT(*) FILTER (
+        WHERE "status" = 'bound'
+          AND "boundDate" >= NOW() - INTERVAL '30 days'
+      )                                                                          AS "boundLast30",
+
+      -- Stale: Grade A, never contacted, sitting in queue > 14 days
+      COUNT(*) FILTER (
+        WHERE "grade" = 'A'
+          AND "status" = 'new'
+          AND "firstRpcAt" IS NULL
+          AND "queueEnteredAt" IS NOT NULL
+          AND "queueEnteredAt" < NOW() - INTERVAL '14 days'
+      )                                                                          AS "staleLeads",
+
+      -- Past x-date with no contact — candidates for auto-retire
+      COUNT(*) FILTER (
+        WHERE "grade" = 'A'
+          AND "status" = 'new'
+          AND "renewalTargetDate" IS NOT NULL
+          AND "renewalTargetDate" < NOW() - INTERVAL '30 days'
+      )                                                                          AS "pastXDate"
+
     FROM "Lead"
   `;
 
-  const r = rows[0] as any;
-  const total    = Number(r.total);
-  const engine1  = Number(r.engine1);
-  const engine2  = Number(r.engine2);
+  const r = (rows as any[])[0];
+  const total   = Number(r.total);
+  const engine1 = Number(r.engine1);
+  const engine2 = Number(r.engine2);
+
+  const quoteReadyActive = Number(r.quoteReadyActive);
+  const workingStock     = Number(r.workingStock);
+  const boundLast30      = Number(r.boundLast30);
+
+  // Buffer in days: how many days of quote-ready leads remain given current burn rate.
+  // Burn rate = binds per day (30-day trailing). Avoid div/0 with fallback to null.
+  const dailyBurnRate  = boundLast30 / 30;
+  const bufferDays     = dailyBurnRate > 0 ? Math.round(quoteReadyActive / dailyBurnRate) : null;
+
+  // Stock/flow ratio: working stock ÷ monthly bind run-rate (boundLast30 already is monthly).
+  const stockFlowRatio = boundLast30 > 0
+    ? Math.round((workingStock / boundLast30) * 100) / 100
+    : null;
 
   return {
+    // totals
     total,
     engine1,
     engine2,
     unassigned: total - engine1 - engine2,
-    gradeA:     Number(r.gradeA),
-    gradeB:     Number(r.gradeB),
-    gradeC:     Number(r.gradeC),
-    gradeD:     Number(r.gradeD),
-    quoteReady: Number(r.gradeA),
-    bound:      Number(r.bound),
+
+    // grades
+    gradeA: Number(r.gradeA),
+    gradeB: Number(r.gradeB),
+    gradeC: Number(r.gradeC),
+    gradeD: Number(r.gradeD),
+
+    // Funnel 1 — Sourcing
+    inAppetite:     Number(r.inAppetite),
+    ratingComplete: Number(r.ratingComplete),
+    contactable:    Number(r.contactable),
+    quoteReady:     Number(r.gradeA),
+
+    // Funnel 2 — Producer
+    rightPartyContact: Number(r.rightPartyContact),
+    authorizedToQuote: Number(r.authorizedToQuote),
+    quotedPos:         Number(r.quotedPos),
+    bound:             Number(r.bound),
+
+    // Stock health
+    quoteReadyActive,
+    workingStock,
+    boundLast30,
+    staleLeads:    Number(r.staleLeads),
+    pastXDate:     Number(r.pastXDate),
+    bufferDays,
+    stockFlowRatio,
+    dailyBurnRate: Math.round(dailyBurnRate * 10) / 10,
   };
 }

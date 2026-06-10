@@ -32,10 +32,18 @@ export default function LeadsPage() {
       setLoading(true);
       setError(null);
 
+      // Always read from DB — REAPI is locked after one-time seed
       const url = new URL('/api/leads', window.location.origin);
-      url.searchParams.set('size', String(currentFilters.size || 20));
+      url.searchParams.set('source', 'db');
+      url.searchParams.set('size', String(currentFilters.size || 100));
       if (currentFilters.engine) {
         url.searchParams.set('engine', String(currentFilters.engine));
+      }
+      if (currentFilters.grade) {
+        url.searchParams.set('grade', currentFilters.grade);
+      }
+      if (currentFilters.status) {
+        url.searchParams.set('status', currentFilters.status);
       }
 
       const res = await fetch(url.toString());
@@ -59,6 +67,13 @@ export default function LeadsPage() {
   const handleSearch = (newFilters: LeadFilters) => {
     setFilters(newFilters);
     fetchLeads(newFilters);
+  };
+
+  // When engine tab changes, re-fetch with same filters but new engine
+  const handleTabChange = (_e: React.SyntheticEvent, v: TabValue) => {
+    setActiveTab(v);
+    // Only re-fetch if we are currently applying an engine filter in SearchForm
+    // Tab switching is purely client-side on the already-loaded allLeads
   };
 
   // Filter leads by pipeline engine for tabs
@@ -88,7 +103,7 @@ export default function LeadsPage() {
 
       {/* Pipeline Tabs */}
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-        <Tabs value={activeTab} onChange={(_e, v) => setActiveTab(v)} aria-label="pipeline tabs">
+        <Tabs value={activeTab} onChange={handleTabChange} aria-label="pipeline tabs">
           <Tab
             icon={<AllInboxIcon />}
             iconPosition="start"
@@ -153,7 +168,7 @@ export default function LeadsPage() {
         <LeadsTable
           leads={displayLeads}
           loading={loading}
-          fetchSize={filters.size ?? 20}
+          fetchSize={filters.size ?? 100}
         />
       )}
 

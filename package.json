@@ -13,6 +13,7 @@
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^9.0.1",
     "@mui/material": "^9.0.1",
+    "@mui/material-nextjs": "^9.1.0",
     "@neondatabase/serverless": "^0.10.4",
     "bcryptjs": "^3.0.3",
     "jose": "^6.2.3",

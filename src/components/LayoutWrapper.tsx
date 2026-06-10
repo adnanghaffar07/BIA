@@ -1,74 +1,78 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box } from '@mui/material';
 import { usePathname, useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
-import Sidebar from '@/components/Sidebar';
+import Sidebar, { SIDEBAR_EXPANDED, SIDEBAR_COLLAPSED } from '@/components/Sidebar';
 import { useAuth } from '@/context/AuthContext';
-
-const SIDEBAR_WIDTH = 260;
 
 export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
+  const router   = useRouter();
   const { isAuthenticated, isLoading } = useAuth();
 
-  // Routes that don't require authentication
-  const publicRoutes = ['/login'];
-  
-  // Routes that require authentication
-  const protectedRoutes = ['/', '/dashboard', '/leads', '/queue'];
+  const [mounted,   setMounted]   = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
-    if (isLoading) return;
+    setMounted(true);
+    // Restore sidebar preference from localStorage
+    const saved = localStorage.getItem('sidebar-collapsed');
+    if (saved === 'true') setCollapsed(true);
+  }, []);
 
-    // Check if current route is protected and user is not authenticated
-    const isPublicRoute = publicRoutes.includes(pathname);
-    const isProtectedRoute = protectedRoutes.includes(pathname);
+  const toggleSidebar = () => {
+    setCollapsed((prev) => {
+      localStorage.setItem('sidebar-collapsed', String(!prev));
+      return !prev;
+    });
+  };
 
-    if (isProtectedRoute && !isAuthenticated && !isPublicRoute) {
-      router.push('/login');
-    }
+  const PUBLIC_ROUTES = ['/login'];
+  const isPublicRoute = PUBLIC_ROUTES.some(
+    (r) => pathname === r || pathname.startsWith(r + '/'),
+  );
 
-    // If user is logged in and tries to access login page, redirect to dashboard
-    if (isAuthenticated && pathname === '/login') {
-      router.push('/');
-    }
-  }, [isAuthenticated, isLoading, pathname, router]);
+  useEffect(() => {
+    if (!mounted || isLoading) return;
+    if (!isPublicRoute && !isAuthenticated) router.push('/login');
+    if (isAuthenticated && pathname === '/login') router.push('/');
+  }, [mounted, isAuthenticated, isLoading, pathname, router, isPublicRoute]);
 
-  // Show loading state while checking auth
-  if (isLoading) {
+  if (!mounted || isLoading) {
     return (
-      <Box sx={{ minHeight: '100vh', backgroundColor: '#f5f5f5' }}>
-        {/* Loading skeleton could go here */}
+      <Box sx={{ minHeight: '100vh', backgroundColor: 'background.default' }}>
+        {children}
       </Box>
     );
   }
 
-  // Show sidebar on protected routes (not login)
-  const shouldShowSidebar = pathname !== '/login' && isAuthenticated;
+  const shouldShowSidebar = !isPublicRoute && isAuthenticated;
+  const sidebarW = shouldShowSidebar
+    ? (collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED)
+    : 0;
 
   return (
-    <>
-      {shouldShowSidebar && <Navbar />}
+    <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+      {shouldShowSidebar && (
+        <Sidebar collapsed={collapsed} onToggle={toggleSidebar} />
+      )}
       <Box
         sx={{
+          flex: 1,
           display: 'flex',
-          minHeight: '100vh',
+          flexDirection: 'column',
+          minWidth: 0,
+          backgroundColor: 'background.default',
+          transition: 'margin-left 0.22s ease',
         }}
       >
-        {shouldShowSidebar && <Sidebar />}
-        <Box
-          sx={{
-            flex: 1,
-            backgroundColor: '#f5f5f5',
-            overflowY: 'auto',
-          }}
-        >
+        {shouldShowSidebar && <Navbar />}
+        <Box sx={{ flex: 1, minWidth: 0 }}>
           {children}
         </Box>
       </Box>
-    </>
+    </Box>
   );
 }

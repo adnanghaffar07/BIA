@@ -1,5 +1,6 @@
 import { Lead } from '@/types/lead';
 import { checkCarrierEligibility } from './carrier.service';
+import { calculateCoastDistance } from './coastDistance.service';
 import { calculateLeadGrade } from './grade.service';
 import { calculateIndicativePremium } from './pricing.service';
 import { updateLead } from './storage.service';
@@ -40,6 +41,7 @@ export async function enrichLead(lead: any): Promise<void> {
     const eligibility = checkCarrierEligibility(mappedLead);
     const grade = calculateLeadGrade(mappedLead, eligibility);
     const pricing = calculateIndicativePremium(mappedLead);
+    const coast = calculateCoastDistance(mappedLead.latitude, mappedLead.longitude);
 
     await updateLead(propertyId, {
       grade,
@@ -51,6 +53,10 @@ export async function enrichLead(lead: any): Promise<void> {
       expectedPremium: pricing.expected || undefined,
       highPremium: pricing.high || undefined,
       pricingConfidence: pricing.confidenceScore,
+      ...(coast && {
+        coastDistanceMiles: coast.distanceMiles,
+        coastExposure: coast.exposure,
+      }),
     });
   } catch (err) {
     console.error(`[enrichment] Failed to enrich lead ${lead.propertyId}:`, err);
@@ -117,6 +123,8 @@ export async function reEnrichLead(dbLead: any): Promise<any> {
     floodZone: dbLead.floodZone ?? undefined,
     floodZoneType: dbLead.floodZoneType || undefined,
     pool: dbLead.pool ?? undefined,
+    latitude: dbLead.latitude ? parseFloat(dbLead.latitude) : undefined,
+    longitude: dbLead.longitude ? parseFloat(dbLead.longitude) : undefined,
   };
 
   await enrichLead(lead);

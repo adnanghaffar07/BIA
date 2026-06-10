@@ -2,6 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ERROR_MESSAGES, API_CONFIG } from '@/lib/constants';
 import { upsertLeads, getLeadsFromDb } from '@/services/storage.service';
 import { enrichLeadBatch } from '@/services/enrichment.service';
+import sql from '@/lib/neon';
+
+/** Check whether the one-time REAPI seed has already been done */
+async function isApiSeeded(): Promise<boolean> {
+  try {
+    const rows = await sql`
+      SELECT "value" FROM "AppConfig" WHERE "key" = 'api_seeded'
+    ` as any[];
+    return rows.length > 0 && rows[0].value === 'true';
+  } catch {
+    // AppConfig table may not exist yet — treat as not seeded
+    return false;
+  }
+}
 
 /** Returns YYYY-MM-DD string offset by `days` from today (negative = past) */
 function offsetDate(days: number): string {
@@ -16,37 +30,64 @@ function offsetDate(days: number): string {
  * store them in DB, and return enriched results.
  *
  * Query params:
- *   size    — number of records (default 20)
+ *   size    — number of records (default 100)
  *   engine  — 1 (New Purchase), 2 (Renewal), omit for all
  *   grade   — A | B | C | D (filter DB results)
  *   status  — new | contacted | qualified | quote_sent | bound | lost
  *   source  — 'db' to skip API and return stored leads only
+ *   active  — 'true' excludes bound/lost (active working queue)
+ *   closed  — 'true' returns only bound/lost leads
+ *   orderBy — 'xdate' sorts by renewalTargetDate ASC (producer priority queue)
  */
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    const size   = parseInt(searchParams.get('size') || '100', 10);
-    const engine = searchParams.get('engine') ? parseInt(searchParams.get('engine')!) : undefined;
-    const grade  = searchParams.get('grade') || undefined;
-    const status = searchParams.get('status') || undefined;
-    const source = searchParams.get('source') || 'api';
+    const size    = parseInt(searchParams.get('size') || '100', 10);
+    const engine  = searchParams.get('engine') ? parseInt(searchParams.get('engine')!) : undefined;
+    const grade   = searchParams.get('grade') || undefined;
+    const status  = searchParams.get('status') || undefined;
+    const source  = searchParams.get('source') || 'api';
+    const active  = searchParams.get('active') === 'true';
+    const closed  = searchParams.get('closed') === 'true';
+    const orderBy = (searchParams.get('orderBy') === 'xdate' ? 'xdate' : 'updated') as 'xdate' | 'updated';
+
+    const excludeStatuses = active ? ['bound', 'lost'] : undefined;
+    const onlyStatuses    = closed ? 'bound' : undefined; // simplified: show bound in closed tab
 
     // If source=db, return stored leads without calling external API
     if (source === 'db') {
+      const leads = await getLeadsFromDb({
+        engine, grade,
+        status: closed ? undefined : (status || undefined),
+        excludeStatuses,
+        orderBy,
+        limit: size,
+      });
+      // client-side filter for closed = bound OR lost
+      const result = closed
+        ? leads.filter((l) => l.status === 'bound' || l.status === 'lost')
+        : leads;
+      return NextResponse.json({ success: true, data: result, total: result.length, source: 'db' });
+    }
+
+    // ── Hard lock: REAPI is only called once, via POST /api/admin/seed ────────
+    // After seeding, `api_seeded = true` is written to AppConfig.
+    // All subsequent GET requests serve from DB regardless of row count.
+    const seeded = await isApiSeeded();
+    if (seeded) {
       const leads = await getLeadsFromDb({ engine, grade, status, limit: size });
+      console.log(`📦 REAPI lock active — serving ${leads.length} leads from DB`);
       return NextResponse.json({ success: true, data: leads, total: leads.length, source: 'db' });
     }
 
-    // ── DB-first guard: only call REAPI if the database is empty ──────────────
-    // This preserves REAPI credits — once 100 records are seeded, every
-    // subsequent page load reads from Neon instead of spending a credit.
+    // Also check if DB already has rows (demo data or previous partial seed)
     const existing = await getLeadsFromDb({ limit: 1 });
     if (existing.length > 0) {
       const leads = await getLeadsFromDb({ engine, grade, status, limit: size });
-      console.log(`📦 DB already seeded (${leads.length} leads) — skipping REAPI call`);
+      console.log(`📦 DB has ${leads.length} leads — skipping REAPI (use /api/admin/seed to force refresh)`);
       return NextResponse.json({ success: true, data: leads, total: leads.length, source: 'db' });
     }
-    console.log('🌱 DB is empty — calling REAPI to seed 100 leads (one-time)...');
+    console.log('🌱 DB empty and not locked — calling REAPI (one-time fallback)...');
 
     if (!API_CONFIG.API_KEY) {
       return NextResponse.json(
@@ -74,12 +115,13 @@ export async function GET(request: NextRequest) {
       summary: false,
       size,
       // ── Permanent filters for BIA insurance leads ──────────────────────────
-      state: 'NJ',           // New Jersey only
-      flood_zone: false,     // Exclude FEMA flood zone properties
-      vacant: false,         // Exclude vacant properties
-      pre_foreclosure: false, // Exclude pre-foreclosure
-      foreclosure: false,    // Exclude active foreclosures
-      reo: false,            // Exclude bank-owned properties
+      state: 'NJ',
+      zip: ['07722','07724','07726','07728','07730','07731','07733','07746','07748','08701'],
+      flood_zone: false,
+      vacant: false,
+      pre_foreclosure: false,
+      foreclosure: false,
+      reo: false,
       // ───────────────────────────────────────────────────────────────────────
       ...dateFilters,
     };

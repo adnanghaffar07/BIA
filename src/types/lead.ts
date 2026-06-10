@@ -44,6 +44,25 @@ export type LeadStatus =
   | 'bound'
   | 'lost';
 
+export type LostReason =
+  | 'price'
+  | 'no_contact'
+  | 'not_authorized'
+  | 'out_of_appetite'
+  | 'bought_elsewhere'
+  | 'not_interested'
+  | 'other';
+
+export type LostStage =
+  | 'in_appetite'       // fell out before rating-complete
+  | 'rating_complete'   // had data but never contacted
+  | 'right_party'       // could never reach decision-maker
+  | 'authorization'     // reached but would not authorize quote
+  | 'quoted'            // quoted but did not bind
+  | 'unknown';
+
+export type AuthorizationMethod = 'verbal' | 'web' | 'email';
+
 export interface Lead {
   id: string;
   propertyId: string;
@@ -153,9 +172,39 @@ export interface Lead {
   producerEmail?: string;
   posQuoteNumber?: string;
   posCarrier?: string;
+  posQuotePremium?: number;       // §10E actual POS dollar quote
+  quotedAt?: string;              // §10E timestamp when POS quote produced
   boundPremium?: number;
   boundDate?: string;
   authorizationDate?: string;
+  authorizationMethod?: AuthorizationMethod; // §10D verbal/web/email
+
+  // §10D workflow timestamps
+  queueEnteredAt?: string;
+  firstRpcAt?: string;
+  contactAttempts?: number;
+
+  // §10E variance / moat
+  varianceNotes?: string;
+  varianceReason?: string;
+  varianceAmount?: number;
+  variancePct?: number;           // (posQuotePremium − expectedPremium) / expectedPremium
+
+  // §10E disposition
+  lostReason?: LostReason;
+  lostStage?: LostStage;
+
+  // §10A sourcing
+  sourceVendor?: string;
+  cohortTag?: string;
+
+  // §10B rating readiness
+  roofYear?: number;
+  constructionType?: string;
+  protectionClass?: string;
+  priorCarrier?: string;
+  priorPremium?: number;
+  indicativeBasis?: string;
 
   // Notes (legacy simple field — full history lives in Activity table)
   notes?: string;

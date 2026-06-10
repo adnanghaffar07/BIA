@@ -2,18 +2,8 @@
 
 import React from 'react';
 import {
-  Box,
-  Drawer,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
-  Divider,
-  Typography,
-  IconButton,
-  useTheme,
-  useMediaQuery,
+  Box, Drawer, List, ListItem, ListItemButton, ListItemIcon,
+  ListItemText, Divider, Typography, Tooltip, IconButton,
 } from '@mui/material';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -21,188 +11,288 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import PeopleIcon from '@mui/icons-material/People';
 import QueueIcon from '@mui/icons-material/PlaylistAddCheck';
 import LogoutIcon from '@mui/icons-material/Logout';
-import MenuIcon from '@mui/icons-material/Menu';
-import CloseIcon from '@mui/icons-material/Close';
-import { useAuth } from '@/context/AuthContext';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
+import CloudSyncIcon from '@mui/icons-material/CloudSync';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import { useAuth } from '@/context/AuthContext';
 
-const DRAWER_WIDTH = 260;
+export const SIDEBAR_EXPANDED  = 240;
+export const SIDEBAR_COLLAPSED = 64;
 
-export default function Sidebar() {
+// ── Palette (matches theme sidebar bg) ────────────────────────────────────────
+const BG        = '#0f172a';  // slate-900
+const ACTIVE_BG = 'rgba(37, 99, 235, 0.18)';
+const HOVER_BG  = 'rgba(255, 255, 255, 0.06)';
+const ACTIVE_BORDER = '#2563eb';
+const ICON_DEFAULT  = 'rgba(255,255,255,0.55)';
+const ICON_ACTIVE   = '#60a5fa';
+
+interface SidebarProps {
+  collapsed: boolean;
+  onToggle: () => void;
+}
+
+export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
-  const router = useRouter();
+  const router   = useRouter();
   const { logout, user } = useAuth();
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const [mobileOpen, setMobileOpen] = React.useState(false);
 
-  const isActive = (path: string) => pathname === path;
+  const isActive = (path: string) =>
+    path === '/dashboard' ? pathname === '/dashboard' || pathname === '/'
+    : pathname === path || pathname.startsWith(path + '/');
 
   const handleLogout = async () => {
     await logout();
     router.push('/login');
   };
 
-  const baseItems = [
-    { label: 'Dashboard',   icon: <DashboardIcon />, path: '/' },
-    { label: 'Leads',       icon: <PeopleIcon />,    path: '/leads' },
-    { label: 'Lead Queues', icon: <QueueIcon />,     path: '/queue' },
+  const navItems = [
+    { label: 'Dashboard',   icon: <DashboardIcon />,        path: '/dashboard' },
+    { label: 'Leads',       icon: <PeopleIcon />,           path: '/leads' },
+    { label: 'Lead Queues', icon: <QueueIcon />,            path: '/queue' },
+    ...(user?.role === 'superadmin' ? [
+      { label: 'Users',       icon: <ManageAccountsIcon />,  path: '/admin/users' },
+      { label: 'Seed Control',icon: <CloudSyncIcon />,       path: '/admin/seed' },
+    ] : []),
   ];
 
-  const adminItems = user?.role === 'superadmin'
-    ? [{ label: 'User Management', icon: <ManageAccountsIcon />, path: '/admin/users' }]
-    : [];
+  const w = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
 
-  const menuItems = [...baseItems, ...adminItems];
-
-  const drawerContent = (
+  const content = (
     <Box
       sx={{
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        backgroundColor: '#1a237e',
+        backgroundColor: BG,
         color: 'white',
+        overflowX: 'hidden',
+        transition: 'width 0.22s ease',
+        width: w,
       }}
     >
-      {/* Logo Section */}
-      <Box sx={{ p: 2, textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-        <Typography
-          variant="h6"
+      {/* ── Logo / header ───────────────────────────────────────────────── */}
+      <Box
+        sx={{
+          px: 1.5,
+          py: 1.5,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: collapsed ? 'center' : 'space-between',
+          borderBottom: '1px solid rgba(255,255,255,0.07)',
+          minHeight: 56,
+          gap: 1,
+        }}
+      >
+        {/* Logo mark — always visible */}
+        <Box
           sx={{
-            fontWeight: 'bold',
-            fontSize: '1.3rem',
-            background: 'linear-gradient(45deg, #fff 30%, #e0e0e0 90%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            overflow: 'hidden',
+            flex: collapsed ? 'none' : 1,
           }}
         >
-          🏢 BIA
-        </Typography>
+          <Box
+            sx={{
+              width: 30,
+              height: 30,
+              borderRadius: 1,
+              backgroundColor: '#2563eb',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Typography sx={{ fontSize: '0.75rem', fontWeight: 900, color: '#fff', lineHeight: 1 }}>
+              BIA
+            </Typography>
+          </Box>
+          {!collapsed && (
+            <Typography
+              sx={{
+                fontWeight: 800,
+                fontSize: '1rem',
+                letterSpacing: '0.03em',
+                color: '#f8fafc',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              CRM
+            </Typography>
+          )}
+        </Box>
+
+        {/* Collapse toggle — hidden when collapsed, shows on expand side */}
+        {!collapsed && (
+          <Tooltip title="Collapse sidebar" placement="right">
+            <IconButton
+              onClick={onToggle}
+              size="small"
+              sx={{
+                color: 'rgba(255,255,255,0.4)',
+                flexShrink: 0,
+                '&:hover': { color: '#fff', backgroundColor: HOVER_BG },
+              }}
+            >
+              <ChevronLeftIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
 
-      {/* Navigation Menu */}
-      <List sx={{ flex: 1, pt: 2 }}>
-        {menuItems.map((item, index) => (
-          <ListItem key={index} disablePadding sx={{ mb: 1, mx: 1 }}>
+      {/* Expand button pinned at top when collapsed */}
+      {collapsed && (
+        <Tooltip title="Expand sidebar" placement="right">
+          <IconButton
+            onClick={onToggle}
+            size="small"
+            sx={{
+              mt: 0.5,
+              mx: 'auto',
+              display: 'flex',
+              color: 'rgba(255,255,255,0.4)',
+              '&:hover': { color: '#fff', backgroundColor: HOVER_BG },
+            }}
+          >
+            <ChevronRightIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+
+      {/* ── Nav items ───────────────────────────────────────────────────── */}
+      <List sx={{ flex: 1, pt: 1.5, px: collapsed ? 0.5 : 1 }}>
+        {navItems.map((item) => {
+          const active = isActive(item.path);
+          const btn = (
             <ListItemButton
               component={Link}
               href={item.path}
-              selected={isActive(item.path)}
-              onClick={() => isMobile && setMobileOpen(false)}
+              selected={active}
               sx={{
-                color: 'white',
-                borderLeft: isActive(item.path) ? '4px solid #64b5f6' : '4px solid transparent',
-                backgroundColor: isActive(item.path) ? 'rgba(100, 181, 246, 0.1)' : 'transparent',
-                borderRadius: '8px',
-                transition: 'all 0.3s ease',
-                '&:hover': {
-                  backgroundColor: 'rgba(100, 181, 246, 0.15)',
-                  borderLeft: '4px solid #64b5f6',
-                },
+                borderRadius: 1.5,
+                mb: 0.5,
+                px: collapsed ? 1.25 : 1.5,
+                py: 1,
+                justifyContent: collapsed ? 'center' : 'flex-start',
+                backgroundColor: active ? ACTIVE_BG : 'transparent',
+                borderLeft: active ? `3px solid ${ACTIVE_BORDER}` : '3px solid transparent',
+                '&:hover': { backgroundColor: active ? ACTIVE_BG : HOVER_BG },
+                transition: 'all 0.15s ease',
+                minHeight: 44,
               }}
             >
-              <ListItemIcon sx={{ color: isActive(item.path) ? '#64b5f6' : 'white', minWidth: 40 }}>
+              <ListItemIcon
+                sx={{
+                  color: active ? ICON_ACTIVE : ICON_DEFAULT,
+                  minWidth: collapsed ? 0 : 36,
+                  justifyContent: 'center',
+                }}
+              >
                 {item.icon}
               </ListItemIcon>
-              <ListItemText
-                primary={item.label}
-                slotProps={{ primary: { fontWeight: isActive(item.path) ? 'bold' : 'normal' } }}
-              />
+              {!collapsed && (
+                <ListItemText
+                  primary={item.label}
+                  slotProps={{
+                    primary: {
+                      sx: {
+                        fontSize: '0.875rem',
+                        fontWeight: active ? 700 : 400,
+                        color: active ? '#f8fafc' : 'rgba(255,255,255,0.75)',
+                      },
+                    },
+                  }}
+                />
+              )}
             </ListItemButton>
-          </ListItem>
-        ))}
+          );
+
+          return (
+            <ListItem key={item.path} disablePadding>
+              {collapsed
+                ? <Tooltip title={item.label} placement="right">{btn}</Tooltip>
+                : btn
+              }
+            </ListItem>
+          );
+        })}
       </List>
 
-      {/* Divider */}
-      <Divider sx={{ backgroundColor: 'rgba(255,255,255,0.1)' }} />
+      <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)', mx: collapsed ? 0.5 : 1 }} />
 
-      {/* Logout Section */}
-      <Box sx={{ p: 2 }}>
-        <ListItemButton
-          onClick={handleLogout}
-          sx={{
-            color: 'white',
-            justifyContent: 'center',
-            backgroundColor: 'rgba(244, 67, 54, 0.1)',
-            borderRadius: '8px',
-            transition: 'all 0.3s ease',
-            '&:hover': {
-              backgroundColor: 'rgba(244, 67, 54, 0.2)',
-            },
-          }}
-        >
-          <ListItemIcon sx={{ color: '#ef5350', minWidth: 40 }}>
-            <LogoutIcon />
-          </ListItemIcon>
-          <ListItemText
-            primary="Logout"
-            slotProps={{ primary: { fontWeight: 'bold' } }}
-          />
-        </ListItemButton>
+      {/* ── User + logout ────────────────────────────────────────────────── */}
+      <Box sx={{ px: collapsed ? 0.5 : 1, py: 1.5 }}>
+        {!collapsed && user?.email && (
+          <Typography
+            variant="caption"
+            sx={{
+              display: 'block',
+              px: 1.5,
+              pb: 1,
+              color: 'rgba(255,255,255,0.35)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {user.email}
+          </Typography>
+        )}
+        {(() => {
+          const logoutBtn = (
+            <ListItemButton
+              onClick={handleLogout}
+              sx={{
+                borderRadius: 1.5,
+                px: collapsed ? 1.25 : 1.5,
+                py: 1,
+                justifyContent: collapsed ? 'center' : 'flex-start',
+                backgroundColor: 'rgba(220,38,38,0.08)',
+                '&:hover': { backgroundColor: 'rgba(220,38,38,0.18)' },
+                minHeight: 44,
+              }}
+            >
+              <ListItemIcon sx={{ color: '#f87171', minWidth: collapsed ? 0 : 36, justifyContent: 'center' }}>
+                <LogoutIcon fontSize="small" />
+              </ListItemIcon>
+              {!collapsed && (
+                <ListItemText
+                  primary="Logout"
+                  slotProps={{ primary: { sx: { fontSize: '0.875rem', fontWeight: 600, color: '#f87171' } } }}
+                />
+              )}
+            </ListItemButton>
+          );
+          return collapsed
+            ? <Tooltip title="Logout" placement="right">{logoutBtn}</Tooltip>
+            : logoutBtn;
+        })()}
       </Box>
     </Box>
   );
 
   return (
-    <>
-      {/* Desktop Drawer */}
-      {!isMobile && (
-        <Drawer
-          variant="permanent"
-          sx={{
-            width: DRAWER_WIDTH,
-            flexShrink: 0,
-            '& .MuiDrawer-paper': {
-              width: DRAWER_WIDTH,
-              boxSizing: 'border-box',
-              boxShadow: 2,
-            },
-          }}
-        >
-          {drawerContent}
-        </Drawer>
-      )}
-
-      {/* Mobile Drawer */}
-      {isMobile && (
-        <>
-          <Box
-            sx={{
-              position: 'fixed',
-              top: 16,
-              left: 16,
-              zIndex: 1200,
-            }}
-          >
-            <IconButton
-              onClick={() => setMobileOpen(!mobileOpen)}
-              sx={{
-                backgroundColor: '#1a237e',
-                color: 'white',
-                '&:hover': {
-                  backgroundColor: '#0d47a1',
-                },
-              }}
-            >
-              {mobileOpen ? <CloseIcon /> : <MenuIcon />}
-            </IconButton>
-          </Box>
-          <Drawer
-            variant="temporary"
-            open={mobileOpen}
-            onClose={() => setMobileOpen(false)}
-            sx={{
-              '& .MuiDrawer-paper': {
-                width: DRAWER_WIDTH,
-                boxSizing: 'border-box',
-              },
-            }}
-          >
-            {drawerContent}
-          </Drawer>
-        </>
-      )}
-    </>
+    <Drawer
+      variant="permanent"
+      sx={{
+        width: w,
+        flexShrink: 0,
+        transition: 'width 0.22s ease',
+        '& .MuiDrawer-paper': {
+          width: w,
+          boxSizing: 'border-box',
+          overflowX: 'hidden',
+          border: 'none',
+          transition: 'width 0.22s ease',
+          boxShadow: '2px 0 8px rgba(0,0,0,0.25)',
+        },
+      }}
+    >
+      {content}
+    </Drawer>
   );
 }

@@ -1,291 +1,373 @@
-# Real Estate CRM Demo
+# BIA CRM — Project Documentation
 
-A modern Real Estate CRM application built with Next.js 16, React 19, TypeScript, and Material-UI v9 to manage and display real estate leads from the Real Estate API.
+A personal-lines insurance CRM built for BIA (Bound Insurance Agency) on Next.js 16, React 19, TypeScript, and Material-UI v9. The system sources NJ homeowner leads from the Real Estate API, runs automated carrier eligibility checks and indicative pricing, and routes qualified leads to the producer queue.
 
-## 🎯 Project Overview
-
-This is a demo project showcasing a complete lead management system that connects to the Real Estate API (https://console.realestateapi.com/) to fetch, display, and manage real estate leads.
-
-### Key Features
-
-- **Lead Management Dashboard** - View all leads in a professional table interface
-- **Advanced Search & Filtering** - Filter leads by name, status, property type, and more
-- **Real-time Data** - Connected to Real Estate API for live lead data
-- **Export Functionality** - Export leads to CSV format
-- **Responsive Design** - Works seamlessly on desktop and mobile devices
-- **Status Tracking** - Monitor lead status (New, Contacted, Qualified, Converted, Lost)
-- **Lead Details** - Display comprehensive lead information including contact details, property info, and budget
-
-## 📁 Project Structure
-
-```
-real-estate-crm-demo/
-├── src/
-│   ├── app/
-│   │   ├── api/
-│   │   │   └── leads/
-│   │   │       └── route.ts           # API endpoint for leads
-│   │   ├── leads/
-│   │   │   └── page.tsx               # Leads management page
-│   │   ├── layout.tsx                 # Root layout with navbar
-│   │   ├── page.tsx                   # Home page
-│   │   ├── globals.css                # Global styles
-│   │   └── page.module.css
-│   │
-│   ├── components/
-│   │   ├── Navbar.tsx                 # Navigation bar
-│   │   ├── LeadsTable.tsx             # Table component for displaying leads
-│   │   ├── SearchForm.tsx             # Search and filter form
-│   │   └── LeadCard.tsx               # Individual lead card component
-│   │
-│   ├── lib/
-│   │   ├── realEstateApi.ts           # Real Estate API client
-│   │   └── constants.ts               # App constants and configurations
-│   │
-│   ├── services/
-│   │   └── lead.service.ts            # Lead business logic service
-│   │
-│   ├── types/
-│   │   ├── lead.ts                    # Lead TypeScript interfaces
-│   │   └── api.ts                     # API response interfaces
-│   │
-│   └── utils/
-│       ├── formatAddress.ts           # Formatting utilities
-│       └── csvExport.ts               # CSV export functionality
-│
-├── public/                            # Static assets
-├── .env.local                         # Environment variables (API keys)
-├── package.json                       # Dependencies
-├── tsconfig.json                      # TypeScript configuration
-└── README.md                          # This file
-```
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- Node.js 18+ and npm
-- API credentials for Real Estate API (API Key and Secret)
-
-### Installation
-
-1. **Install dependencies**
-   ```bash
-   npm install
-   ```
-
-2. **Set up environment variables**
-   
-   Create or update `.env.local` file with your Real Estate API credentials:
-   ```
-   NEXT_PUBLIC_REAL_ESTATE_API_KEY=your_api_key_here
-   REAL_ESTATE_API_SECRET=your_api_secret_here
-   ```
-
-3. **Start the development server**
-   ```bash
-   npm run dev
-   ```
-
-4. **Open your browser**
-   
-   Navigate to http://localhost:3000
-
-## 📖 Usage Guide
-
-### Home Page
-- Landing page with project overview and quick links
-- Features cards showing key capabilities
-- Quick navigation to leads management
-
-### Leads Page (`/leads`)
-- **View All Leads** - See a comprehensive table of all leads from the Real Estate API
-- **Search Leads** - Search by name, email, or phone number
-- **Filter by Status** - Filter leads by their current status
-- **Filter by Property Type** - Filter by residential, commercial, etc.
-- **Export Data** - Download leads as CSV file
-- **Manage Leads** - View, edit, or delete individual leads
-
-### Components
-
-#### Navbar
-- Navigation between Home and Leads pages
-- Shows active page indicator
-
-#### SearchForm
-- Multi-field search and filter interface
-- Dropdown selections for Status and Property Type
-- Reset filters button
-
-#### LeadsTable
-- Scrollable table with sticky header
-- Pagination support (5, 10, 25, 50 items per page)
-- Status badges with color coding
-- Action buttons (View, Edit, Delete)
-- CSV export functionality
-
-#### LeadCard
-- Card-based display of lead information
-- Shows contact, property, and financial details
-- Formatted address and currency display
-
-## 🔧 Key Features Explained
-
-### API Integration
-The `realEstateApi` class in [lib/realEstateApi.ts](lib/realEstateApi.ts) handles all communication with the Real Estate API:
-- Fetch leads with pagination
-- Get individual lead details
-- Create, update, and delete leads
-
-### Lead Service
-[services/lead.service.ts](services/lead.service.ts) provides business logic:
-- Fetch and format lead data
-- Filter and sort operations
-- Validation and error handling
-
-### Data Formatting
-[utils/formatAddress.ts](utils/formatAddress.ts) includes utilities for:
-- Formatting addresses from components
-- Phone number formatting
-- Currency formatting
-- Date/time formatting
-- Text truncation
-
-### Export Functionality
-[utils/csvExport.ts](utils/csvExport.ts) provides:
-- CSV export with proper header formatting
-- JSON export option
-- Automatic file download
-
-## 🎨 UI/UX Design
-
-The application uses Material-UI v9 for a professional, responsive design:
-- **Responsive Layout** - Works on all screen sizes
-- **Color Scheme** - Professional blue and gray tones
-- **Icons** - Material-UI icons for better UX
-- **Animations** - Smooth transitions and hover effects
-- **Accessibility** - Semantic HTML and proper ARIA labels
-
-## 🔐 Security
-
-- API keys stored in `.env.local` (not committed to git)
-- Private API key only used on server-side (API route)
-- Public API key for client-side requests
-- Environment variables properly scoped
-
-## 📊 Data Types
-
-### Lead
-```typescript
-interface Lead {
-  id: string;
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone: string;
-  propertyAddress: string;
-  propertyCity: string;
-  propertyState: string;
-  propertyZip: string;
-  propertyType: string;
-  budget: number;
-  createdAt: string;
-  status: 'new' | 'contacted' | 'qualified' | 'converted' | 'lost';
-  source: string;
-  notes?: string;
-}
-```
-
-## 🚦 Status Codes
-
-- **New** - Recently added lead (Blue)
-- **Contacted** - Initial contact made (Orange)
-- **Qualified** - Lead verified and qualified (Purple)
-- **Converted** - Lead converted to customer (Green)
-- **Lost** - Lead no longer interested (Red)
-
-## 🔄 Workflow
-
-1. User navigates to `/leads`
-2. Application fetches leads from API via `/api/leads`
-3. Leads displayed in table format
-4. User can search, filter, and sort leads
-5. User can export leads to CSV
-6. User can perform CRUD operations on leads
-
-## 🛠️ Available Scripts
-
-```bash
-# Development server
-npm run dev
-
-# Production build
-npm build
-
-# Start production server
-npm start
-
-# Run linter
-npm lint
-```
-
-## 📦 Dependencies
-
-- **Next.js** - React framework
-- **React** - UI library
-- **TypeScript** - Type safety
-- **Material-UI** - Component library
-- **Emotion** - CSS-in-JS styling
-
-## 🔗 API Endpoints
-
-### Internal API Routes
-- `GET /api/leads` - Fetch all leads with optional pagination and filters
-- `POST /api/leads` - Create a new lead
-
-### Real Estate API Routes (proxied through internal API)
-- `GET /leads` - Fetch leads
-- `GET /leads/{id}` - Get lead details
-- `POST /leads` - Create lead
-- `PUT /leads/{id}` - Update lead
-- `DELETE /leads/{id}` - Delete lead
-
-## 🚨 Troubleshooting
-
-### API Connection Issues
-- Verify API keys in `.env.local`
-- Check Real Estate API service status
-- Ensure network connectivity
-
-### Module Not Found Errors
-- Run `npm install` to ensure all dependencies are installed
-- Clear `.next` folder and rebuild: `rm -rf .next && npm run build`
-
-### TypeScript Errors
-- Run `npm run lint` to check for issues
-- Ensure all files are saved and TypeScript compiler is happy
-
-## 📚 Next Steps & Future Enhancements
-
-Potential features to add:
-- Lead creation/editing modal
-- Advanced filtering with date ranges
-- Lead details page
-- Bulk operations (delete, update status)
-- Dashboard with analytics
-- Lead notes history
-- User authentication
-- Email notifications
-- Calendar/scheduling integration
-
-## 🤝 Contributing
-
-This is a demo project. Feel free to modify and extend it based on your needs.
-
-## 📝 License
-
-This project is part of a demo for Real Estate CRM management.
+**Last updated: June 9, 2026**
 
 ---
 
-**Happy Lead Managing! 🏢📊**
+## Table of Contents
+
+1. [Architecture Overview](#architecture-overview)
+2. [Project Structure](#project-structure)
+3. [The Two-Funnel Model](#the-two-funnel-model)
+4. [Data Model](#data-model)
+5. [Services](#services)
+6. [API Routes](#api-routes)
+7. [Pages](#pages)
+8. [Components](#components)
+9. [Database Migrations](#database-migrations)
+10. [Environment Variables](#environment-variables)
+11. [Getting Started](#getting-started)
+12. [Outstanding Work](#outstanding-work)
+
+---
+
+## Architecture Overview
+
+```
+REAPI (public records)
+        │
+        ▼
+POST /api/admin/seed         ← one-time seed, locked after first run
+        │
+        ▼
+upsertLeads()                ← dedup by propertyId + owner
+        │
+        ▼
+enrichLeadBatch()
+  ├── checkCarrierEligibility()   → travelersEligible / plymouthEligible
+  ├── calculateLeadGrade()        → A / B / C / D
+  ├── calculateIndicativePremium() → low / expected / high premium
+  └── calculateCoastDistance()    → coastDistanceMiles / coastExposure
+        │
+        ▼
+Neon Postgres ("Lead" table)
+        │
+        ▼
+Producer Queue (/queue)      ← Grade A only, sorted by x-date, bound/lost excluded
+        │
+        ▼
+Lead Detail (/leads/[id])    ← producer records contact, authorization, POS quote, bind
+        │
+        ▼
+Dashboard (/dashboard)       ← live funnel counts from getPipelineSummary()
+```
+
+---
+
+## Project Structure
+
+```
+src/
+├── app/
+│   ├── api/
+│   │   ├── leads/
+│   │   │   ├── route.ts              GET (list) + POST (advanced search)
+│   │   │   └── [id]/route.ts         GET (single) + PUT (update + auto-stamps)
+│   │   ├── dashboard/route.ts        GET — live pipeline funnel counts
+│   │   └── admin/
+│   │       ├── seed/route.ts         POST — trigger REAPI seed (locked after first run)
+│   │       └── users/                Admin user management
+│   ├── dashboard/page.tsx            Live funnel dashboard
+│   ├── queue/page.tsx                Producer lead queue (active + closed tabs)
+│   ├── leads/
+│   │   ├── page.tsx                  Full leads list
+│   │   └── [id]/page.tsx             Lead detail + producer workflow
+│   ├── login/page.tsx                Authentication
+│   ├── layout.tsx                    Root layout (AppRouterCacheProvider + AuthProvider)
+│   └── globals.css
+│
+├── components/
+│   ├── LayoutWrapper.tsx             Auth guard + sidebar/navbar shell
+│   ├── Navbar.tsx                    Top bar with user info
+│   ├── Sidebar.tsx                   Side navigation
+│   ├── LeadsTable.tsx                Queue table (status, grade, x-date, carriers, premium)
+│   ├── LeadGradeBadge.tsx            A/B/C/D badge
+│   ├── CarrierEligibilityBadge.tsx   Travelers / Plymouth Rock chips
+│   └── PropertyDetailsContent.tsx   Expanded row detail
+│
+├── services/
+│   ├── storage.service.ts            DB read/write — upsertLeads, getLeadsFromDb, updateLead
+│   ├── enrichment.service.ts         Orchestrates carrier + grade + pricing + coast
+│   ├── carrier.service.ts            Travelers & Plymouth Rock eligibility rules
+│   ├── grade.service.ts              A/B/C/D grading logic
+│   ├── pricing.service.ts            Indicative premium calculation
+│   ├── pipeline.service.ts           Engine assignment (1=New Purchase, 2=Renewal)
+│   └── coastDistance.service.ts     Coastal exposure calculation
+│
+├── types/
+│   ├── lead.ts                       Lead, LeadStatus, LostReason, LostStage, AuthorizationMethod
+│   ├── carrier.ts                    CarrierEligibilityResult
+│   ├── grade.ts                      LeadGrade
+│   ├── pricing.ts                    IndicativePremium
+│   └── activity.ts                   Activity log entry
+│
+├── lib/
+│   ├── neon.ts                       Neon Postgres client (sql + pool)
+│   ├── auth.ts                       JWT session helpers
+│   └── constants.ts                  Target ZIPs, status options, table columns
+│
+├── context/
+│   └── AuthContext.tsx               isAuthenticated, user, login, logout, isLoading
+│
+└── utils/
+    ├── formatAddress.ts              Address + currency formatters
+    └── csvExport.ts                  CSV download utility
+```
+
+---
+
+## The Two-Funnel Model
+
+Per Frank's *BIA Pipeline Funnel Sizing & CRM Data Requirements* document.
+
+### Funnel 1 — Sourcing (Raw → Quote-Ready)
+
+| Stage | Rate | Cumulative | CRM field |
+|-------|------|-----------|-----------|
+| Raw records pulled | 100% | 100% | `COUNT(*)` |
+| In-appetite | ~40% | 40% | `grade IN ('A','B','C')` |
+| Rating-complete | ~60% | 24% | `grade = 'A'` |
+| Contactable | ~55% | 13% | `grade='A' AND (phone1 IS NOT NULL OR email1 IS NOT NULL)` |
+| = Quote-ready | ~13% of raw | — | `grade = 'A'` |
+
+### Funnel 2 — Producer (Quote-Ready → Bound)
+
+| Stage | Rate | CRM field |
+|-------|------|-----------|
+| Quote-ready | 100% | `grade = 'A'` |
+| Right-party contact | ~40% | `status IN ('contacted',…)` |
+| Authorized to quote | ~33% | `authorizationDate IS NOT NULL` |
+| Quoted (POS) | ~88% | `posQuoteNumber IS NOT NULL` |
+| Bound | 78–95% | `status = 'bound'` |
+
+---
+
+## Data Model
+
+### Lead table — key field groups
+
+#### Identity & Sourcing
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | TEXT PK | UUID |
+| `propertyId` | TEXT UNIQUE | REAPI key |
+| `sourceVendor` | TEXT | `reapi` / `auto` / `referral` |
+| `cohortTag` | TEXT | Monthly batch tag e.g. `2026-06-Monmouth-HO` |
+| `createdAt` | TIMESTAMP | When lead entered system |
+| `renewalTargetDate` | TIMESTAMP | Estimated x-date — queue sort key |
+| `engine` | INTEGER | 1 = New Purchase, 2 = Renewal/Win-Back |
+
+#### Property & Appetite
+Key columns: `addressStreet`, `addressCity`, `addressZip`, `yearBuilt`, `squareFeet`, `estimatedValue`, `propertyType`, `propertyUse`, `floodZone`, `floodZoneType`, `ownerOccupied`, `corporateOwned`, `vacant`, `foreclosure`, `reo`
+
+Rating fields (§10B): `roofYear`, `constructionType`, `protectionClass`, `priorCarrier`, `priorPremium`, `indicativeBasis`
+
+#### Carrier Eligibility & Grade
+| Column | Type | Values |
+|--------|------|--------|
+| `travelersEligible` | TEXT | `eligible` / `ineligible` / `review` |
+| `travelersNotes` | JSONB | Array of reason strings |
+| `plymouthEligible` | TEXT | `eligible` / `ineligible` / `review` |
+| `plymouthNotes` | JSONB | Array of reason strings |
+| `grade` | TEXT | `A` / `B` / `C` / `D` |
+
+#### Indicative Pricing
+| Column | Type | Notes |
+|--------|------|-------|
+| `lowPremium` | FLOAT | Conservative estimate |
+| `expectedPremium` | FLOAT | Mid-point estimate — shown to producer |
+| `highPremium` | FLOAT | High-end estimate |
+| `pricingConfidence` | INTEGER | 0–100 based on available inputs |
+
+#### Contact (skip trace)
+`phone1`, `phone2`, `email1`, `email2`, `skipTraced`, `skipTracedAt`
+
+Pending: `phoneLineType`, `dncStatus`, `consentStatus`, `emailValid`
+
+#### Producer Workflow (§10D)
+| Column | Type | Set by |
+|--------|------|--------|
+| `status` | TEXT | Producer — new/contacted/qualified/quote_sent/bound/lost |
+| `queueEnteredAt` | TIMESTAMP | Auto — when grade first = A |
+| `firstRpcAt` | TIMESTAMP | Auto — first `new → contacted` transition |
+| `contactAttempts` | INTEGER | Auto-incremented on each contact transition |
+| `authorizationDate` | TIMESTAMP | Producer |
+| `authorizationMethod` | TEXT | Producer — verbal/web/email |
+
+#### Quote, Bind & Variance Loop — The Moat (§10E)
+| Column | Type | Notes |
+|--------|------|-------|
+| `posQuoteNumber` | TEXT | POS quote reference |
+| `posCarrier` | TEXT | Carrier quoted |
+| `posQuotePremium` | FLOAT | **Actual POS dollar quote** — left side of variance |
+| `quotedAt` | TIMESTAMP | Auto-stamped when posQuoteNumber first saved |
+| `boundPremium` | FLOAT | Final bound premium |
+| `boundDate` | TIMESTAMP | Auto-stamped on `→ bound` transition |
+| `varianceAmount` | FLOAT | `boundPremium − expectedPremium` ($) |
+| `variancePct` | FLOAT | `(posQuotePremium − expectedPremium) / expectedPremium` (%) — auto-computed |
+| `varianceReason` | TEXT | roof_age / prior_claims / coastal_surcharge / etc. |
+| `varianceNotes` | TEXT | Free-text producer note |
+
+#### Disposition (§10E — non-negotiable)
+| Column | Type | Values |
+|--------|------|--------|
+| `lostReason` | TEXT | price / no_contact / not_authorized / out_of_appetite / bought_elsewhere / not_interested / other |
+| `lostStage` | TEXT | in_appetite / rating_complete / right_party / authorization / quoted / unknown |
+
+#### Activity log (`Activity` table)
+Every status change, note, and bound event is logged. Columns: `id`, `leadId`, `type`, `content`, `metadata` (JSONB), `createdBy`, `createdAt`.
+
+---
+
+## Services
+
+### `carrier.service.ts`
+Implements Travelers Quantum Home 2.0 and Plymouth Rock (AtHome Insurance) NJ eligibility rules. Hard disqualifiers: non-residential, corporate-owned, vacant, foreclosure, REO, SFHA flood zones. Review flags: high value, pre-1940 construction, investor/absentee owner.
+
+### `grade.service.ts`
+- **D** — fails all carriers
+- **C** — passes ≥1 carrier, 2+ critical fields missing
+- **B** — passes ≥1 carrier, exactly 1 critical field missing
+- **A** — passes ≥1 carrier, all critical fields present (Quote-Ready)
+
+Critical fields: owner last name, street, ZIP, estimated value, year built, square feet. Non-critical (grade B): city, property type, bedrooms.
+
+### `pricing.service.ts`
+Rule-based indicative premium. Inputs: `estimatedValue` (base rate 0.5%), `yearBuilt` (age factor), `squareFeet` (size factor), `floodZone/Type` (flood factor), `pool` (liability), `ownerOccupied` (occupancy discount). Confidence score 0–100 based on available inputs.
+
+### `pipeline.service.ts`
+- **Engine 1** — New Purchase: mortgage recording date ≤ 90 days ago
+- **Engine 2** — Renewal/Win-Back: mortgage date 2022–2025, contact 90 days before anniversary
+
+### `storage.service.ts`
+- `upsertLeads()` — dedup by propertyId + owner; CRM fields protected from API overwrites
+- `getLeadsFromDb()` — supports engine/grade/status filters, `excludeStatuses` (active queue), `orderBy: 'xdate'` (producer priority sort)
+- `updateLead()` — all CRM-managed fields
+- `getPipelineSummary()` — single query returning all funnel stage counts for dashboard
+- `addActivity()` — append to activity log
+
+### `enrichment.service.ts`
+Orchestrator called after every REAPI ingest. Runs carrier check → grading → pricing → coast distance → writes results back to DB.
+
+---
+
+## API Routes
+
+### `GET /api/leads`
+| Param | Values | Effect |
+|-------|--------|--------|
+| `source` | `db` | Skip REAPI, return from DB |
+| `active` | `true` | Exclude `bound` and `lost` (active queue) |
+| `closed` | `true` | Return only `bound` and `lost` |
+| `orderBy` | `xdate` | Sort by `renewalTargetDate ASC NULLS LAST` |
+| `grade` | `A/B/C/D` | Filter by grade |
+| `status` | any status | Filter by status |
+| `size` | integer | Limit (default 100) |
+
+### `PUT /api/leads/[id]`
+Auto-stamps on save:
+- `firstRpcAt` — when status moves `new → contacted` for the first time
+- `contactAttempts` — incremented on each `contacted`/`qualified` transition
+- `quotedAt` — when `posQuoteNumber` is first set
+- `variancePct` — computed from `posQuotePremium` and `expectedPremium`
+- `boundDate` — when status moves to `bound` for the first time
+
+### `GET /api/dashboard`
+Returns `getPipelineSummary()` — all funnel stage counts in one DB query.
+
+---
+
+## Pages
+
+### `/dashboard`
+Live pipeline dashboard with:
+- 4 KPI cards: Raw / In-Appetite / Quote-Ready / Bound
+- Funnel 1 table (Sourcing) with step rates, cumulative %, and actual counts
+- Funnel 2 table (Producer) with same structure
+- Grade breakdown card (A/B/C/D)
+- Engine breakdown card (Engine 1 / Engine 2 / Unassigned) + producer progress
+
+### `/queue`
+Three tabs:
+- **Quote Ready** — Grade A, active (not bound/lost), sorted by x-date proximity
+- **Needs Information** — Grade B/C, active, sorted by x-date
+- **Closed** — Bound + lost leads for variance review
+
+Table columns: Status (color-coded chip) · Grade · Owner · Address · City/State · X-Date (red + ⚠ if ≤30 days) · Pipeline · Carriers · Est. Premium · Est. Value · Sq Ft · Actions
+
+### `/leads/[id]`
+Three-column layout:
+1. **Property Details** + Financials
+2. **Carrier Eligibility** + Indicative Premium + Coastal Exposure
+3. **Pipeline info** + **Producer Workflow**
+
+Producer Workflow section:
+- Lead Status dropdown
+- POS Quote #, Carrier, POS Quote Premium (with live POS vs indicative variance preview)
+- Authorization Method (visible when status ≥ qualified)
+- Bound Premium + variance tracking
+- **Lost Reason + Lost Stage** (required dropdowns — visible only when status = lost)
+- Producer Note (logged to activity)
+- **Save** (stay) + **Save & Next** (save and navigate to next priority lead)
+
+---
+
+## Components
+
+### `LeadsTable`
+- Status column with color-coded chips and row background tinting by status
+- Left border accent on all touched (non-new) leads
+- X-date column with urgency highlighting (≤30 days = red + ⚠)
+- Expandable rows for full property detail
+- Pagination, CSV export
+
+### `LayoutWrapper`
+- Auth guard: redirects unauthenticated users to `/login`
+- `mounted` + `isLoading` guard prevents hydration mismatch
+- Renders Navbar + Sidebar only when authenticated
+
+---
+
+## Database Migrations
+
+| Migration | Date | Changes |
+|-----------|------|---------|
+| `20260605111932_init_neon_postgres` | Jun 5 2026 | Initial schema — Lead + Activity tables |
+| `20260609000001_add_funnel_fields` | Jun 9 2026 | 17 new columns: `sourceVendor`, `cohortTag`, `roofYear`, `constructionType`, `protectionClass`, `priorCarrier`, `priorPremium`, `indicativeBasis`, `queueEnteredAt`, `firstRpcAt`, `contactAttempts`, `authorizationMethod`, `posQuotePremium`, `quotedAt`, `variancePct`, `lostReason`, `lostStage` |
+
+---
+
+## Environment Variables
+
+| Variable | Location | Purpose |
+|----------|----------|---------|
+| `DATABASE_URL` | `.env` | Neon Postgres connection string |
+| `NEXT_PUBLIC_REAL_ESTATE_API_KEY` | `.env.local` | REAPI public key |
+| `NEXT_PUBLIC_REAL_ESTATE_USER_ID` | `.env.local` | REAPI user identifier |
+| `JWT_SECRET` | `.env` | Session token signing |
+
+---
+
+## Getting Started
+
+```bash
+# Install dependencies
+npm install
+
+# Run development server
+npm run dev
+
+# Production build
+npm run build
+npm start
+```
+
+Navigate to `http://localhost:3000`. Login with admin credentials, then:
+1. Go to `/admin/seed` to trigger the one-time REAPI data pull (locked after first run)
+2. Go to `/queue` to see the producer queue
+3. Go to `/dashboard` to see live funnel metrics
+
+---
+
