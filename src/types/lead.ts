@@ -200,11 +200,30 @@ export interface Lead {
 
   // §10B rating readiness
   roofYear?: number;
+  // Roof covering material. Defaults to 'Unknown' until a data source / producer
+  // confirms it (Frank, Jun 2026). Only an explicitly high-risk covering
+  // (flat-metal/tile/wood) is a carrier knockout — 'Unknown' is never penalized.
+  roofType?: string;
   constructionType?: string;
   protectionClass?: string;
   priorCarrier?: string;
   priorPremium?: number;
   indicativeBasis?: string;
+
+  // Manual grade override — BIA staff can upgrade/downgrade with a comment (§2, §11)
+  manualGrade?: LeadGradeValue;
+  gradeOverrideReason?: string;
+  gradeOverrideBy?: string;
+  gradeOverrideAt?: string;
+
+  // Revisit / future re-engagement (§4A — "revisit next year")
+  revisitFlag?: boolean;
+  revisitDate?: string;
+  revisitNote?: string;
+
+  // Lost-to-competitor price capture (§4A — track what we're up against)
+  competitorCarrier?: string;
+  competitorPremium?: number;
 
   // Notes (legacy simple field — full history lives in Activity table)
   notes?: string;

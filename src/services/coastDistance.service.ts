@@ -102,6 +102,91 @@ export function calculateCoastDistance(
   return { distanceMiles, exposure, nearestPoint: nearest.name, carrierNote };
 }
 
+// ─── Coastal appetite (Plymouth Rock NJ AtHome UW Guidelines 4/2026, p.9) ──────
+//
+// Frank (Jun 2026): "Hurricane / coastal classification — use same as Plymouth Rock."
+// So this classifier drives eligibility for BOTH carriers.
+//
+// Barrier-island ZIP codes are hard-ineligible regardless of measured distance.
+export const BARRIER_ISLAND_ZIPS = new Set([
+  '07734', '07740', '08006', '08008', '08202', '08203', '08204', '08226', '08243', '08247',
+  '08248', '08260', '08401', '08402', '08406', '08735', '08738', '08742', '08751', '08752',
+]);
+
+export type HurricaneDeductible = '1%' | '2%' | '5%' | null;
+
+export interface CoastalAppetite {
+  eligible: boolean;
+  reason: string | null;            // ineligibility reason, when eligible === false
+  distanceMiles: number | null;     // null when coordinates unavailable
+  hurricaneDeductible: HurricaneDeductible;
+  note: string | null;              // informational (e.g. mandatory hurricane deductible)
+}
+
+/**
+ * Distance-to-coast eligibility + mandatory hurricane deductible, per the Plymouth Rock
+ * NJ AtHome UW Guidelines (independent-agent channel — BIA is an independent agency):
+ *
+ *   Barrier-island ZIP        → ineligible
+ *   0 to < 2 mi               → eligible
+ *   2 to < 5 mi               → ineligible
+ *   5 mi +                    → eligible
+ *
+ * Mandatory hurricane deductible by distance to coast:
+ *   ≤ 2,500 ft (~0.473 mi)    → 5% of Cov A
+ *   2,501 ft to < 1 mi        → 2%
+ *   1 to 3 mi                 → 1%
+ *
+ * Note: the one-page Appetite Guide states a simpler "within 3 miles → ineligible"; we follow
+ * the detailed AtHome chart's independent-agent column (the 0–2 mi band stays eligible).
+ * Missing ZIP/coordinates are NOT penalized — eligibility defaults to true so we never
+ * hard-drop on absent data.
+ */
+export function getCoastalAppetite(
+  zip: string | null | undefined,
+  latitude: number | null | undefined,
+  longitude: number | null | undefined,
+): CoastalAppetite {
+  if (zip && BARRIER_ISLAND_ZIPS.has(zip.trim())) {
+    return {
+      eligible: false,
+      reason: `Barrier-island ZIP ${zip.trim()} — ineligible per Plymouth Rock NJ coastal guidelines`,
+      distanceMiles: null,
+      hurricaneDeductible: null,
+      note: null,
+    };
+  }
+
+  const coast = calculateCoastDistance(latitude, longitude);
+  if (!coast) {
+    return { eligible: true, reason: null, distanceMiles: null, hurricaneDeductible: null, note: null };
+  }
+
+  const d = coast.distanceMiles;
+
+  // Mandatory hurricane deductible tier (applies whether or not the band is eligible)
+  let hurricaneDeductible: HurricaneDeductible = null;
+  if (d <= 0.473) hurricaneDeductible = '5%';        // ≤ 2,500 ft
+  else if (d < 1) hurricaneDeductible = '2%';        // 2,501 ft to < 1 mi
+  else if (d <= 3) hurricaneDeductible = '1%';       // 1 to 3 mi
+
+  // Eligibility band — 2 to < 5 mi is the ineligible zone
+  if (d >= 2 && d < 5) {
+    return {
+      eligible: false,
+      reason: `${d} mi from ${coast.nearestPoint} — within the 2–5 mi coastal ineligible band`,
+      distanceMiles: d,
+      hurricaneDeductible,
+      note: null,
+    };
+  }
+
+  const note = hurricaneDeductible
+    ? `Coastal: ${d} mi from ${coast.nearestPoint} — mandatory ${hurricaneDeductible} hurricane deductible applies`
+    : null;
+  return { eligible: true, reason: null, distanceMiles: d, hurricaneDeductible, note };
+}
+
 /**
  * Get a short human-readable label for the UI.
  */

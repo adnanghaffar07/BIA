@@ -28,8 +28,15 @@ const CRITICAL_FIELDS: Array<{
 
   // ── Property data needed to quote ────────────────────────────────────────
   { path: 'estimatedValue',   label: 'Estimated property value',   critical: true  },
-  { path: 'yearBuilt',        label: 'Year built (roof age proxy)', critical: true  },
+  { path: 'yearBuilt',        label: 'Year built (age of home)',    critical: true  },
   { path: 'squareFeet',       label: 'Square footage (for RCE)',    critical: true  },
+
+  // ── Roof age — the single biggest NJ knockout/rating driver ───────────────
+  // Spec §4B/§6: an estimated (vs confirmed) roof age means the lead is NOT
+  // quote-ready. Until the roof-data vendor lands (Open Item 7.5), roofYear is
+  // empty on every lead, so leads sit at "Needs-Info" (B/C) until a producer
+  // confirms roof age on the call and enters it — or manually upgrades the grade.
+  { path: 'roofYear',         label: 'Roof age / year installed',  critical: true  },
 
   // ── Useful but can be answered at the portal ──────────────────────────────
   { path: 'propertyType',     label: 'Property type',     critical: false },

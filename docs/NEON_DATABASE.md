@@ -62,12 +62,29 @@ a one-line client.
 
 ## Database Schema
 
-The schema was created via a Prisma migration (`prisma/migrations/`) and applied
-once to the Neon database. The migration SQL lives at:
+> **There is no ORM and no migration tool.** The schema is plain SQL applied
+> directly to Neon. The original `Lead`/`Activity` tables came from an early
+> Prisma migration that has since been removed; all tables are now created and
+> evolved by the bootstrap scripts in `scripts/` (and, for `AppConfig`, by the
+> app itself at runtime). This document is the single source of truth for the
+> schema — keep it in sync when columns change.
 
-```
-prisma/migrations/20260605111932_init_neon_postgres/migration.sql
-```
+### Schema bootstrap order
+
+Run these once against a fresh Neon database (each is idempotent —
+`CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`):
+
+| Step | Script / source | Creates |
+|---|---|---|
+| 1 | `scripts/create-auth-tables.mjs` | `User`, `Session` (+ `Session_token_idx`) |
+| 2 | `scripts/seed-superadmin.mjs` | First `superadmin` row in `User` |
+| 3 | `scripts/seed-from-reapi.mjs` (or `POST /api/admin/seed`) | `Lead`, `Activity`, `AppConfig`; ingests + enriches leads; sets the `api_seeded` lock |
+| 4 | `scripts/add-coast-variance-columns.mjs` | 5 coast/variance columns on `Lead` |
+
+The funnel columns (§10A–§10E) are applied by the SQL in
+`scripts/seed-from-reapi.mjs` as part of step 3. `AppConfig` is also created
+on demand by `POST /api/admin/seed`, and `GET /api/leads` treats a missing
+`AppConfig` table as "not yet seeded", so the app self-heals if a step is skipped.
 
 ### Tables
 
@@ -87,9 +104,13 @@ Stores every NJ homeowner lead ingested from the Real Estate API.
 | Property conditions | `vacant`, `preForeclosure`, `foreclosure`, `reo`, `floodZone`, `hoa` |
 | Skip trace | `skipTraced`, `skipTracedAt`, `phone1`, `phone2`, `email1`, `email2` |
 | CRM pipeline | `engine` (1 = New Purchase, 2 = Renewal), `renewalTargetDate`, `grade` (A–D), `status` |
+| Sourcing (§10A) | `sourceVendor` (default `reapi`), `cohortTag` |
+| Rating readiness (§10B) | `roofYear`, `constructionType`, `protectionClass`, `priorCarrier`, `priorPremium`, `indicativeBasis` |
 | Carrier eligibility | `travelersEligible`, `travelersNotes` (JSONB), `plymouthEligible`, `plymouthNotes` (JSONB) |
 | Indicative premium | `lowPremium`, `expectedPremium`, `highPremium`, `pricingConfidence` |
-| Producer workflow | `producerEmail`, `posQuoteNumber`, `posCarrier`, `boundPremium`, `boundDate` |
+| Coastal exposure | `coastDistanceMiles`, `coastExposure` |
+| Producer workflow (§10D) | `producerEmail`, `queueEnteredAt`, `firstRpcAt`, `contactAttempts` (default 0), `authorizationDate`, `authorizationMethod` |
+| Quote/bind & variance (§10E) | `posQuoteNumber`, `posCarrier`, `posQuotePremium`, `quotedAt`, `boundPremium`, `boundDate`, `variancePct`, `varianceAmount`, `varianceReason`, `varianceNotes`, `lostReason`, `lostStage` |
 | Raw API data | `rawData` (JSONB) — slimmed version, large arrays stripped |
 | Timestamps | `createdAt`, `updatedAt` |
 
@@ -106,6 +127,52 @@ Tracks every action taken on a lead (notes, status changes, quote submissions).
 | `metadata` | JSONB | Optional structured data |
 | `createdBy` | TEXT | Producer email or system identifier |
 | `createdAt` | TIMESTAMP | Auto-set on insert |
+
+#### `User`
+
+Application users. Created by `scripts/create-auth-tables.mjs`.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | TEXT PK | UUID |
+| `email` | TEXT UNIQUE | Login identifier (lowercased) |
+| `passwordHash` | TEXT | bcrypt hash |
+| `name` | TEXT | Display name |
+| `role` | TEXT | `admin` or `superadmin` (default `admin`) |
+| `isActive` | BOOLEAN | Default `true`; `false` revokes login |
+| `createdBy` | TEXT | `id` of the superadmin who created this user |
+| `createdAt` / `updatedAt` | TIMESTAMP | Auto-set |
+
+#### `Session`
+
+Server-side session records for JWT revocation. Created by `scripts/create-auth-tables.mjs`.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | TEXT PK | UUID |
+| `userId` | TEXT | FK → `User.id` `ON DELETE CASCADE` |
+| `token` | TEXT UNIQUE | JWT; indexed via `Session_token_idx` |
+| `expiresAt` | TIMESTAMP | Session expiry (7 days) |
+| `createdAt` | TIMESTAMP | Auto-set |
+
+Every authenticated request validates the cookie JWT *and* checks that a
+matching, unexpired `Session` row exists, so logout / deactivation takes
+effect immediately.
+
+#### `AppConfig`
+
+Key/value config store. Created on demand by `POST /api/admin/seed`
+(and `scripts/seed-from-reapi.mjs`).
+
+| Column | Type | Description |
+|---|---|---|
+| `key` | TEXT PK | e.g. `api_seeded` |
+| `value` | TEXT | e.g. `'true'` |
+| `updatedAt` | TIMESTAMP | Auto-set |
+
+The `api_seeded` row is the **REAPI hard lock** — once set, the app serves
+leads from the DB and never calls the Real Estate API again. Reset with
+`DELETE /api/admin/seed` or `scripts/reset-lock.mjs`.
 
 ---
 
@@ -159,10 +226,13 @@ FROM "Lead"
 | File | Purpose |
 |---|---|
 | `.env` | `DATABASE_URL` — Neon connection string |
-| `src/lib/neon.ts` | Neon SQL client singleton |
+| `src/lib/neon.ts` | Neon SQL client singleton (`sql` + `pool`) |
 | `src/services/storage.service.ts` | All DB read/write operations |
-| `prisma/schema.prisma` | Schema reference (no longer used at runtime) |
-| `prisma/migrations/` | Applied once to create tables on Neon |
+| `scripts/create-auth-tables.mjs` | Creates `User` + `Session` |
+| `scripts/seed-superadmin.mjs` | Seeds the first superadmin |
+| `scripts/seed-from-reapi.mjs` | Creates `Lead`/`Activity`/`AppConfig`, ingests + enriches, sets lock |
+| `scripts/add-coast-variance-columns.mjs` | Adds coast/variance columns to `Lead` |
+| `scripts/reset-lock.mjs` | Clears the `api_seeded` REAPI lock |
 
 ---
 

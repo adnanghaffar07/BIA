@@ -27,11 +27,15 @@ const LEAD_COLS = [
   // §10A sourcing
   'sourceVendor', 'cohortTag',
   // §10B rating
-  'roofYear', 'constructionType', 'protectionClass', 'priorCarrier', 'priorPremium', 'indicativeBasis',
+  'roofYear', 'roofType', 'constructionType', 'protectionClass', 'priorCarrier', 'priorPremium', 'indicativeBasis',
   // §10D producer workflow
   'queueEnteredAt', 'firstRpcAt', 'contactAttempts', 'authorizationMethod',
   // §10E moat
   'posQuotePremium', 'quotedAt', 'variancePct', 'lostReason', 'lostStage',
+  // manual grade override + revisit + competitor capture
+  'manualGrade', 'gradeOverrideReason', 'gradeOverrideBy', 'gradeOverrideAt',
+  'revisitFlag', 'revisitDate', 'revisitNote',
+  'competitorCarrier', 'competitorPremium',
   'createdAt', 'updatedAt',
 ] as const;
 
@@ -47,9 +51,12 @@ const CRM_ONLY_FIELDS = new Set([
   'coastDistanceMiles', 'coastExposure', 'varianceNotes', 'varianceReason', 'varianceAmount',
   // new funnel fields
   'sourceVendor', 'cohortTag',
-  'roofYear', 'constructionType', 'protectionClass', 'priorCarrier', 'priorPremium', 'indicativeBasis',
+  'roofYear', 'roofType', 'constructionType', 'protectionClass', 'priorCarrier', 'priorPremium', 'indicativeBasis',
   'queueEnteredAt', 'firstRpcAt', 'contactAttempts', 'authorizationMethod',
   'posQuotePremium', 'quotedAt', 'variancePct', 'lostReason', 'lostStage',
+  'manualGrade', 'gradeOverrideReason', 'gradeOverrideBy', 'gradeOverrideAt',
+  'revisitFlag', 'revisitDate', 'revisitNote',
+  'competitorCarrier', 'competitorPremium',
 ]);
 
 // ─── Value helpers ───────────────────────────────────────────────────────────
@@ -353,13 +360,17 @@ export async function updateLead(
     // §10A sourcing
     sourceVendor: string; cohortTag: string;
     // §10B rating
-    roofYear: number; constructionType: string; protectionClass: string;
+    roofYear: number; roofType: string; constructionType: string; protectionClass: string;
     priorCarrier: string; priorPremium: number; indicativeBasis: string;
     // §10D producer workflow
     queueEnteredAt: Date; firstRpcAt: Date; contactAttempts: number; authorizationMethod: string;
     // §10E moat
     posQuotePremium: number; quotedAt: Date; variancePct: number;
     lostReason: string; lostStage: string;
+    // manual grade override + revisit + competitor capture
+    manualGrade: string; gradeOverrideReason: string; gradeOverrideBy: string; gradeOverrideAt: Date;
+    revisitFlag: boolean; revisitDate: Date; revisitNote: string;
+    competitorCarrier: string; competitorPremium: number;
   }>,
 ): Promise<void> {
   const entries = Object.entries(data).filter(([, v]) => v !== undefined);

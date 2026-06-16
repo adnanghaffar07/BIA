@@ -1,5 +1,4 @@
 'use client';
-
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   Container, Box, Typography, Tabs, Tab, Chip,

@@ -39,7 +39,10 @@ export async function enrichLead(lead: any): Promise<void> {
     };
 
     const eligibility = checkCarrierEligibility(mappedLead);
-    const grade = calculateLeadGrade(mappedLead, eligibility);
+    // Honor a producer's manual grade override — never clobber it with the
+    // computed grade on re-enrichment (§2/§11 real-time upgrade/downgrade).
+    const computedGrade = calculateLeadGrade(mappedLead, eligibility);
+    const grade = (mappedLead as any).manualGrade || computedGrade;
     const pricing = calculateIndicativePremium(mappedLead);
     const coast = calculateCoastDistance(mappedLead.latitude, mappedLead.longitude);
 
@@ -106,6 +109,8 @@ export async function reEnrichLead(dbLead: any): Promise<any> {
     propertyUse: dbLead.propertyUse || '',
     landUse: dbLead.landUse || '',
     yearBuilt: dbLead.yearBuilt || undefined,
+    roofYear: dbLead.roofYear || undefined,
+    manualGrade: dbLead.manualGrade || undefined,
     squareFeet: dbLead.squareFeet || undefined,
     estimatedValue: dbLead.estimatedValue || undefined,
     lastSaleDate: dbLead.lastSaleDate || undefined,

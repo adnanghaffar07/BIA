@@ -1,5 +1,9 @@
 import { Lead } from '@/types/lead';
-import { CarrierRuleResult, CarrierEligibilityResult, EligibilityStatus } from '@/types/carrier';
+import {
+  CarrierRuleResult, CarrierEligibilityResult, EligibilityStatus, Verdict, RuleHit,
+  statusFromVerdict,
+} from '@/types/carrier';
+import { getCoastalAppetite } from './coastDistance.service';
 
 // ─── Target Zip Codes ────────────────────────────────────────────────────────
 //
@@ -35,6 +39,16 @@ const RESIDENTIAL_USES = [
 // SFHA (Special Flood Hazard Area) zone prefixes → high-risk flood
 const SFHA_ZONE_PREFIXES = ['A', 'V'];
 
+// High-risk roof coverings differ by carrier:
+//   Plymouth Rock (AtHome guide):   flat-metal, tile, wood
+//   Travelers (Quantum 2.0 §II.W):  asbestos, T-lock, Atlas Chalet, wood shakes/shingles, rolled asphalt, overlay
+const PR_HIGH_RISK_ROOF = ['flat metal', 'tile', 'wood shake', 'wood shingle', 'wood'];
+const TRAVELERS_HIGH_RISK_ROOF = ['asbestos', 't-lock', 'tlock', 'atlas chalet', 'wood shake', 'wood shingle', 'rolled asphalt', 'overlay'];
+// "Lifetime" roofs are exempt from the Travelers 20-year roof rule (§II.Y).
+const LIFETIME_ROOF = ['tile', 'slate'];
+
+// ─── Predicate helpers ─────────────────────────────────────────────────────────
+
 function isResidential(lead: Lead): boolean {
   if (!lead.propertyUse && !lead.propertyType) return false;
   const use = (lead.propertyUse || '').trim();
@@ -53,206 +67,235 @@ function isInSFHA(lead: Lead): boolean {
   );
 }
 
-function getPropertyAge(lead: Lead): number | null {
-  if (!lead.yearBuilt) return null;
-  return new Date().getFullYear() - lead.yearBuilt;
+// > 2 family (3–4 unit) dwellings are hard-dropped per BIA sourcing policy
+// (Frank, Jun 2026): "hard drop 3–4 family, only source 2 family."
+// unitsCount is only a knockout when explicitly > 2 — a missing/unknown unit
+// count is NOT penalized (defaults to assuming 1-family).
+function exceedsTwoFamily(lead: Lead): boolean {
+  return typeof lead.unitsCount === 'number' && lead.unitsCount > 2;
 }
 
-// ─── TRAVELERS NJ Homeowners ──────────────────────────────────────────────────
+function isMultiFamily(lead: Lead): boolean {
+  return typeof lead.unitsCount === 'number' && lead.unitsCount >= 2;
+}
+
+// Read the property ZIP from either the nested API shape or the flat DB record.
+function getLeadZip(lead: Lead): string | null {
+  const anyLead = lead as any;
+  return anyLead.address?.zip ?? anyLead.addressZip ?? anyLead.zip ?? null;
+}
+
+// Shared coastal / hurricane appetite (same rule for both carriers per Frank, Jun 2026).
+function coastalFor(lead: Lead) {
+  return getCoastalAppetite(getLeadZip(lead), lead.latitude, lead.longitude);
+}
+
+// Roof covering, defaulting to 'Unknown' when we have no data (Frank, Jun 2026:
+// "if we do not have roof-type for now then set it as Unknown"). 'Unknown' is NOT
+// a knockout — only an explicitly high-risk covering is ineligible.
+function getRoofType(lead: Lead): string {
+  const t = (lead.roofType || '').trim();
+  return t === '' ? 'Unknown' : t;
+}
+
+// Does the (known) roof covering match any of the given keywords? 'Unknown' never matches.
+function roofMatches(lead: Lead, terms: string[]): boolean {
+  const t = getRoofType(lead).toLowerCase();
+  if (t === 'unknown') return false;
+  return terms.some((r) => t.includes(r));
+}
+
+// Roof not replaced within the past 20 years (Travelers §II.Y), excluding lifetime
+// (tile/slate) materials. Only fires when roofYear is known — an unknown roof age is
+// left to the grade "needs-info" gate, not a hard drop.
+function roofOlderThan20(lead: Lead): boolean {
+  if (!lead.roofYear) return false;
+  if (roofMatches(lead, LIFETIME_ROOF)) return false;
+  return (new Date().getFullYear() - lead.roofYear) > 20;
+}
+
+const money = (n: number) => `$${n.toLocaleString()}`;
+
+// ─── Appetite rules (rules-as-data) ─────────────────────────────────────────────
 //
-// Source: Travelers Quantum Home 2.0 Personal Lines Manual
+// Each rule carries a structured reason code + severity. The engine evaluates every
+// rule for the relevant carrier and derives the verdict: FAIL if any FAIL trips,
+// else REFER if any REFER trips, else PASS. Adding/adjusting a rule is a data edit
+// here — no engine changes needed.
 //
-// Hard ineligible:
-//   - Non-residential property use
-//   - Corporate/LLC/Trust owned (standard HO requires individual owner)
-//   - Vacant or unoccupied (unless occupied within 30 days)
-//   - Flood zones starting with A or V (ineligible unless separate flood policy)
-//   - REO / foreclosure / pre-foreclosure
-//
-// Referral to underwriting (mapped as 'review'):
-//   - Coverage A (estimated value) ≥ $1,500,000 — requires monitored alarm + water sensor
-//   - Pre-1940 construction — uses different replacement cost methodology
-//   - Investor-owned / absentee owner
-//   - Prior structural losses at the address
-//
-// Note: Travelers does NOT have a hard year-built ineligibility cutoff.
-//       Pre-1940 homes only require Functional Replacement Cost calculation.
+//   carrier: 'both' applies to Travelers AND Plymouth Rock; otherwise carrier-specific.
+//   message: receives the carrier so shared rules can carry carrier-specific wording.
+
+type RuleCarrier = 'travelers' | 'plymouth' | 'both';
+
+interface AppetiteRule {
+  code: string;
+  carrier: RuleCarrier;
+  severity: 'FAIL' | 'REFER';
+  /** true ⇒ the rule trips (lead violates it). */
+  applies: (lead: Lead) => boolean;
+  message: (lead: Lead, carrier: 'travelers' | 'plymouth') => string;
+}
+
+export const APPETITE_RULES: AppetiteRule[] = [
+  // ── Shared hard disqualifiers (FAIL) ──────────────────────────────────────
+  {
+    code: 'USE-NONRES', carrier: 'both', severity: 'FAIL',
+    applies: (l) => !isResidential(l),
+    message: (l) => `Non-residential property use: "${l.propertyUse || l.propertyType}"`,
+  },
+  {
+    code: 'UNITS-GT2', carrier: 'both', severity: 'FAIL',
+    applies: exceedsTwoFamily,
+    message: (l) => `${l.unitsCount}-unit dwelling — BIA sources owner-occupied 1–2 family only; 3–4 family hard-dropped`,
+  },
+  {
+    code: 'OWNER-ENTITY', carrier: 'both', severity: 'FAIL',
+    applies: (l) => !!l.corporateOwned,
+    message: (_l, c) => c === 'travelers'
+      ? 'Corporate/LLC-owned — standard HO-3 requires individual owner'
+      : 'Corporate/LLC-owned — AtHome Insurance requires individual owner',
+  },
+  {
+    code: 'VACANT', carrier: 'both', severity: 'FAIL',
+    applies: (l) => !!l.vacant,
+    message: (_l, c) => c === 'travelers'
+      ? 'Vacant or unoccupied property — ineligible per Travelers guidelines'
+      : 'Vacant or unoccupied property — ineligible per Plymouth Rock guidelines',
+  },
+  {
+    code: 'FORECLOSURE', carrier: 'both', severity: 'FAIL',
+    applies: (l) => !!(l.preForeclosure || l.foreclosure),
+    message: () => 'Property in pre-foreclosure or active foreclosure',
+  },
+  {
+    code: 'REO', carrier: 'both', severity: 'FAIL',
+    applies: (l) => !!l.reo,
+    message: (_l, c) => c === 'travelers'
+      ? 'REO (bank-owned) — not eligible for standard homeowners policy'
+      : 'REO (bank-owned) — not eligible',
+  },
+  {
+    code: 'FLOOD-AV', carrier: 'both', severity: 'FAIL',
+    applies: isInSFHA,
+    message: (l, c) => c === 'travelers'
+      ? `FEMA flood zone ${l.floodZoneType || '(A/V series)'} — ineligible unless separate NFIP/flood policy in place`
+      : `FEMA flood zone ${l.floodZoneType || '(A/V series)'} — ineligible`,
+  },
+  {
+    code: 'COAST', carrier: 'both', severity: 'FAIL',
+    applies: (l) => !coastalFor(l).eligible,
+    message: (l) => coastalFor(l).reason ?? 'Within an ineligible coastal band',
+  },
+
+  // ── Travelers-specific hard disqualifiers (FAIL) ──────────────────────────
+  {
+    code: 'TR-II-W', carrier: 'travelers', severity: 'FAIL',
+    applies: (l) => roofMatches(l, TRAVELERS_HIGH_RISK_ROOF),
+    message: (l) => `Roof covering "${getRoofType(l)}" — ineligible per Quantum Home 2.0 §II.W`,
+  },
+  {
+    code: 'TR-II-Y', carrier: 'travelers', severity: 'FAIL',
+    applies: roofOlderThan20,
+    message: (l) => `Roof last replaced ${l.roofYear} (>20 yrs old) — ineligible per Quantum Home 2.0 §II.Y`,
+  },
+
+  // ── Plymouth Rock-specific hard disqualifiers (FAIL) ──────────────────────
+  {
+    code: 'PR-AGE-SFD', carrier: 'plymouth', severity: 'FAIL',
+    applies: (l) => !!l.yearBuilt && !isMultiFamily(l) && l.yearBuilt < 1870,
+    message: (l) => `Year built ${l.yearBuilt} — single-family dwellings built before 1870 are ineligible`,
+  },
+  {
+    code: 'PR-AGE-MF', carrier: 'plymouth', severity: 'FAIL',
+    applies: (l) => !!l.yearBuilt && isMultiFamily(l) && l.yearBuilt < 1900,
+    message: (l) => `Year built ${l.yearBuilt} — multi-family dwellings built before 1900 are ineligible`,
+  },
+  {
+    code: 'PR-OWNER-OCC', carrier: 'plymouth', severity: 'FAIL',
+    applies: (l) => l.ownerOccupied === false,
+    message: () => 'Primary home not owner-occupied — ineligible per Plymouth Rock (AtHome) guidelines',
+  },
+  {
+    code: 'PR-ROOF', carrier: 'plymouth', severity: 'FAIL',
+    applies: (l) => roofMatches(l, PR_HIGH_RISK_ROOF),
+    message: (l) => `High-risk roof type "${getRoofType(l)}" — flat-metal, tile, and wood roofs are ineligible`,
+  },
+  {
+    code: 'PR-COVA-MAX', carrier: 'plymouth', severity: 'FAIL',
+    applies: (l) => !!l.estimatedValue && l.estimatedValue > 2_500_000,
+    message: (l) => `Estimated value ${money(l.estimatedValue!)} — exceeds HO-3 maximum Coverage A of $2,500,000`,
+  },
+
+  // ── Referral to underwriting (REFER) ──────────────────────────────────────
+  {
+    code: 'TR-II-M', carrier: 'travelers', severity: 'REFER',
+    applies: (l) => !!l.estimatedValue && l.estimatedValue >= 1_500_000,
+    message: (l) => `Estimated value ${money(l.estimatedValue!)} — Coverage A ≥$1.5M requires monitored alarm system and underwriting approval`,
+  },
+  {
+    code: 'TR-I-C', carrier: 'travelers', severity: 'REFER',
+    applies: (l) => !!l.yearBuilt && l.yearBuilt < 1940,
+    message: (l) => `Year built ${l.yearBuilt} — pre-1940 construction requires Functional Replacement Cost endorsement`,
+  },
+  {
+    code: 'INVESTOR', carrier: 'both', severity: 'REFER',
+    applies: (l) => !!l.investorBuyer,
+    message: (_l, c) => c === 'travelers'
+      ? 'Investor-owned — Travelers prefers owner-occupied; referral required'
+      : 'Investor-owned — review required',
+  },
+  {
+    code: 'ABSENTEE', carrier: 'both', severity: 'REFER',
+    applies: (l) => !!l.absenteeOwner && !l.ownerOccupied,
+    message: (_l, c) => c === 'travelers'
+      ? 'Absentee owner — confirm owner-occupancy status before binding'
+      : 'Absentee owner — confirm occupancy status',
+  },
+];
+
+// Informational notes that do NOT affect the verdict (e.g. mandatory hurricane deductible).
+function infoNotesFor(lead: Lead): string[] {
+  const coast = coastalFor(lead);
+  return coast.eligible && coast.note ? [coast.note] : [];
+}
+
+const PASS_NOTE: Record<'travelers' | 'plymouth', string> = {
+  travelers: 'Meets all Travelers Quantum Home 2.0 NJ eligibility criteria',
+  plymouth: 'Meets all Plymouth Rock (AtHome Insurance) NJ eligibility criteria',
+};
+
+// ─── Engine ──────────────────────────────────────────────────────────────────
+
+function evaluateCarrier(lead: Lead, carrier: 'travelers' | 'plymouth'): CarrierRuleResult {
+  const reasons: RuleHit[] = [];
+  for (const rule of APPETITE_RULES) {
+    if (rule.carrier !== 'both' && rule.carrier !== carrier) continue;
+    if (rule.applies(lead)) {
+      reasons.push({ code: rule.code, severity: rule.severity, message: rule.message(lead, carrier) });
+    }
+  }
+
+  const verdict: Verdict =
+    reasons.some((r) => r.severity === 'FAIL') ? 'FAIL'
+      : reasons.some((r) => r.severity === 'REFER') ? 'REFER'
+        : 'PASS';
+
+  const notes = [...reasons.map((r) => r.message), ...infoNotesFor(lead)];
+  if (verdict === 'PASS' && notes.length === 0) notes.push(PASS_NOTE[carrier]);
+
+  return { status: statusFromVerdict(verdict), verdict, notes, reasons };
+}
+
+// ─── Public API (signatures unchanged — now backed by the rule engine) ─────────
 
 export function checkTravelersEligibility(lead: Lead): CarrierRuleResult {
-  const notes: string[] = [];
-  let status: EligibilityStatus = 'eligible';
-
-  const makeIneligible = (reason: string) => {
-    notes.push(reason);
-    status = 'ineligible';
-  };
-
-  const makeReview = (reason: string) => {
-    notes.push(reason);
-    if (status === 'eligible') status = 'review';
-  };
-
-  // ── Hard disqualifiers ────────────────────────────────────────────────────
-
-  if (!isResidential(lead)) {
-    makeIneligible(`Non-residential property use: "${lead.propertyUse || lead.propertyType}"`);
-  }
-
-  if (lead.corporateOwned) {
-    makeIneligible('Corporate/LLC-owned — standard HO-3 requires individual owner');
-  }
-
-  if (lead.vacant) {
-    makeIneligible('Vacant or unoccupied property — ineligible per Travelers guidelines');
-  }
-
-  if (lead.preForeclosure || lead.foreclosure) {
-    makeIneligible('Property in pre-foreclosure or active foreclosure');
-  }
-
-  if (lead.reo) {
-    makeIneligible('REO (bank-owned) — not eligible for standard homeowners policy');
-  }
-
-  // Flood zones A and V series → ineligible per Quantum Home 2.0
-  if (isInSFHA(lead)) {
-    makeIneligible(
-      `FEMA flood zone ${lead.floodZoneType || '(A/V series)'} — ineligible unless separate NFIP/flood policy in place`
-    );
-  }
-
-  // ── Referral to underwriting (review) ────────────────────────────────────
-  // $1.5M+ requires monitored central station alarm + water sensor to bind
-  if (lead.estimatedValue && lead.estimatedValue >= 1_500_000) {
-    makeReview(
-      `Estimated value $${lead.estimatedValue.toLocaleString()} — Coverage A ≥$1.5M requires monitored alarm system and underwriting approval`
-    );
-  }
-
-  // Pre-1940 construction uses Functional Replacement Cost — flag for producer awareness
-  if (lead.yearBuilt && lead.yearBuilt < 1940) {
-    makeReview(
-      `Year built ${lead.yearBuilt} — pre-1940 construction requires Functional Replacement Cost endorsement`
-    );
-  }
-
-  if (lead.investorBuyer) {
-    makeReview('Investor-owned — Travelers prefers owner-occupied; referral required');
-  }
-
-  if (lead.absenteeOwner && !lead.ownerOccupied) {
-    makeReview('Absentee owner — confirm owner-occupancy status before binding');
-  }
-
-  if (status === 'eligible' && notes.length === 0) {
-    notes.push('Meets all Travelers Quantum Home 2.0 NJ eligibility criteria');
-  }
-
-  return { status, notes };
+  return evaluateCarrier(lead, 'travelers');
 }
-
-// ─── PLYMOUTH ROCK NJ Homeowners ─────────────────────────────────────────────
-//
-// Source: Plymouth Rock Assurance NJ website + AtHome Insurance Company (NJ entity)
-//
-// Hard ineligible:
-//   - Non-residential property use
-//   - Corporate/LLC owned
-//   - Vacant or unoccupied
-//   - Foreclosure / pre-foreclosure / REO
-//   - Homes built more than 100 years ago (website: "homes built more than 100 years ago don't qualify")
-//   - SFHA flood zones (A/V series) — same as Travelers
-//
-// Review:
-//   - Homes 75–100 years old (discount tiers: newer = larger discount)
-//   - Investor-owned / absentee owner
-//   - Estimated value > $2M
-//
-// Note: Plymouth Rock writes NJ exclusively through AtHome Insurance Company for owners.
-//       The 100-year rule is explicitly stated on their NJ product page.
 
 export function checkPlymouthRockEligibility(lead: Lead): CarrierRuleResult {
-  const notes: string[] = [];
-  let status: EligibilityStatus = 'eligible';
-
-  const makeIneligible = (reason: string) => {
-    notes.push(reason);
-    status = 'ineligible';
-  };
-
-  const makeReview = (reason: string) => {
-    notes.push(reason);
-    if (status === 'eligible') status = 'review';
-  };
-
-  const currentYear = new Date().getFullYear();
-
-  // ── Hard disqualifiers ────────────────────────────────────────────────────
-
-  if (!isResidential(lead)) {
-    makeIneligible(`Non-residential property use: "${lead.propertyUse || lead.propertyType}"`);
-  }
-
-  if (lead.corporateOwned) {
-    makeIneligible('Corporate/LLC-owned — AtHome Insurance requires individual owner');
-  }
-
-  if (lead.vacant) {
-    makeIneligible('Vacant or unoccupied property — ineligible per Plymouth Rock guidelines');
-  }
-
-  if (lead.preForeclosure || lead.foreclosure) {
-    makeIneligible('Property in pre-foreclosure or active foreclosure');
-  }
-
-  if (lead.reo) {
-    makeIneligible('REO (bank-owned) — not eligible');
-  }
-
-  // Plymouth Rock explicitly states: homes built more than 100 years ago don't qualify
-  if (lead.yearBuilt && (currentYear - lead.yearBuilt) > 100) {
-    makeIneligible(
-      `Year built ${lead.yearBuilt} — Plymouth Rock does not write homes more than 100 years old (built before ${currentYear - 100})`
-    );
-  }
-
-  // SFHA flood zones — same hard rule as Travelers
-  if (isInSFHA(lead)) {
-    makeIneligible(
-      `FEMA flood zone ${lead.floodZoneType || '(A/V series)'} — ineligible`
-    );
-  }
-
-  // ── Referral / review flags ───────────────────────────────────────────────
-  // Homes 75–100 years old qualify but receive reduced new-home discounts
-  if (lead.yearBuilt && (currentYear - lead.yearBuilt) > 75 && (currentYear - lead.yearBuilt) <= 100) {
-    makeReview(
-      `Year built ${lead.yearBuilt} — older home (75–100 years); qualifies but no new-home discount applies`
-    );
-  }
-
-  if (lead.estimatedValue && lead.estimatedValue > 2_000_000) {
-    makeReview(
-      `Estimated value $${lead.estimatedValue.toLocaleString()} — above $2M standard limit; high-value review required`
-    );
-  }
-
-  if (lead.investorBuyer) {
-    makeReview('Investor-owned — review required');
-  }
-
-  if (lead.absenteeOwner && !lead.ownerOccupied) {
-    makeReview('Absentee owner — confirm occupancy status');
-  }
-
-  if (status === 'eligible' && notes.length === 0) {
-    notes.push('Meets all Plymouth Rock (AtHome Insurance) NJ eligibility criteria');
-  }
-
-  return { status, notes };
+  return evaluateCarrier(lead, 'plymouth');
 }
-
-// ─── Combined eligibility check ───────────────────────────────────────────────
 
 export function checkCarrierEligibility(lead: Lead): CarrierEligibilityResult {
   const travelers = checkTravelersEligibility(lead);

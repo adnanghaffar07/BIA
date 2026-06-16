@@ -5,9 +5,11 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   Box, Breadcrumbs, Button, Chip, CircularProgress, Divider, Grid,
   MenuItem, Paper, Select, Stack, TextField, Tooltip, Typography,
-  Alert, Snackbar, FormControl, InputLabel,
+  Alert, Snackbar, FormControl, InputLabel, Checkbox, FormControlLabel,
 } from '@mui/material';
 import Link from 'next/link';
+import { getMissingFields } from '@/services/grade.service';
+import { GRADE_INFO, LeadGrade } from '@/types/grade';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import HomeIcon from '@mui/icons-material/Home';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -30,14 +32,17 @@ function fmtCurrency(v: number | null | undefined) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
 }
 
-function gradeColor(g: string | null) {
-  switch (g) {
-    case 'A': return 'success';
-    case 'B': return 'info';
-    case 'C': return 'warning';
-    case 'D': return 'error';
-    default:  return 'default';
-  }
+// Grade chip colors — sourced from GRADE_INFO so the detail page matches the
+// lead table exactly (A green · B orange · C red · D grey).
+function gradeChipSx(g: string | null) {
+  const info = GRADE_INFO[(g ?? '') as LeadGrade];
+  if (!info) return {};
+  return {
+    backgroundColor: info.backgroundColor,
+    color: info.color,
+    border: `1px solid ${info.borderColor}`,
+    fontWeight: 700,
+  };
 }
 
 function statusLabel(s: string | null) {
@@ -114,6 +119,17 @@ export default function LeadDetailPage() {
   const [lostReason, setLostReason] = useState('');
   const [lostStage, setLostStage] = useState('');
   const [producerNote, setProducerNote] = useState('');
+  // Manual grade override + revisit + competitor capture
+  const [manualGrade, setManualGrade] = useState('');
+  const [gradeOverrideReason, setGradeOverrideReason] = useState('');
+  const [revisitFlag, setRevisitFlag] = useState(false);
+  const [revisitDate, setRevisitDate] = useState('');
+  const [revisitNote, setRevisitNote] = useState('');
+  const [competitorCarrier, setCompetitorCarrier] = useState('');
+  const [competitorPremium, setCompetitorPremium] = useState('');
+  // Roof confirmation (year clears the B/C roof-age gate; type drives carrier eligibility)
+  const [roofYear, setRoofYear] = useState('');
+  const [roofType, setRoofType] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -133,6 +149,15 @@ export default function LeadDetailPage() {
       setAuthorizationDate(l.authorizationDate ?? null);
       setLostReason(l.lostReason ?? '');
       setLostStage(l.lostStage ?? '');
+      setManualGrade(l.manualGrade ?? '');
+      setGradeOverrideReason(l.gradeOverrideReason ?? '');
+      setRevisitFlag(!!l.revisitFlag);
+      setRevisitDate(l.revisitDate ? String(l.revisitDate).slice(0, 10) : '');
+      setRevisitNote(l.revisitNote ?? '');
+      setCompetitorCarrier(l.competitorCarrier ?? '');
+      setCompetitorPremium(l.competitorPremium != null ? String(l.competitorPremium) : '');
+      setRoofYear(l.roofYear != null ? String(l.roofYear) : '');
+      setRoofType(l.roofType ?? '');
     }
     setLoading(false);
   }, [id]);
@@ -173,6 +198,20 @@ export default function LeadDetailPage() {
       authorizationMethod: authorizationMethod || undefined,
       lostReason:  status === 'lost' ? (lostReason  || undefined) : undefined,
       lostStage:   status === 'lost' ? (lostStage   || undefined) : undefined,
+      // Manual grade override — send the field so the API can clear it when blank
+      manualGrade: manualGrade || '',
+      gradeOverrideReason: gradeOverrideReason || undefined,
+      // Revisit / future re-engagement
+      revisitFlag,
+      revisitDate: revisitFlag && revisitDate ? revisitDate : undefined,
+      revisitNote: revisitFlag ? (revisitNote || undefined) : undefined,
+      // Lost-to-competitor price (only meaningful when lost)
+      competitorCarrier: status === 'lost' ? (competitorCarrier || undefined) : undefined,
+      competitorPremium: status === 'lost' && competitorPremium ? parseFloat(competitorPremium) : undefined,
+      // Roof confirmation (producer-entered). Empty roof type → left as 'Unknown'.
+      roofYear: roofYear ? parseInt(roofYear, 10) : undefined,
+      roofType: roofType || undefined,
+      _createdBy: lead?.producerEmail || undefined,
       _activityNote: producerNote || `Status updated to ${statusLabel(status)}`,
       _activityType: status === 'bound' ? 'bound' : status === 'lost' ? 'lost' : 'status_change',
     };
@@ -250,6 +289,17 @@ export default function LeadDetailPage() {
     ? JSON.parse(lead.plymouthNotes || '[]')
     : lead.plymouthNotes ?? [];
 
+  // Fields still needed to reach Grade A (Quote-Ready), and — for Grade D —
+  // the carrier-appetite reasons the lead was knocked out for.
+  const missingFields = getMissingFields(lead);
+  const gradeInfo = GRADE_INFO[(lead.grade ?? '') as LeadGrade];
+  const ineligibleReasons = lead.grade === 'D'
+    ? Array.from(new Set([
+        ...(lead.travelersEligible === 'ineligible' ? travelersNotes : []),
+        ...(lead.plymouthEligible === 'ineligible' ? plymouthNotes : []),
+      ]))
+    : [];
+
   return (
     <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1200, mx: 'auto' }}>
 
@@ -267,7 +317,7 @@ export default function LeadDetailPage() {
           <Typography variant="h5" sx={{ fontWeight: 700 }}>{address}</Typography>
         </Stack>
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-          <Chip label={`Grade ${lead.grade ?? '?'}`} color={gradeColor(lead.grade) as any} />
+          <Chip label={`Grade ${lead.grade ?? '?'}`} sx={gradeChipSx(lead.grade)} />
           <Chip label={statusLabel(lead.status)} variant="outlined" />
           {coastChip(lead.coastExposure)}
         </Stack>
@@ -275,10 +325,12 @@ export default function LeadDetailPage() {
 
       <Grid container spacing={2.5}>
 
-        {/* ── Column 1: Property + Owner ────────────────────────────────── */}
-        <Grid size={{ xs: 12, md: 4 }}>
-          <Stack spacing={2}>
+        {/* ── LEFT: read-only data (2-up cards) + activity log ──────────── */}
+        <Grid size={{ xs: 12, md: 8 }}>
+          <Stack spacing={2.5}>
+          <Grid container spacing={2.5}>
 
+            <Grid size={{ xs: 12, sm: 6 }}>
             <Section title="Property Details">
               <Row label="Owner" value={ownerName} />
               <Row label="Property Type" value={lead.propertyType} />
@@ -293,7 +345,9 @@ export default function LeadDetailPage() {
               <Row label="Basement" value={lead.basement ? 'Yes' : 'No'} />
               <Row label="A/C" value={lead.airConditioning ? 'Yes' : 'No'} />
             </Section>
+            </Grid>
 
+            <Grid size={{ xs: 12, sm: 6 }}>
             <Section title="Financials">
               <Row label="Estimated Value" value={fmtCurrency(lead.estimatedValue)} />
               <Row label="Assessed Value" value={fmtCurrency(lead.assessedValue)} />
@@ -304,14 +358,9 @@ export default function LeadDetailPage() {
               <Row label="Mortgage Type" value={lead.mortgageType} />
               <Row label="Est. Equity" value={fmtCurrency(lead.estimatedEquity)} />
             </Section>
+            </Grid>
 
-          </Stack>
-        </Grid>
-
-        {/* ── Column 2: Carrier + Pricing ──────────────────────────────── */}
-        <Grid size={{ xs: 12, md: 4 }}>
-          <Stack spacing={2}>
-
+            <Grid size={{ xs: 12, sm: 6 }}>
             <Section title="Carrier Eligibility">
               {/* Travelers */}
               <Stack direction="row" sx={{ alignItems: 'center', mb: 0.5 }} spacing={1}>
@@ -347,7 +396,9 @@ export default function LeadDetailPage() {
                 </Box>
               )}
             </Section>
+            </Grid>
 
+            <Grid size={{ xs: 12, sm: 6 }}>
             <Section title="Indicative Premium">
               <Row label="Low Estimate" value={fmtCurrency(lead.lowPremium)} />
               <Row label="Expected" value={
@@ -372,7 +423,9 @@ export default function LeadDetailPage() {
                 </>
               )}
             </Section>
+            </Grid>
 
+            <Grid size={{ xs: 12, sm: 6 }}>
             <Section title="Coastal Exposure">
               <Stack direction="row" sx={{ alignItems: 'center', mb: 1 }} spacing={1}>
                 <WavesIcon color="action" fontSize="small" />
@@ -386,14 +439,9 @@ export default function LeadDetailPage() {
                 </Alert>
               ) : null}
             </Section>
+            </Grid>
 
-          </Stack>
-        </Grid>
-
-        {/* ── Column 3: Producer Workflow ───────────────────────────────── */}
-        <Grid size={{ xs: 12, md: 4 }}>
-          <Stack spacing={2}>
-
+            <Grid size={{ xs: 12, sm: 6 }}>
             <Section title="Pipeline">
               <Row label="Engine" value={lead.engine === 1 ? '1 — New Purchase' : lead.engine === 2 ? '2 — Renewal/Win-Back' : undefined} />
               <Row label="Recording Date" value={lead.recordingDate} />
@@ -401,6 +449,169 @@ export default function LeadDetailPage() {
               <Row label="Owner Occupied" value={lead.ownerOccupied ? 'Yes' : 'No'} />
               <Row label="Absentee Owner" value={lead.absenteeOwner ? 'Yes' : 'No'} />
               <Row label="Flood Zone" value={lead.floodZone ? `Yes — ${lead.floodZoneType ?? ''}` : 'No'} />
+            </Section>
+            </Grid>
+
+          </Grid>
+
+          {lead.activities?.length > 0 && (
+            <Section title={`Activity Log (${lead.activities.length})`}>
+              <Stack spacing={1} sx={{ mt: 0.5 }}>
+                {lead.activities.map((a: any) => (
+                  <Box key={a.id} sx={{ borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, py: 0.25 }}>
+                    <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
+                      <Typography variant="body2">{a.content}</Typography>
+                      <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 2 }}>
+                        {new Date(a.createdAt).toLocaleString()}
+                        {a.createdBy ? ` · ${a.createdBy}` : ''}
+                      </Typography>
+                    </Stack>
+                  </Box>
+                ))}
+              </Stack>
+            </Section>
+          )}
+
+          </Stack>
+        </Grid>
+
+        {/* ── RIGHT: producer actions (sticky rail) ─────────────────────── */}
+        <Grid size={{ xs: 12, md: 4 }}>
+          <Box sx={{ position: { md: 'sticky' }, top: 16 }}>
+          <Stack spacing={2}>
+
+            <Section title="Grade Review">
+              <Stack spacing={1.5} sx={{ mt: 0.5 }}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                  <Chip label={`Grade ${lead.grade ?? '?'}`} sx={gradeChipSx(lead.grade)} size="small" />
+                  {lead.manualGrade && (
+                    <Chip label="Manual override" color="secondary" size="small" variant="outlined" />
+                  )}
+                </Stack>
+
+                {lead.grade && lead.grade !== 'A' && gradeInfo && (
+                  <Box sx={{ p: 1.25, borderRadius: 1, bgcolor: gradeInfo.backgroundColor, border: '1px solid', borderColor: gradeInfo.borderColor }}>
+                    {missingFields.length > 0 ? (
+                      <>
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: gradeInfo.color }}>
+                          Missing for Grade A ({missingFields.length})
+                        </Typography>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                          {missingFields.map((f) => (
+                            <Chip key={f} label={f} size="small" variant="outlined"
+                              sx={{ color: gradeInfo.color, borderColor: gradeInfo.borderColor, bgcolor: 'transparent' }} />
+                          ))}
+                        </Box>
+                      </>
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">All quote-ready fields present.</Typography>
+                    )}
+                    {lead.grade === 'D' && ineligibleReasons.length > 0 && (
+                      <Box sx={{ mt: missingFields.length > 0 ? 1 : 0 }}>
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: gradeInfo.color, display: 'block' }}>
+                          Ineligible — carrier appetite
+                        </Typography>
+                        <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                          {ineligibleReasons.map((r, i) => (
+                            <Typography key={i} component="li" variant="caption" color="text.secondary">{r}</Typography>
+                          ))}
+                        </Box>
+                      </Box>
+                    )}
+                  </Box>
+                )}
+
+                <FormControl size="small" fullWidth>
+                  <InputLabel>Manual Grade Override</InputLabel>
+                  <Select value={manualGrade} label="Manual Grade Override" onChange={(e) => setManualGrade(e.target.value)}>
+                    <MenuItem value="">(no override — use computed)</MenuItem>
+                    <MenuItem value="A">A — Quote-ready</MenuItem>
+                    <MenuItem value="B">B — Needs info (1 field)</MenuItem>
+                    <MenuItem value="C">C — Needs info (2+ fields)</MenuItem>
+                    <MenuItem value="D">D — Discard / quarantine</MenuItem>
+                  </Select>
+                </FormControl>
+
+                {manualGrade && (
+                  <TextField
+                    label="Override Reason"
+                    value={gradeOverrideReason}
+                    onChange={(e) => setGradeOverrideReason(e.target.value)}
+                    size="small" fullWidth multiline rows={2}
+                    placeholder="e.g. Roof age confirmed 2019 on call — upgrade B→A"
+                  />
+                )}
+                {lead.gradeOverrideAt && (
+                  <Typography variant="caption" color="text.secondary">
+                    Overridden {new Date(lead.gradeOverrideAt).toLocaleString()}
+                    {lead.gradeOverrideBy ? ` · ${lead.gradeOverrideBy}` : ''}
+                  </Typography>
+                )}
+
+                <Divider textAlign="left">
+                  <Typography variant="caption" color="text.secondary">ROOF (confirm on call)</Typography>
+                </Divider>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Roof Year"
+                    type="number"
+                    value={roofYear}
+                    onChange={(e) => setRoofYear(e.target.value)}
+                    size="small" fullWidth
+                    placeholder="e.g. 2019"
+                    slotProps={{ inputLabel: { shrink: true } }}
+                  />
+                  <FormControl size="small" fullWidth>
+                    <InputLabel>Roof Type</InputLabel>
+                    <Select value={roofType} label="Roof Type" onChange={(e) => setRoofType(e.target.value)}>
+                      <MenuItem value="">Unknown</MenuItem>
+                      <MenuItem value="Asphalt Shingle">Asphalt Shingle</MenuItem>
+                      <MenuItem value="Architectural Shingle">Architectural Shingle</MenuItem>
+                      <MenuItem value="Metal (Standing Seam)">Metal (Standing Seam)</MenuItem>
+                      <MenuItem value="Slate">Slate</MenuItem>
+                      <MenuItem value="Flat Metal">Flat Metal ⚠</MenuItem>
+                      <MenuItem value="Tile">Tile ⚠</MenuItem>
+                      <MenuItem value="Wood Shake">Wood Shake ⚠</MenuItem>
+                      <MenuItem value="Other">Other</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
+                <Typography variant="caption" color="text.secondary">
+                  Confirming roof year clears the B/C roof-age gate. Roof type stays “Unknown” until set; flat-metal, tile and wood are carrier-ineligible.
+                </Typography>
+                {['Flat Metal', 'Tile', 'Wood Shake'].includes(roofType) && (
+                  <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>
+                    High-risk roof type — both carriers ineligible (grade D).
+                  </Alert>
+                )}
+
+                <Divider />
+
+                <FormControlLabel
+                  control={<Checkbox checked={revisitFlag} onChange={(e) => setRevisitFlag(e.target.checked)} size="small" />}
+                  label={<Typography variant="body2">Revisit later / next year</Typography>}
+                />
+                {revisitFlag && (
+                  <>
+                    <TextField
+                      label="Revisit Date"
+                      type="date"
+                      value={revisitDate}
+                      onChange={(e) => setRevisitDate(e.target.value)}
+                      size="small" fullWidth
+                      slotProps={{ inputLabel: { shrink: true } }}
+                    />
+                    <TextField
+                      label="Revisit Note"
+                      value={revisitNote}
+                      onChange={(e) => setRevisitNote(e.target.value)}
+                      size="small" fullWidth multiline rows={2}
+                      placeholder="Why revisit? e.g. renewal X-date, price not competitive this year"
+                    />
+                  </>
+                )}
+              </Stack>
             </Section>
 
             <Section title="Producer Workflow">
@@ -548,6 +759,29 @@ export default function LeadDetailPage() {
                         <MenuItem value="unknown">Unknown</MenuItem>
                       </Select>
                     </FormControl>
+
+                    {/* Lost-to-competitor price — what we're up against next year */}
+                    <TextField
+                      label="Competing Carrier"
+                      value={competitorCarrier}
+                      onChange={(e) => setCompetitorCarrier(e.target.value)}
+                      size="small" fullWidth
+                      placeholder="e.g. Geico, NJM, Allstate"
+                    />
+                    <TextField
+                      label="Competitor Premium ($)"
+                      value={competitorPremium}
+                      onChange={(e) => setCompetitorPremium(e.target.value)}
+                      size="small" fullWidth type="number"
+                      placeholder="Their annual premium, if known"
+                      slotProps={{ input: { startAdornment: <Typography color="text.secondary" sx={{ mr: 0.5 }}>$</Typography> } }}
+                    />
+                    {competitorPremium && lead?.expectedPremium && (
+                      <Alert severity="info" sx={{ py: 0, fontSize: 12 }}>
+                        We were {parseFloat(competitorPremium) < lead.expectedPremium ? 'higher' : 'lower'} by{' '}
+                        {fmtCurrency(Math.abs(parseFloat(competitorPremium) - lead.expectedPremium))} vs our indicative expected
+                      </Alert>
+                    )}
                   </>
                 )}
 
@@ -589,28 +823,11 @@ export default function LeadDetailPage() {
             </Section>
 
           </Stack>
+          </Box>
         </Grid>
 
-        {/* ── Activity Log ─────────────────────────────────────────────── */}
-        {lead.activities?.length > 0 && (
-          <Grid size={12}>
-            <Section title={`Activity Log (${lead.activities.length})`}>
-              <Stack spacing={1} sx={{ mt: 0.5 }}>
-                {lead.activities.map((a: any) => (
-                  <Box key={a.id} sx={{ borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, py: 0.25 }}>
-                    <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-                      <Typography variant="body2">{a.content}</Typography>
-                      <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 2 }}>
-                        {new Date(a.createdAt).toLocaleString()}
-                        {a.createdBy ? ` · ${a.createdBy}` : ''}
-                      </Typography>
-                    </Stack>
-                  </Box>
-                ))}
-              </Stack>
-            </Section>
-          </Grid>
-        )}
+        {/* Activity Log now lives in the left column (above) so it fills the
+            space beside the taller sticky actions rail. */}
 
       </Grid>
 

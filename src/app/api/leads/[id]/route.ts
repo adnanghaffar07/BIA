@@ -80,6 +80,25 @@ export async function PUT(
       updateData.boundDate = now;
     }
 
+    // Manual grade override (§2/§11): a producer can upgrade/downgrade a lead.
+    // When manualGrade is set, mirror it into `grade` (so queue/dashboard filters
+    // pick it up) and stamp who/when. An empty string clears the override; the
+    // computed grade is restored on the next enrichment pass.
+    if ('manualGrade' in updateData) {
+      const mg = updateData.manualGrade;
+      if (mg && ['A', 'B', 'C', 'D'].includes(mg)) {
+        updateData.grade = mg;
+        updateData.gradeOverrideAt = now;
+        updateData.gradeOverrideBy = _createdBy ?? updateData.gradeOverrideBy;
+      } else {
+        // Clear the override (leave `grade` as-is until re-enrichment recomputes it)
+        updateData.manualGrade = null;
+        updateData.gradeOverrideReason = null;
+        updateData.gradeOverrideBy = null;
+        updateData.gradeOverrideAt = null;
+      }
+    }
+
     await updateLead(id, updateData);
 
     if (_activityNote) {
