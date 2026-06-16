@@ -87,8 +87,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'flex-start', py: 0.5 }} spacing={1}>
-      <Typography variant="body2" color="text.secondary" noWrap sx={{ minWidth: 140 }}>{label}</Typography>
-      <Typography variant="body2" component="div" sx={{ fontWeight: 500, textAlign: 'right' }}>{value ?? '—'}</Typography>
+      <Typography variant="body2" color="text.secondary" noWrap sx={{ minWidth: 110, flexShrink: 0 }}>{label}</Typography>
+      <Typography variant="body2" component="div" sx={{ fontWeight: 500, textAlign: 'right', minWidth: 0, wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
     </Stack>
   );
 }
@@ -316,7 +316,7 @@ export default function LeadDetailPage() {
           <HomeIcon color="action" />
           <Typography variant="h5" sx={{ fontWeight: 700 }}>{address}</Typography>
         </Stack>
-        <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+        <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: 'wrap' }}>
           <Chip label={`Grade ${lead.grade ?? '?'}`} sx={gradeChipSx(lead.grade)} />
           <Chip label={statusLabel(lead.status)} variant="outlined" />
           {coastChip(lead.coastExposure)}
@@ -330,7 +330,7 @@ export default function LeadDetailPage() {
           <Stack spacing={2.5}>
           <Grid container spacing={2.5}>
 
-            <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid size={{ xs: 12, lg: 6 }}>
             <Section title="Property Details">
               <Row label="Owner" value={ownerName} />
               <Row label="Property Type" value={lead.propertyType} />
@@ -347,7 +347,7 @@ export default function LeadDetailPage() {
             </Section>
             </Grid>
 
-            <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid size={{ xs: 12, lg: 6 }}>
             <Section title="Financials">
               <Row label="Estimated Value" value={fmtCurrency(lead.estimatedValue)} />
               <Row label="Assessed Value" value={fmtCurrency(lead.assessedValue)} />
@@ -360,7 +360,7 @@ export default function LeadDetailPage() {
             </Section>
             </Grid>
 
-            <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid size={{ xs: 12, lg: 6 }}>
             <Section title="Carrier Eligibility">
               {/* Travelers */}
               <Stack direction="row" sx={{ alignItems: 'center', mb: 0.5 }} spacing={1}>
@@ -398,7 +398,7 @@ export default function LeadDetailPage() {
             </Section>
             </Grid>
 
-            <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid size={{ xs: 12, lg: 6 }}>
             <Section title="Indicative Premium">
               <Row label="Low Estimate" value={fmtCurrency(lead.lowPremium)} />
               <Row label="Expected" value={
@@ -425,7 +425,7 @@ export default function LeadDetailPage() {
             </Section>
             </Grid>
 
-            <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid size={{ xs: 12, lg: 6 }}>
             <Section title="Coastal Exposure">
               <Stack direction="row" sx={{ alignItems: 'center', mb: 1 }} spacing={1}>
                 <WavesIcon color="action" fontSize="small" />
@@ -441,7 +441,7 @@ export default function LeadDetailPage() {
             </Section>
             </Grid>
 
-            <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid size={{ xs: 12, lg: 6 }}>
             <Section title="Pipeline">
               <Row label="Engine" value={lead.engine === 1 ? '1 — New Purchase' : lead.engine === 2 ? '2 — Renewal/Win-Back' : undefined} />
               <Row label="Recording Date" value={lead.recordingDate} />
