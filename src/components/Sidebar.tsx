@@ -31,9 +31,12 @@ const ICON_ACTIVE   = '#60a5fa';
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
+  /** Mobile (<md) temporary-drawer state. */
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
-export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
+export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
   const router   = useRouter();
   const { logout, user } = useAuth();
@@ -43,6 +46,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     : pathname === path || pathname.startsWith(path + '/');
 
   const handleLogout = async () => {
+    onMobileClose?.();
     await logout();
     router.push('/login');
   };
@@ -57,9 +61,9 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     ] : []),
   ];
 
-  const w = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
-
-  const content = (
+  // Shared sidebar body. On mobile we always render the full (expanded) layout
+  // and swap the collapse toggle for a close button; tapping a nav item closes it.
+  const renderContent = (isCollapsed: boolean, mobile: boolean) => (
     <Box
       sx={{
         display: 'flex',
@@ -69,7 +73,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         color: 'white',
         overflowX: 'hidden',
         transition: 'width 0.22s ease',
-        width: w,
+        width: isCollapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED,
       }}
     >
       {/* ── Logo / header ───────────────────────────────────────────────── */}
@@ -79,92 +83,55 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
           py: 1.5,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: collapsed ? 'center' : 'space-between',
+          justifyContent: isCollapsed ? 'center' : 'space-between',
           borderBottom: '1px solid rgba(255,255,255,0.07)',
           minHeight: 56,
           gap: 1,
         }}
       >
-        {/* Logo mark — always visible */}
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            overflow: 'hidden',
-            flex: collapsed ? 'none' : 1,
-          }}
-        >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, overflow: 'hidden', flex: isCollapsed ? 'none' : 1 }}>
           <Box
             sx={{
-              width: 30,
-              height: 30,
-              borderRadius: 1,
-              backgroundColor: '#2563eb',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
+              width: 30, height: 30, borderRadius: 1, backgroundColor: '#2563eb',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
             }}
           >
-            <Typography sx={{ fontSize: '0.75rem', fontWeight: 900, color: '#fff', lineHeight: 1 }}>
-              BIA
-            </Typography>
+            <Typography sx={{ fontSize: '0.75rem', fontWeight: 900, color: '#fff', lineHeight: 1 }}>BIA</Typography>
           </Box>
-          {!collapsed && (
-            <Typography
-              sx={{
-                fontWeight: 800,
-                fontSize: '1rem',
-                letterSpacing: '0.03em',
-                color: '#f8fafc',
-                whiteSpace: 'nowrap',
-              }}
-            >
+          {!isCollapsed && (
+            <Typography sx={{ fontWeight: 800, fontSize: '1rem', letterSpacing: '0.03em', color: '#f8fafc', whiteSpace: 'nowrap' }}>
               CRM
             </Typography>
           )}
         </Box>
 
-        {/* Collapse toggle — hidden when collapsed, shows on expand side */}
-        {!collapsed && (
+        {mobile ? (
+          <IconButton onClick={onMobileClose} size="small" aria-label="Close menu"
+            sx={{ color: 'rgba(255,255,255,0.5)', flexShrink: 0, '&:hover': { color: '#fff', backgroundColor: HOVER_BG } }}>
+            <ChevronLeftIcon fontSize="small" />
+          </IconButton>
+        ) : !isCollapsed && (
           <Tooltip title="Collapse sidebar" placement="right">
-            <IconButton
-              onClick={onToggle}
-              size="small"
-              sx={{
-                color: 'rgba(255,255,255,0.4)',
-                flexShrink: 0,
-                '&:hover': { color: '#fff', backgroundColor: HOVER_BG },
-              }}
-            >
+            <IconButton onClick={onToggle} size="small"
+              sx={{ color: 'rgba(255,255,255,0.4)', flexShrink: 0, '&:hover': { color: '#fff', backgroundColor: HOVER_BG } }}>
               <ChevronLeftIcon fontSize="small" />
             </IconButton>
           </Tooltip>
         )}
       </Box>
 
-      {/* Expand button pinned at top when collapsed */}
-      {collapsed && (
+      {/* Expand button pinned at top when collapsed (desktop only) */}
+      {!mobile && isCollapsed && (
         <Tooltip title="Expand sidebar" placement="right">
-          <IconButton
-            onClick={onToggle}
-            size="small"
-            sx={{
-              mt: 0.5,
-              mx: 'auto',
-              display: 'flex',
-              color: 'rgba(255,255,255,0.4)',
-              '&:hover': { color: '#fff', backgroundColor: HOVER_BG },
-            }}
-          >
+          <IconButton onClick={onToggle} size="small"
+            sx={{ mt: 0.5, mx: 'auto', display: 'flex', color: 'rgba(255,255,255,0.4)', '&:hover': { color: '#fff', backgroundColor: HOVER_BG } }}>
             <ChevronRightIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       )}
 
       {/* ── Nav items ───────────────────────────────────────────────────── */}
-      <List sx={{ flex: 1, pt: 1.5, px: collapsed ? 0.5 : 1 }}>
+      <List sx={{ flex: 1, pt: 1.5, px: isCollapsed ? 0.5 : 1 }}>
         {navItems.map((item) => {
           const active = isActive(item.path);
           const btn = (
@@ -172,12 +139,13 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
               component={Link}
               href={item.path}
               selected={active}
+              onClick={mobile ? onMobileClose : undefined}
               sx={{
                 borderRadius: 1.5,
                 mb: 0.5,
-                px: collapsed ? 1.25 : 1.5,
+                px: isCollapsed ? 1.25 : 1.5,
                 py: 1,
-                justifyContent: collapsed ? 'center' : 'flex-start',
+                justifyContent: isCollapsed ? 'center' : 'flex-start',
                 backgroundColor: active ? ACTIVE_BG : 'transparent',
                 borderLeft: active ? `3px solid ${ACTIVE_BORDER}` : '3px solid transparent',
                 '&:hover': { backgroundColor: active ? ACTIVE_BG : HOVER_BG },
@@ -185,16 +153,10 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 minHeight: 44,
               }}
             >
-              <ListItemIcon
-                sx={{
-                  color: active ? ICON_ACTIVE : ICON_DEFAULT,
-                  minWidth: collapsed ? 0 : 36,
-                  justifyContent: 'center',
-                }}
-              >
+              <ListItemIcon sx={{ color: active ? ICON_ACTIVE : ICON_DEFAULT, minWidth: isCollapsed ? 0 : 36, justifyContent: 'center' }}>
                 {item.icon}
               </ListItemIcon>
-              {!collapsed && (
+              {!isCollapsed && (
                 <ListItemText
                   primary={item.label}
                   slotProps={{
@@ -213,31 +175,22 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
           return (
             <ListItem key={item.path} disablePadding>
-              {collapsed
+              {isCollapsed
                 ? <Tooltip title={item.label} placement="right">{btn}</Tooltip>
-                : btn
-              }
+                : btn}
             </ListItem>
           );
         })}
       </List>
 
-      <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)', mx: collapsed ? 0.5 : 1 }} />
+      <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)', mx: isCollapsed ? 0.5 : 1 }} />
 
       {/* ── User + logout ────────────────────────────────────────────────── */}
-      <Box sx={{ px: collapsed ? 0.5 : 1, py: 1.5 }}>
-        {!collapsed && user?.email && (
+      <Box sx={{ px: isCollapsed ? 0.5 : 1, py: 1.5 }}>
+        {!isCollapsed && user?.email && (
           <Typography
             variant="caption"
-            sx={{
-              display: 'block',
-              px: 1.5,
-              pb: 1,
-              color: 'rgba(255,255,255,0.35)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
+            sx={{ display: 'block', px: 1.5, pb: 1, color: 'rgba(255,255,255,0.35)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
           >
             {user.email}
           </Typography>
@@ -248,26 +201,23 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
               onClick={handleLogout}
               sx={{
                 borderRadius: 1.5,
-                px: collapsed ? 1.25 : 1.5,
+                px: isCollapsed ? 1.25 : 1.5,
                 py: 1,
-                justifyContent: collapsed ? 'center' : 'flex-start',
+                justifyContent: isCollapsed ? 'center' : 'flex-start',
                 backgroundColor: 'rgba(220,38,38,0.08)',
                 '&:hover': { backgroundColor: 'rgba(220,38,38,0.18)' },
                 minHeight: 44,
               }}
             >
-              <ListItemIcon sx={{ color: '#f87171', minWidth: collapsed ? 0 : 36, justifyContent: 'center' }}>
+              <ListItemIcon sx={{ color: '#f87171', minWidth: isCollapsed ? 0 : 36, justifyContent: 'center' }}>
                 <LogoutIcon fontSize="small" />
               </ListItemIcon>
-              {!collapsed && (
-                <ListItemText
-                  primary="Logout"
-                  slotProps={{ primary: { sx: { fontSize: '0.875rem', fontWeight: 600, color: '#f87171' } } }}
-                />
+              {!isCollapsed && (
+                <ListItemText primary="Logout" slotProps={{ primary: { sx: { fontSize: '0.875rem', fontWeight: 600, color: '#f87171' } } }} />
               )}
             </ListItemButton>
           );
-          return collapsed
+          return isCollapsed
             ? <Tooltip title="Logout" placement="right">{logoutBtn}</Tooltip>
             : logoutBtn;
         })()}
@@ -275,24 +225,49 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     </Box>
   );
 
+  const w = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
+
   return (
-    <Drawer
-      variant="permanent"
-      sx={{
-        width: w,
-        flexShrink: 0,
-        transition: 'width 0.22s ease',
-        '& .MuiDrawer-paper': {
+    <>
+      {/* Desktop (md+): permanent rail in the layout flow */}
+      <Drawer
+        variant="permanent"
+        sx={{
+          display: { xs: 'none', md: 'block' },
           width: w,
-          boxSizing: 'border-box',
-          overflowX: 'hidden',
-          border: 'none',
+          flexShrink: 0,
           transition: 'width 0.22s ease',
-          boxShadow: '2px 0 8px rgba(0,0,0,0.25)',
-        },
-      }}
-    >
-      {content}
-    </Drawer>
+          '& .MuiDrawer-paper': {
+            width: w,
+            boxSizing: 'border-box',
+            overflowX: 'hidden',
+            border: 'none',
+            transition: 'width 0.22s ease',
+            boxShadow: '2px 0 8px rgba(0,0,0,0.25)',
+          },
+        }}
+      >
+        {renderContent(collapsed, false)}
+      </Drawer>
+
+      {/* Mobile (<md): temporary overlay drawer, opened from the top bar */}
+      <Drawer
+        variant="temporary"
+        open={mobileOpen}
+        onClose={onMobileClose}
+        ModalProps={{ keepMounted: true }}
+        sx={{
+          display: { xs: 'block', md: 'none' },
+          '& .MuiDrawer-paper': {
+            width: SIDEBAR_EXPANDED,
+            boxSizing: 'border-box',
+            overflowX: 'hidden',
+            border: 'none',
+          },
+        }}
+      >
+        {renderContent(false, true)}
+      </Drawer>
+    </>
   );
 }

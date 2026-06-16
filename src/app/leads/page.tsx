@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Container, Box, Alert, CircularProgress, Typography,
-  Snackbar, Tabs, Tab, Chip,
+  Snackbar, Tabs, Tab, Chip, FormControl, InputLabel, Select, MenuItem,
 } from '@mui/material';
 import HomeWorkIcon from '@mui/icons-material/HomeWork';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
@@ -101,9 +101,31 @@ export default function LeadsPage() {
 
       <SearchForm onSearch={handleSearch} loading={loading} />
 
-      {/* Pipeline Tabs */}
-      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-        <Tabs value={activeTab} onChange={handleTabChange} aria-label="pipeline tabs">
+      {/* Pipeline selector — dropdown on mobile (<md) */}
+      <FormControl size="small" fullWidth sx={{ display: { xs: 'flex', md: 'none' }, mb: 3 }}>
+        <InputLabel id="pipeline-view-label">View</InputLabel>
+        <Select
+          labelId="pipeline-view-label"
+          label="View"
+          value={activeTab}
+          onChange={(e) => setActiveTab(e.target.value as TabValue)}
+        >
+          <MenuItem value="all">All Leads ({allLeads.length})</MenuItem>
+          <MenuItem value="engine1">Engine 1 — New Purchase ({engine1Leads.length})</MenuItem>
+          <MenuItem value="engine2">Engine 2 — Renewal ({engine2Leads.length})</MenuItem>
+        </Select>
+      </FormControl>
+
+      {/* Pipeline Tabs — desktop (md+) */}
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3, display: { xs: 'none', md: 'block' } }}>
+        <Tabs
+          value={activeTab}
+          onChange={handleTabChange}
+          aria-label="pipeline tabs"
+          variant="scrollable"
+          scrollButtons="auto"
+          allowScrollButtonsMobile
+        >
           <Tab
             icon={<AllInboxIcon />}
             iconPosition="start"

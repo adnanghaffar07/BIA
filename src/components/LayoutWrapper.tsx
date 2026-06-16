@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Box } from '@mui/material';
+import { Box, CircularProgress } from '@mui/material';
 import { usePathname, useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import Sidebar, { SIDEBAR_EXPANDED, SIDEBAR_COLLAPSED } from '@/components/Sidebar';
@@ -12,8 +12,9 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const router   = useRouter();
   const { isAuthenticated, isLoading } = useAuth();
 
-  const [mounted,   setMounted]   = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  const [mounted,    setMounted]    = useState(false);
+  const [collapsed,  setCollapsed]  = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -29,6 +30,9 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
     });
   };
 
+  // Close the mobile drawer whenever the route changes.
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+
   const PUBLIC_ROUTES = ['/login'];
   const isPublicRoute = PUBLIC_ROUTES.some(
     (r) => pathname === r || pathname.startsWith(r + '/'),
@@ -41,9 +45,18 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   }, [mounted, isAuthenticated, isLoading, pathname, router, isPublicRoute]);
 
   if (!mounted || isLoading) {
+    // Public routes (e.g. /login) render immediately — they have no shell.
+    // Protected routes show a centered loader instead of flashing un-shelled
+    // page content while auth + sidebar/navbar resolve.
     return (
-      <Box sx={{ minHeight: '100vh', backgroundColor: 'background.default' }}>
-        {children}
+      <Box
+        sx={{
+          minHeight: '100vh',
+          backgroundColor: 'background.default',
+          ...(isPublicRoute ? {} : { display: 'flex', alignItems: 'center', justifyContent: 'center' }),
+        }}
+      >
+        {isPublicRoute ? children : <CircularProgress />}
       </Box>
     );
   }
@@ -56,7 +69,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       {shouldShowSidebar && (
-        <Sidebar collapsed={collapsed} onToggle={toggleSidebar} />
+        <Sidebar collapsed={collapsed} onToggle={toggleSidebar} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
       )}
       <Box
         sx={{
@@ -68,7 +81,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
           transition: 'margin-left 0.22s ease',
         }}
       >
-        {shouldShowSidebar && <Navbar />}
+        {shouldShowSidebar && <Navbar onMenuClick={() => setMobileOpen(true)} />}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           {children}
         </Box>

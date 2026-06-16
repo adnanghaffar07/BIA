@@ -90,11 +90,14 @@ function FunnelRow({
     <Box
       sx={{
         display: 'grid',
-        gridTemplateColumns: '200px 100px 110px 1fr',
-        gap: 2,
+        // Mobile: stage + two chips on one line, description wraps to a full-width row.
+        // Desktop: the original 4-column table layout.
+        gridTemplateColumns: { xs: '1fr auto auto', md: '200px 100px 110px 1fr' },
+        columnGap: 2,
+        rowGap: 0.5,
         alignItems: 'center',
         py: 1.25,
-        px: 2,
+        px: { xs: 1.25, md: 2 },
         borderRadius: 1,
         bgcolor: highlight ? 'success.50' : 'transparent',
         ...(highlight && { border: '1px solid', borderColor: 'success.200' }),
@@ -103,7 +106,7 @@ function FunnelRow({
       <Typography variant="body2" sx={{ fontWeight: highlight ? 700 : 400 }}>{stage}</Typography>
       <Chip label={stepRate} size="small" sx={{ fontWeight: 600, width: 'fit-content' }} color={highlight ? 'success' : 'default'} />
       <Chip label={cumulative} size="small" variant="outlined" sx={{ width: 'fit-content' }} />
-      <Typography variant="caption" color="text.secondary">{description}</Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }}>{description}</Typography>
     </Box>
   );
 }
@@ -252,11 +255,11 @@ export default function Dashboard() {
                   <Box sx={{ textAlign: 'center', p: 1.5, borderRadius: 2, bgcolor: bufferStatus === 'success' ? '#e8f5e9' : bufferStatus === 'warning' ? '#fff3e0' : '#ffebee' }}>
                     <FactCheckIcon sx={{ color: bufferColor, mb: 0.5 }} />
                     <Typography variant="h4" sx={{ fontWeight: 'bold', color: bufferColor }}>
-                      {bufferLabel}
+                      {s.bufferDays == null ? 'N/A' : `${s.bufferDays} days`}
                     </Typography>
                     <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Buffer</Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {s.quoteReadyActive.toLocaleString()} QR leads ÷ burn rate
+                      {s.bufferDays == null ? 'no binds yet' : `${s.quoteReadyActive.toLocaleString()} QR leads ÷ burn rate`}
                     </Typography>
                   </Box>
                 </Grid>
@@ -321,7 +324,7 @@ export default function Dashboard() {
               </Typography>
 
               {/* Header row */}
-              <Box sx={{ display: 'grid', gridTemplateColumns: '200px 100px 110px 1fr', gap: 2, px: 2, pb: 0.5 }}>
+              <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: '200px 100px 110px 1fr', gap: 2, px: 2, pb: 0.5 }}>
                 {['Stage', 'Step rate', 'Cumulative', 'What it means'].map((h) => (
                   <Typography key={h} variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</Typography>
                 ))}
@@ -375,7 +378,7 @@ export default function Dashboard() {
               </Typography>
 
               {/* Header row */}
-              <Box sx={{ display: 'grid', gridTemplateColumns: '200px 100px 110px 1fr', gap: 2, px: 2, pb: 0.5 }}>
+              <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: '200px 100px 110px 1fr', gap: 2, px: 2, pb: 0.5 }}>
                 {['Stage', 'Step rate', 'Cumulative', 'What it means'].map((h) => (
                   <Typography key={h} variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</Typography>
                 ))}
