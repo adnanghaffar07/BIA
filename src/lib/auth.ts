@@ -65,7 +65,7 @@ export async function verifySessionToken(token: string): Promise<AuthUser | null
       WHERE s."token" = ${token}
         AND s."expiresAt" > NOW()
         AND u."isActive" = true
-    `;
+    ` as any[];
 
     if (sessions.length === 0) return null;
 
@@ -93,16 +93,16 @@ export async function getUserByEmail(email: string): Promise<any | null> {
     SELECT "id", "email", "passwordHash", "name", "role", "isActive"
     FROM "User"
     WHERE "email" = ${email.toLowerCase().trim()}
-  `;
+  ` as any[];
   return rows[0] ?? null;
 }
 
 export async function getAllUsers(): Promise<any[]> {
-  return sql`
+  return (await sql`
     SELECT "id", "email", "name", "role", "isActive", "createdAt", "createdBy"
     FROM "User"
     ORDER BY "createdAt" DESC
-  `;
+  `) as any[];
 }
 
 export async function createUser(data: {

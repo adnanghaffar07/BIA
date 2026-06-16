@@ -55,16 +55,16 @@ export default function SeedControlPage() {
 
   return (
     <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 700, mx: 'auto' }}>
-      <Typography variant="h5" fontWeight={700} gutterBottom>
+      <Typography variant="h5" gutterBottom sx={{ fontWeight: 700 }}>
         REAPI Seed Control
       </Typography>
-      <Typography variant="body2" color="text.secondary" mb={3}>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         One-time fetch of 100 real NJ homeowner leads from RealEstateAPI.
         After seeding, the API is locked and all pages serve from the database.
       </Typography>
 
       <Paper variant="outlined" sx={{ p: 3, mb: 3, borderRadius: 2 }}>
-        <Typography variant="subtitle2" fontWeight={700} gutterBottom sx={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 }}>
+        <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 700, textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 }}>
           What this does
         </Typography>
         <List dense disablePadding>
@@ -85,7 +85,7 @@ export default function SeedControlPage() {
         </List>
       </Paper>
 
-      <Stack direction="row" spacing={2} mb={3}>
+      <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
         <Button
           variant="contained"
           size="large"
@@ -120,8 +120,8 @@ export default function SeedControlPage() {
 
       {result && (
         <Alert severity="success" icon={<CheckCircleIcon />} sx={{ mb: 2 }}>
-          <Typography fontWeight={700} gutterBottom>{result.message}</Typography>
-          <Stack direction="row" spacing={1} flexWrap="wrap" mt={0.5}>
+          <Typography gutterBottom sx={{ fontWeight: 700 }}>{result.message}</Typography>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', mt: 0.5 }}>
             <Chip label={`Engine 1: ${result.engine1} leads`} size="small" color="success" variant="outlined" />
             <Chip label={`Engine 2: ${result.engine2} leads`} size="small" color="info" variant="outlined" />
             <Chip label={`Enriched: ${result.enriched}`} size="small" />
@@ -137,7 +137,7 @@ export default function SeedControlPage() {
         <Stack direction="row" sx={{ alignItems: 'flex-start' }} spacing={1}>
           <LockIcon color="warning" fontSize="small" sx={{ mt: 0.2 }} />
           <Box>
-            <Typography variant="body2" fontWeight={600}>Lock Behavior</Typography>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>Lock Behavior</Typography>
             <Typography variant="body2" color="text.secondary">
               After seeding, <code>api_seeded = true</code> is written to the <code>AppConfig</code> table in Neon.
               Every <code>GET /api/leads</code> request checks this flag first — if locked, it serves from DB without touching the REAPI.

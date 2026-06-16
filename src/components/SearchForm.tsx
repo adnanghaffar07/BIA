@@ -11,14 +11,10 @@ import AutorenewIcon from '@mui/icons-material/Autorenew';
 import AllInboxIcon from '@mui/icons-material/AllInbox';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import { LeadFilters, LeadGradeValue, LeadStatus } from '@/types/lead';
 
 interface SearchFormProps {
-  onSearch: (filters: {
-    size?: number;
-    engine?: 1 | 2 | undefined;
-    grade?: string;
-    status?: string;
-  }) => void;
+  onSearch: (filters: LeadFilters) => void;
   loading?: boolean;
 }
 
@@ -51,8 +47,8 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
     onSearch({
       size: size ? parseInt(size) : 100,
       engine: engine === 'all' ? undefined : (parseInt(engine) as 1 | 2),
-      grade: grade || undefined,
-      status: status || undefined,
+      grade: (grade || undefined) as LeadGradeValue | undefined,
+      status: (status || undefined) as LeadStatus | undefined,
     });
   };
 

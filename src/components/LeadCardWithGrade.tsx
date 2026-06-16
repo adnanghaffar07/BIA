@@ -56,7 +56,7 @@ export default function LeadCardWithGrade({ lead, onClick }: LeadCardWithGradePr
           <LocationOnIcon sx={{ fontSize: '1rem', color: '#1976d2', mt: 0.3, flexShrink: 0 }} />
           <Box>
             <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-              {lead.address && formatAddress(lead.address)}
+              {lead.address && formatAddress(lead.address.street, lead.address.city, lead.address.state, lead.address.zip)}
             </Typography>
             <Typography variant="caption" color="textSecondary">
               {lead.propertyType}

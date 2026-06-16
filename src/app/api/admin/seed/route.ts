@@ -42,7 +42,7 @@ export async function POST() {
       )
     `;
 
-    const lock = await sql`SELECT "value" FROM "AppConfig" WHERE "key" = 'api_seeded'`;
+    const lock = await sql`SELECT "value" FROM "AppConfig" WHERE "key" = 'api_seeded'` as any[];
     if (lock.length > 0 && lock[0].value === 'true') {
       return NextResponse.json({
         success: false,
