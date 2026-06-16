@@ -82,6 +82,8 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
         }}
       >
         {shouldShowSidebar && <Navbar onMenuClick={() => setMobileOpen(true)} />}
+        {/* Offset for the fixed (mobile) AppBar so content isn't hidden beneath it */}
+        {shouldShowSidebar && <Box sx={{ display: { xs: 'block', md: 'none' }, height: 52, flexShrink: 0 }} />}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           {children}
         </Box>

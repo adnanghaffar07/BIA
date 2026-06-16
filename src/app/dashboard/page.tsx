@@ -92,7 +92,7 @@ function FunnelRow({
         display: 'grid',
         // Mobile: stage + two chips on one line, description wraps to a full-width row.
         // Desktop: the original 4-column table layout.
-        gridTemplateColumns: { xs: '1fr auto auto', md: '200px 100px 110px 1fr' },
+        gridTemplateColumns: { xs: '1fr auto auto', md: '1.4fr 90px 90px 2fr' },
         columnGap: 2,
         rowGap: 0.5,
         alignItems: 'center',
@@ -313,7 +313,7 @@ export default function Dashboard() {
       <Grid container spacing={3}>
 
         {/* ── Funnel 1 ────────────────────────────────────────────────────── */}
-        <Grid size={{ xs: 12, lg: 6 }}>
+        <Grid size={{ xs: 12, xl: 6 }}>
           <Card sx={{ boxShadow: 2, height: '100%' }}>
             <CardContent>
               <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
@@ -324,7 +324,7 @@ export default function Dashboard() {
               </Typography>
 
               {/* Header row */}
-              <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: '200px 100px 110px 1fr', gap: 2, px: 2, pb: 0.5 }}>
+              <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: '1.4fr 90px 90px 2fr', gap: 2, px: 2, pb: 0.5 }}>
                 {['Stage', 'Step rate', 'Cumulative', 'What it means'].map((h) => (
                   <Typography key={h} variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</Typography>
                 ))}
@@ -367,7 +367,7 @@ export default function Dashboard() {
         </Grid>
 
         {/* ── Funnel 2 ────────────────────────────────────────────────────── */}
-        <Grid size={{ xs: 12, lg: 6 }}>
+        <Grid size={{ xs: 12, xl: 6 }}>
           <Card sx={{ boxShadow: 2, height: '100%' }}>
             <CardContent>
               <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
@@ -378,7 +378,7 @@ export default function Dashboard() {
               </Typography>
 
               {/* Header row */}
-              <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: '200px 100px 110px 1fr', gap: 2, px: 2, pb: 0.5 }}>
+              <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: '1.4fr 90px 90px 2fr', gap: 2, px: 2, pb: 0.5 }}>
                 {['Stage', 'Step rate', 'Cumulative', 'What it means'].map((h) => (
                   <Typography key={h} variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</Typography>
                 ))}

@@ -9,7 +9,11 @@ export default function Navbar({ onMenuClick }: { onMenuClick?: () => void }) {
   const { user } = useAuth();
 
   return (
-    <AppBar position="sticky" elevation={0}>
+    <AppBar
+      position="sticky"
+      elevation={0}
+      sx={{ position: { xs: 'fixed', md: 'sticky' }, top: 0, left: 0, right: 0 }}
+    >
       <Toolbar sx={{ minHeight: 52, px: { xs: 1.5, md: 3 } }}>
         {/* Hamburger — opens the sidebar drawer on small screens only */}
         {onMenuClick && (
