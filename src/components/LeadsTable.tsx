@@ -43,12 +43,13 @@ const EXPANDED_ROW_BG = '#e3edf7';
 const EXPANDED_ROW_HEADER_BG = '#d4e4f5';
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; rowBg: string }> = {
-  new:         { label: 'New',        color: '#1565c0', bg: '#e3f2fd', rowBg: 'transparent' },
-  contacted:   { label: 'Contacted',  color: '#e65100', bg: '#fff3e0', rowBg: '#fffde7' },
-  qualified:   { label: 'Qualified',  color: '#1b5e20', bg: '#e8f5e9', rowBg: '#f1f8e9' },
-  quote_sent:  { label: 'Quote Sent', color: '#4a148c', bg: '#f3e5f5', rowBg: '#fce4ec' },
-  bound:       { label: 'Bound',      color: '#fff',    bg: '#2e7d32', rowBg: '#e8f5e9' },
-  lost:        { label: 'Lost',       color: '#fff',    bg: '#c62828', rowBg: '#ffebee' },
+  new:             { label: 'New',             color: '#1565c0', bg: '#e3f2fd', rowBg: 'transparent' },
+  rated:           { label: 'Rated',           color: '#4a148c', bg: '#f3e5f5', rowBg: '#faf4fc' },
+  indicative_sent: { label: 'Indicative Sent', color: '#e65100', bg: '#fff3e0', rowBg: '#fffde7' },
+  pos_ran:         { label: 'POS Ran',         color: '#00695c', bg: '#e0f2f1', rowBg: '#eff8f7' },
+  quote_issued:    { label: 'Quote Issued',    color: '#1b5e20', bg: '#e8f5e9', rowBg: '#f1f8e9' },
+  bound:           { label: 'Bound',           color: '#fff',    bg: '#2e7d32', rowBg: '#e8f5e9' },
+  lost:            { label: 'Lost',            color: '#fff',    bg: '#c62828', rowBg: '#ffebee' },
 };
 
 function StatusChip({ status }: { status?: string }) {
@@ -130,13 +131,18 @@ function LeadRow({ lead }: { lead: any }) {
   };
   const closeMenu = () => setMenuAnchor(null);
 
-  const xDate = lead.renewalTargetDate
-    ? new Date(lead.renewalTargetDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })
+  // Triage date (Frank Phase 5): effective date covers both engines
+  // (new purchase = origination + 90d; renewal = x-date). Falls back to x-date.
+  const triageDate = lead.effectiveDate || lead.renewalTargetDate;
+  const xDate = triageDate
+    ? new Date(triageDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })
     : null;
 
-  const xDateUrgent = lead.renewalTargetDate
-    ? (new Date(lead.renewalTargetDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24) <= 30
-    : false;
+  const daysUntil = triageDate
+    ? Math.round((new Date(triageDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    : null;
+
+  const xDateUrgent = daysUntil != null && daysUntil <= 30;
 
   return (
     <Fragment>
@@ -208,13 +214,20 @@ function LeadRow({ lead }: { lead: any }) {
         {/* X-date */}
         <TableCell align="center">
           {xDate ? (
-            <Typography
-              variant="caption"
-              sx={{ fontWeight: xDateUrgent ? 700 : 400, color: xDateUrgent ? '#c62828' : 'text.secondary' }}
-            >
-              {xDate}
-              {xDateUrgent && ' ⚠'}
-            </Typography>
+            <Stack spacing={0}>
+              <Typography
+                variant="caption"
+                sx={{ fontWeight: xDateUrgent ? 700 : 400, color: xDateUrgent ? '#c62828' : 'text.secondary' }}
+              >
+                {xDate}
+                {xDateUrgent && ' ⚠'}
+              </Typography>
+              {daysUntil != null && (
+                <Typography variant="caption" sx={{ fontSize: '0.62rem', lineHeight: 1.1, color: daysUntil < 0 ? '#c62828' : 'text.disabled' }}>
+                  {daysUntil < 0 ? `${Math.abs(daysUntil)}d overdue` : `in ${daysUntil}d`}
+                </Typography>
+              )}
+            </Stack>
           ) : (
             <Typography variant="caption" color="textSecondary">—</Typography>
           )}
@@ -406,9 +419,10 @@ export default function LeadsTable({
             <Select value={filterStatus} label="Status" onChange={(e) => setFilterStatus(e.target.value)}>
               <MenuItem value="">All Statuses</MenuItem>
               <MenuItem value="new">New</MenuItem>
-              <MenuItem value="contacted">Contacted</MenuItem>
-              <MenuItem value="qualified">Qualified</MenuItem>
-              <MenuItem value="quote_sent">Quote Sent</MenuItem>
+              <MenuItem value="rated">Rated</MenuItem>
+              <MenuItem value="indicative_sent">Indicative Sent</MenuItem>
+              <MenuItem value="pos_ran">POS Ran</MenuItem>
+              <MenuItem value="quote_issued">Quote Issued</MenuItem>
               <MenuItem value="bound">Bound</MenuItem>
               <MenuItem value="lost">Lost</MenuItem>
             </Select>
@@ -446,7 +460,7 @@ export default function LeadsTable({
               <TableCell sx={{ fontWeight: 'bold', minWidth: 140 }}>Owner</TableCell>
               <TableCell sx={{ fontWeight: 'bold', minWidth: 160 }}>Address</TableCell>
               <TableCell sx={{ fontWeight: 'bold', minWidth: 120 }}>City / State</TableCell>
-              <TableCell sx={{ fontWeight: 'bold', minWidth: 90 }} align="center">X-Date</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', minWidth: 90 }} align="center">Effective</TableCell>
               <TableCell sx={{ fontWeight: 'bold', minWidth: 120 }}>Pipeline</TableCell>
               <TableCell sx={{ fontWeight: 'bold', minWidth: 120 }}>Carriers</TableCell>
               <TableCell sx={{ fontWeight: 'bold', minWidth: 140 }} align="right">Est. Premium</TableCell>

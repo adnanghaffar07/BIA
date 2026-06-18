@@ -12,20 +12,26 @@ export const PAGINATION = {
   MIN_LIMIT: 1,
 };
 
-// Lead Status Options
+// Lead Status Options (Frank Phase 5). Canonical definitions live in
+// src/types/lead.ts (LEAD_STATUS_OPTIONS / leadStatusLabel) — kept here for
+// any legacy importers.
 export const LEAD_STATUS = {
   NEW: 'new',
-  CONTACTED: 'contacted',
-  QUALIFIED: 'qualified',
-  CONVERTED: 'converted',
+  RATED: 'rated',
+  INDICATIVE_SENT: 'indicative_sent',
+  POS_RAN: 'pos_ran',
+  QUOTE_ISSUED: 'quote_issued',
+  BOUND: 'bound',
   LOST: 'lost',
 };
 
 export const LEAD_STATUS_OPTIONS = [
   { value: LEAD_STATUS.NEW, label: 'New', color: 'info' },
-  { value: LEAD_STATUS.CONTACTED, label: 'Contacted', color: 'warning' },
-  { value: LEAD_STATUS.QUALIFIED, label: 'Qualified', color: 'primary' },
-  { value: LEAD_STATUS.CONVERTED, label: 'Converted', color: 'success' },
+  { value: LEAD_STATUS.RATED, label: 'Rated', color: 'secondary' },
+  { value: LEAD_STATUS.INDICATIVE_SENT, label: 'Indicative Pricing Sent', color: 'warning' },
+  { value: LEAD_STATUS.POS_RAN, label: 'POS Ran', color: 'warning' },
+  { value: LEAD_STATUS.QUOTE_ISSUED, label: 'Quote Issued', color: 'primary' },
+  { value: LEAD_STATUS.BOUND, label: 'Bound', color: 'success' },
   { value: LEAD_STATUS.LOST, label: 'Lost', color: 'error' },
 ];
 

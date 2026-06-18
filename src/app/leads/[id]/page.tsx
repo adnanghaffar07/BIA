@@ -10,6 +10,7 @@ import {
 import Link from 'next/link';
 import { getMissingFields } from '@/services/grade.service';
 import { GRADE_INFO, LeadGrade } from '@/types/grade';
+import { LEAD_STATUS_OPTIONS, leadStatusLabel, CLOSED_STATUSES, LeadStatus } from '@/types/lead';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import HomeIcon from '@mui/icons-material/Home';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -46,11 +47,7 @@ function gradeChipSx(g: string | null) {
 }
 
 function statusLabel(s: string | null) {
-  const map: Record<string, string> = {
-    new: 'New', contacted: 'Contacted', qualified: 'Qualified',
-    quote_sent: 'Quote Sent', bound: 'Bound', lost: 'Lost',
-  };
-  return map[s ?? ''] ?? s ?? 'New';
+  return leadStatusLabel(s);
 }
 
 function coastChip(exposure: string | null) {
@@ -216,6 +213,11 @@ export default function LeadDetailPage() {
         effectiveDate: l.effectiveDate ? String(l.effectiveDate).slice(0, 10) : '',
         floodZoneType: l.floodZoneType ?? '',
         floodZoneManual: !!l.floodZoneManual,
+        travelersPremium: l.travelersPremium != null ? String(l.travelersPremium) : '',
+        plymouthPremium: l.plymouthPremium != null ? String(l.plymouthPremium) : '',
+        doNotRevisit: !!l.doNotRevisit,
+        phone1: l.phone1 ?? '',
+        email1: l.email1 ?? '',
       });
     }
     setLoading(false);
@@ -238,6 +240,18 @@ export default function LeadDetailPage() {
   useEffect(() => { prefetchNextLead(); }, [prefetchNextLead]);
 
   const save = async (andNext = false) => {
+    // Close-out gate (Frank Phase 5): a lead can't be marked LOST without an
+    // explanation (reason + stage) AND a revisit election (revisit OR do-not-revisit).
+    if (status === 'lost') {
+      if (!lostReason || !lostStage) {
+        setSnackbar({ open: true, msg: 'Lost requires a reason and the stage it was lost at.', severity: 'error' });
+        return;
+      }
+      if (!revisitFlag && !extra.doNotRevisit) {
+        setSnackbar({ open: true, msg: 'Close-out: choose "Revisit next year" or "Do Not Revisit" before closing.', severity: 'error' });
+        return;
+      }
+    }
     setSaving(true);
     const bp  = boundPremium     ? parseFloat(boundPremium)     : undefined;
     const pqp = posQuotePremium  ? parseFloat(posQuotePremium)  : undefined;
@@ -300,6 +314,17 @@ export default function LeadDetailPage() {
       // re-enrichment won't overwrite it with the FEMA lookup.
       floodZoneManual: !!extra.floodZoneManual,
       floodZoneType: extra.floodZoneManual ? (extra.floodZoneType || undefined) : undefined,
+      // Phase 5: carrier pricing + auto-assigned (cheaper) carrier
+      travelersPremium: extra.travelersPremium !== '' && extra.travelersPremium != null ? parseFloat(extra.travelersPremium) : undefined,
+      plymouthPremium: extra.plymouthPremium !== '' && extra.plymouthPremium != null ? parseFloat(extra.plymouthPremium) : undefined,
+      assignedCarrier: (() => {
+        const t = parseFloat(extra.travelersPremium); const p = parseFloat(extra.plymouthPremium);
+        const tOk = !isNaN(t); const pOk = !isNaN(p);
+        return tOk && pOk ? (t <= p ? 'travelers' : 'plymouth') : tOk ? 'travelers' : pOk ? 'plymouth' : undefined;
+      })(),
+      doNotRevisit: !!extra.doNotRevisit,
+      phone1: extra.phone1 || undefined,
+      email1: extra.email1 || undefined,
       _createdBy: lead?.producerEmail || undefined,
       _activityNote: producerNote || `Status updated to ${statusLabel(status)}`,
       _activityType: status === 'bound' ? 'bound' : status === 'lost' ? 'lost' : 'status_change',
@@ -430,14 +455,28 @@ export default function LeadDetailPage() {
           <Grid container spacing={2.5}>
 
             <Grid size={{ xs: 12, lg: 6 }}>
+            <Section title="Insured Information">
+              <Row label="Insured Named" value={ownerName} />
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1, mb: 1 }}>
+                <TextField label="Co-Insured First" size="small" fullWidth value={extra.owner2FirstName ?? ''} onChange={(e) => setEx('owner2FirstName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="spouse / co-borrower" />
+                <TextField label="Co-Insured Last" size="small" fullWidth value={extra.owner2LastName ?? ''} onChange={(e) => setEx('owner2LastName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+              </Stack>
+              <Box sx={{ mb: 1 }}>
+                <FeatureSelect label="Married / Single" value={extra.maritalStatus ?? ''} onChange={(v) => setEx('maritalStatus', v)}
+                  options={[['married', 'Married (M)'], ['single', 'Single (S)']]} />
+              </Box>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 1 }}>
+                <TextField label="Phone" size="small" fullWidth value={extra.phone1 ?? ''} onChange={(e) => setEx('phone1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="skip-trace / call" />
+                <TextField label="Email" size="small" fullWidth value={extra.email1 ?? ''} onChange={(e) => setEx('email1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+              </Stack>
+              <Divider sx={{ my: 1 }} />
+              <Row label="Owner Occupied" value={lead.ownerOccupied ? 'Yes' : 'No'} />
+              <Row label="Absentee Owner" value={lead.absenteeOwner ? 'Yes' : 'No'} />
+            </Section>
+            </Grid>
+
+            <Grid size={{ xs: 12, lg: 6 }}>
             <Section title="Property Details">
-              <Row label="Owner" value={ownerName} />
-              {(lead.owner2FirstName || lead.owner2LastName) && (
-                <Row label="Co-Owner" value={`${lead.owner2FirstName ?? ''} ${lead.owner2LastName ?? ''}`.trim()} />
-              )}
-              {lead.maritalStatus && (
-                <Row label="Marital Status" value={lead.maritalStatus === 'married' ? 'Married' : lead.maritalStatus === 'single' ? 'Single' : '—'} />
-              )}
               <Row label="Property Type" value={lead.propertyType} />
               <Row label="Land Use" value={lead.landUse} />
               <Row label="Year Built" value={lead.yearBuilt} />
@@ -508,15 +547,40 @@ export default function LeadDetailPage() {
             </Grid>
 
             <Grid size={{ xs: 12, lg: 6 }}>
-            <Section title="Indicative Premium">
-              <Row label="Low Estimate" value={fmtCurrency(lead.lowPremium)} />
-              <Row label="Expected" value={
-                <Typography variant="body2" color="primary" sx={{ fontWeight: 700 }}>
-                  {fmtCurrency(lead.expectedPremium)}
-                </Typography>
-              } />
-              <Row label="High Estimate" value={fmtCurrency(lead.highPremium)} />
-              <Row label="Confidence" value={lead.pricingConfidence != null ? `${lead.pricingConfidence}%` : undefined} />
+            <Section title="Carrier Pricing (indicative)">
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                Enter the indicative band you ran in each portal. The cheaper carrier is auto-assigned to this lead.
+              </Typography>
+              {(() => {
+                const t = parseFloat(extra.travelersPremium); const p = parseFloat(extra.plymouthPremium);
+                const tOk = !isNaN(t); const pOk = !isNaN(p);
+                const winner = tOk && pOk ? (t <= p ? 'travelers' : 'plymouth') : tOk ? 'travelers' : pOk ? 'plymouth' : null;
+                const boxSx = (who: string) => ({
+                  p: 1, borderRadius: 1, border: '1px solid',
+                  borderColor: winner === who ? 'success.main' : 'divider',
+                  bgcolor: winner === who ? 'success.50' : 'transparent',
+                });
+                return (
+                  <Stack spacing={1.25}>
+                    <Box sx={boxSx('travelers')}>
+                      <TextField label={`Travelers $${winner === 'travelers' ? '  ✓ assigned' : ''}`} type="number" size="small" fullWidth
+                        value={extra.travelersPremium ?? ''} onChange={(e) => setEx('travelersPremium', e.target.value)}
+                        slotProps={{ inputLabel: { shrink: true } }} placeholder="e.g. 2800" />
+                    </Box>
+                    <Box sx={boxSx('plymouth')}>
+                      <TextField label={`Plymouth Rock $${winner === 'plymouth' ? '  ✓ assigned' : ''}`} type="number" size="small" fullWidth
+                        value={extra.plymouthPremium ?? ''} onChange={(e) => setEx('plymouthPremium', e.target.value)}
+                        slotProps={{ inputLabel: { shrink: true } }} placeholder="e.g. 2500" />
+                    </Box>
+                    {winner && (
+                      <Alert severity="success" sx={{ py: 0, fontSize: 12 }}>
+                        Assigned carrier: <strong>{winner === 'travelers' ? 'Travelers' : 'Plymouth Rock'}</strong>
+                        {tOk && pOk && t !== p && ` — cheaper by ${fmtCurrency(Math.abs(t - p))}`}
+                      </Alert>
+                    )}
+                  </Stack>
+                );
+              })()}
               {varDiff != null && (
                 <>
                   <Divider sx={{ my: 1 }} />
@@ -535,7 +599,8 @@ export default function LeadDetailPage() {
             </Grid>
 
             <Grid size={{ xs: 12, lg: 6 }}>
-            <Section title="Coastal Exposure">
+            <Section title="Flood & Coastal Risk">
+              {/* Coastal exposure */}
               <Stack direction="row" sx={{ alignItems: 'center', mb: 1 }} spacing={1}>
                 <WavesIcon color="action" fontSize="small" />
                 {coastChip(lead.coastExposure)}
@@ -547,23 +612,16 @@ export default function LeadDetailPage() {
                   Wind/hail deductibles likely apply. Confirm at binding.
                 </Alert>
               ) : null}
-            </Section>
-            </Grid>
 
-            <Grid size={{ xs: 12, lg: 6 }}>
-            <Section title="Pipeline">
-              <Row label="Engine" value={lead.engine === 1 ? '1 — New Purchase' : lead.engine === 2 ? '2 — Renewal/Win-Back' : undefined} />
-              <Row label="Recording Date" value={lead.recordingDate} />
-              <Row label="Renewal Target" value={lead.renewalTargetDate ? new Date(lead.renewalTargetDate).toLocaleDateString() : undefined} />
-              <Row label="Owner Occupied" value={lead.ownerOccupied ? 'Yes' : 'No'} />
-              <Row label="Absentee Owner" value={lead.absenteeOwner ? 'Yes' : 'No'} />
+              <Divider sx={{ my: 1.5 }} />
+
+              {/* FEMA flood zone */}
               <Row label="FEMA Flood Zone" value={
                 lead.floodZoneType
                   ? `${lead.floodZoneType}${lead.floodSfha ? ' · SFHA' : ''}${lead.floodZoneManual ? ' · manual' : ''}`
                   : (lead.floodCheckedAt ? 'X — minimal' : '— (not checked)')
               } />
               {lead.floodZoneSubtype && <Row label="Zone Detail" value={lead.floodZoneSubtype} />}
-              <Row label="Effective Date" value={lead.effectiveDate ? new Date(lead.effectiveDate).toLocaleDateString() : undefined} />
               <Box sx={{ mt: 0.75 }}>
                 <Link href="https://msc.fema.gov/portal/home" target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: '#1565c0', fontWeight: 600 }}>
                   Verify on FEMA map ↗
@@ -577,13 +635,32 @@ export default function LeadDetailPage() {
               {floodCapNote && (
                 <Alert severity={floodCapNote.severity} sx={{ mt: 1, py: 0, fontSize: 12 }}>{floodCapNote.text}</Alert>
               )}
+              <Divider sx={{ my: 1 }} />
+              <FormControlLabel
+                control={<Checkbox size="small" checked={!!extra.floodZoneManual} onChange={(e) => setEx('floodZoneManual', e.target.checked)} />}
+                label={<Typography variant="body2">Manually override FEMA flood zone</Typography>}
+              />
+              {extra.floodZoneManual && (
+                <FeatureSelect label="Flood Zone" value={extra.floodZoneType ?? ''} onChange={(v) => setEx('floodZoneType', v)}
+                  options={[['X', 'X — minimal risk'], ['X500', 'X (shaded) — 0.2% / moderate'], ['AE', 'AE — SFHA'], ['A', 'A — SFHA'], ['AH', 'AH — SFHA'], ['AO', 'AO — SFHA'], ['AR', 'AR — SFHA'], ['VE', 'VE — coastal SFHA'], ['V', 'V — coastal SFHA']]} />
+              )}
+            </Section>
+            </Grid>
+
+            <Grid size={{ xs: 12, lg: 6 }}>
+            <Section title="Pipeline">
+              <Row label="Engine" value={lead.engine === 1 ? '1 — New Purchase' : lead.engine === 2 ? '2 — Renewal/Win-Back' : undefined} />
+              <Row label="Recording Date" value={lead.recordingDate} />
+              <Row label="Renewal Target" value={lead.renewalTargetDate ? new Date(lead.renewalTargetDate).toLocaleDateString() : undefined} />
+              <Row label="Effective Date" value={lead.effectiveDate ? new Date(lead.effectiveDate).toLocaleDateString() : undefined} />
             </Section>
             </Grid>
 
             <Grid size={{ xs: 12 }}>
-            <Section title="Home Features (Travelers rating)">
+            <Section title="Property Details — Home Features & QC (editable)">
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-                Source from a listing (Zillow / Realtor.com) or confirm on the call. Heat defaults to gas for NJ.
+                All editable for QC — flag REAPI inaccuracies or record info confirmed on the call.
+                Source from a listing (Zillow / Realtor.com). Heat defaults to gas for NJ.
               </Typography>
               <Grid container spacing={1.5}>
                 <Grid size={{ xs: 12, sm: 6, md: 4 }}>
@@ -649,21 +726,33 @@ export default function LeadDetailPage() {
               </Grid>
 
               <Divider textAlign="left" sx={{ my: 1.5 }}>
-                <Typography variant="caption" color="text.secondary">FLOOD ZONE (FEMA NFHL)</Typography>
+                <Typography variant="caption" color="text.secondary">ROOF</Typography>
               </Divider>
-              <Stack spacing={1}>
-                <Typography variant="caption" color="text.secondary">
-                  Auto-sourced from FEMA by coordinates. Override only if you verified a different zone on the FEMA map.
-                </Typography>
-                <FormControlLabel
-                  control={<Checkbox size="small" checked={!!extra.floodZoneManual} onChange={(e) => setEx('floodZoneManual', e.target.checked)} />}
-                  label={<Typography variant="body2">Manually override FEMA flood zone</Typography>}
-                />
-                {extra.floodZoneManual && (
-                  <FeatureSelect label="Flood Zone" value={extra.floodZoneType ?? ''} onChange={(v) => setEx('floodZoneType', v)}
-                    options={[['X', 'X — minimal risk'], ['X500', 'X (shaded) — 0.2% / moderate'], ['AE', 'AE — SFHA'], ['A', 'A — SFHA'], ['AH', 'AH — SFHA'], ['AO', 'AO — SFHA'], ['AR', 'AR — SFHA'], ['VE', 'VE — coastal SFHA'], ['V', 'V — coastal SFHA']]} />
-                )}
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                <TextField label="Roof Year" type="number" value={roofYear} onChange={(e) => setRoofYear(e.target.value)} size="small" fullWidth placeholder="e.g. 2019" slotProps={{ inputLabel: { shrink: true } }} />
+                <FormControl size="small" fullWidth>
+                  <InputLabel>Roof Type</InputLabel>
+                  <Select value={roofType} label="Roof Type" onChange={(e) => setRoofType(e.target.value)}>
+                    <MenuItem value="">Unknown</MenuItem>
+                    <MenuItem value="Asphalt Shingle">Asphalt Shingle</MenuItem>
+                    <MenuItem value="Architectural Shingle">Architectural Shingle</MenuItem>
+                    <MenuItem value="Metal (Standing Seam)">Metal (Standing Seam)</MenuItem>
+                    <MenuItem value="Slate">Slate</MenuItem>
+                    <MenuItem value="Flat Metal">Flat Metal ⚠</MenuItem>
+                    <MenuItem value="Tile">Tile ⚠</MenuItem>
+                    <MenuItem value="Wood Shake">Wood Shake ⚠</MenuItem>
+                    <MenuItem value="Other">Other</MenuItem>
+                  </Select>
+                </FormControl>
               </Stack>
+              <Typography variant="caption" color="text.secondary">
+                Confirming roof year clears the B/C roof-age gate (homes &gt;15 yrs). Flat-metal, tile and wood are carrier-ineligible.
+              </Typography>
+              {['Flat Metal', 'Tile', 'Wood Shake'].includes(roofType) && (
+                <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>
+                  High-risk roof type — both carriers ineligible (grade D).
+                </Alert>
+              )}
             </Section>
             </Grid>
 
@@ -763,58 +852,17 @@ export default function LeadDetailPage() {
                   </Typography>
                 )}
 
-                <Divider textAlign="left">
-                  <Typography variant="caption" color="text.secondary">ROOF (confirm on call)</Typography>
-                </Divider>
-
-                <Stack direction="row" spacing={1}>
-                  <TextField
-                    label="Roof Year"
-                    type="number"
-                    value={roofYear}
-                    onChange={(e) => setRoofYear(e.target.value)}
-                    size="small" fullWidth
-                    placeholder="e.g. 2019"
-                    slotProps={{ inputLabel: { shrink: true } }}
-                  />
-                  <FormControl size="small" fullWidth>
-                    <InputLabel>Roof Type</InputLabel>
-                    <Select value={roofType} label="Roof Type" onChange={(e) => setRoofType(e.target.value)}>
-                      <MenuItem value="">Unknown</MenuItem>
-                      <MenuItem value="Asphalt Shingle">Asphalt Shingle</MenuItem>
-                      <MenuItem value="Architectural Shingle">Architectural Shingle</MenuItem>
-                      <MenuItem value="Metal (Standing Seam)">Metal (Standing Seam)</MenuItem>
-                      <MenuItem value="Slate">Slate</MenuItem>
-                      <MenuItem value="Flat Metal">Flat Metal ⚠</MenuItem>
-                      <MenuItem value="Tile">Tile ⚠</MenuItem>
-                      <MenuItem value="Wood Shake">Wood Shake ⚠</MenuItem>
-                      <MenuItem value="Other">Other</MenuItem>
-                    </Select>
-                  </FormControl>
-                </Stack>
-                <Typography variant="caption" color="text.secondary">
-                  Confirming roof year clears the B/C roof-age gate. Roof type stays “Unknown” until set; flat-metal, tile and wood are carrier-ineligible.
-                </Typography>
-                {['Flat Metal', 'Tile', 'Wood Shake'].includes(roofType) && (
-                  <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>
-                    High-risk roof type — both carriers ineligible (grade D).
-                  </Alert>
-                )}
+                {/* Roof moved to "Property Details — Home Features & QC" (Frank Phase 5) */}
 
                 {/* ── Insured & call-prep: confirm on first contact (Frank Jun-2026) ── */}
                 <Divider textAlign="left">
                   <Typography variant="caption" color="text.secondary">INSURED & CALL PREP (confirm on call)</Typography>
                 </Divider>
+                <Typography variant="caption" color="text.secondary">
+                  Insured names, phone & marital status are in the Insured Information box.
+                </Typography>
 
-                <Stack direction="row" spacing={1}>
-                  <TextField label="Co-Owner First" size="small" fullWidth value={extra.owner2FirstName ?? ''}
-                    onChange={(e) => setEx('owner2FirstName', e.target.value)} placeholder="spouse / co-borrower" slotProps={{ inputLabel: { shrink: true } }} />
-                  <TextField label="Co-Owner Last" size="small" fullWidth value={extra.owner2LastName ?? ''}
-                    onChange={(e) => setEx('owner2LastName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-                </Stack>
-                <FeatureSelect label="Marital Status" value={extra.maritalStatus ?? ''} onChange={(v) => setEx('maritalStatus', v)}
-                  options={[['married', 'Married'], ['single', 'Single']]} />
-                <Stack direction="row" spacing={1}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
                   <TextField label="Owner 1 DOB" type="date" size="small" fullWidth value={extra.owner1Dob ?? ''}
                     onChange={(e) => setEx('owner1Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
                   <TextField label="Owner 2 DOB" type="date" size="small" fullWidth value={extra.owner2Dob ?? ''}
@@ -835,7 +883,7 @@ export default function LeadDetailPage() {
                 <FeatureSelect label="Insurance History" value={extra.insuranceHistory ?? ''} onChange={(v) => setEx('insuranceHistory', v)}
                   options={[['currently_insured', 'Currently insured (assumed)'], ['lapsed', 'Lapsed'], ['new', 'New / first-time']]} />
 
-                <Stack direction="row" spacing={1}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
                   <TextField label="Full Baths" type="number" size="small" fullWidth value={extra.bathroomsFull ?? ''}
                     onChange={(e) => setEx('bathroomsFull', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
                   <TextField label="Half Baths" type="number" size="small" fullWidth value={extra.bathroomsHalf ?? ''}
@@ -848,32 +896,6 @@ export default function LeadDetailPage() {
                 <TextField label="Effective Date" type="date" size="small" fullWidth value={extra.effectiveDate ?? ''}
                   onChange={(e) => setEx('effectiveDate', e.target.value)} slotProps={{ inputLabel: { shrink: true } }}
                   helperText="New purchase ≈ 90 days from sale · Renewal = x-date − 90 days" />
-
-                <Divider />
-
-                <FormControlLabel
-                  control={<Checkbox checked={revisitFlag} onChange={(e) => setRevisitFlag(e.target.checked)} size="small" />}
-                  label={<Typography variant="body2">Revisit later / next year</Typography>}
-                />
-                {revisitFlag && (
-                  <>
-                    <TextField
-                      label="Revisit Date"
-                      type="date"
-                      value={revisitDate}
-                      onChange={(e) => setRevisitDate(e.target.value)}
-                      size="small" fullWidth
-                      slotProps={{ inputLabel: { shrink: true } }}
-                    />
-                    <TextField
-                      label="Revisit Note"
-                      value={revisitNote}
-                      onChange={(e) => setRevisitNote(e.target.value)}
-                      size="small" fullWidth multiline rows={2}
-                      placeholder="Why revisit? e.g. renewal X-date, price not competitive this year"
-                    />
-                  </>
-                )}
               </Stack>
             </Section>
 
@@ -882,12 +904,9 @@ export default function LeadDetailPage() {
                 <FormControl size="small" fullWidth>
                   <InputLabel>Lead Status</InputLabel>
                   <Select value={status} label="Lead Status" onChange={(e) => setStatus(e.target.value)}>
-                    <MenuItem value="new">New</MenuItem>
-                    <MenuItem value="contacted">Contacted</MenuItem>
-                    <MenuItem value="qualified">Qualified</MenuItem>
-                    <MenuItem value="quote_sent">Quote Sent</MenuItem>
-                    <MenuItem value="bound">Bound</MenuItem>
-                    <MenuItem value="lost">Lost</MenuItem>
+                    {LEAD_STATUS_OPTIONS.map((o) => (
+                      <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+                    ))}
                   </Select>
                 </FormControl>
 
@@ -1044,6 +1063,31 @@ export default function LeadDetailPage() {
                         We were {parseFloat(competitorPremium) < lead.expectedPremium ? 'higher' : 'lower'} by{' '}
                         {fmtCurrency(Math.abs(parseFloat(competitorPremium) - lead.expectedPremium))} vs our indicative expected
                       </Alert>
+                    )}
+
+                    {/* Mandatory close-out election (Frank Phase 5) */}
+                    <Divider textAlign="left"><Typography variant="caption" color="error" sx={{ fontWeight: 600 }}>CLOSE-OUT *</Typography></Divider>
+                    <FormControl size="small" fullWidth required>
+                      <InputLabel>Revisit election *</InputLabel>
+                      <Select
+                        label="Revisit election *"
+                        value={revisitFlag ? 'revisit' : extra.doNotRevisit ? 'no_revisit' : ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setRevisitFlag(v === 'revisit');
+                          setEx('doNotRevisit', v === 'no_revisit');
+                        }}
+                      >
+                        <MenuItem value="">(select — required to close)</MenuItem>
+                        <MenuItem value="revisit">Revisit later / next year</MenuItem>
+                        <MenuItem value="no_revisit">Do Not Revisit</MenuItem>
+                      </Select>
+                    </FormControl>
+                    {revisitFlag && (
+                      <>
+                        <TextField label="Revisit Date" type="date" value={revisitDate} onChange={(e) => setRevisitDate(e.target.value)} size="small" fullWidth slotProps={{ inputLabel: { shrink: true } }} />
+                        <TextField label="Revisit Note" value={revisitNote} onChange={(e) => setRevisitNote(e.target.value)} size="small" fullWidth multiline rows={2} placeholder="Why revisit? e.g. renewal X-date, price not competitive this year" />
+                      </>
                     )}
                   </>
                 )}

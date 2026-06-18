@@ -43,6 +43,8 @@ const LEAD_COLS = [
   'garageType', 'garageCount', 'sidingType', 'foundationType', 'heatSource', 'feetFromHydrant',
   'burglarAlarm', 'fireAlarm', 'sprinklerSystem', 'smokeDetector', 'waterSensor',
   'autoWaterShutoff', 'lowTempSensor', 'leedCertified', 'effectiveDate',
+  // Phase 5: editable carrier pricing + close-out
+  'travelersPremium', 'plymouthPremium', 'assignedCarrier', 'doNotRevisit',
   'createdAt', 'updatedAt',
 ] as const;
 
@@ -72,6 +74,8 @@ const CRM_ONLY_FIELDS = new Set([
   'garageType', 'garageCount', 'sidingType', 'foundationType', 'heatSource', 'feetFromHydrant',
   'burglarAlarm', 'fireAlarm', 'sprinklerSystem', 'smokeDetector', 'waterSensor',
   'autoWaterShutoff', 'lowTempSensor', 'leedCertified', 'effectiveDate',
+  // Phase 5: producer-entered — never clobber on REAPI re-ingest
+  'travelersPremium', 'plymouthPremium', 'assignedCarrier', 'doNotRevisit',
 ]);
 
 // ─── Value helpers ───────────────────────────────────────────────────────────
@@ -314,7 +318,7 @@ export async function getLeadsFromDb(filters?: {
   // Producer priority queue: sort by x-date proximity (soonest first), nulls last
   // Admin/default: sort by most recently updated
   const orderClause = filters?.orderBy === 'xdate'
-    ? `ORDER BY "renewalTargetDate" ASC NULLS LAST, "createdAt" DESC`
+    ? `ORDER BY COALESCE("effectiveDate"::date, "renewalTargetDate"::date) ASC NULLS LAST, "createdAt" DESC`
     : `ORDER BY "updatedAt" DESC`;
 
   params.push(filters?.limit ?? 100, filters?.offset ?? 0);
@@ -399,6 +403,8 @@ export async function updateLead(
     // FEMA flood (Phase 3a)
     floodZone: boolean; floodZoneType: string; floodZoneSubtype: string;
     floodSfha: boolean; floodZoneManual: boolean; floodCheckedAt: string;
+    // Phase 5: carrier pricing + close-out
+    travelersPremium: number; plymouthPremium: number; assignedCarrier: string; doNotRevisit: boolean;
   }>,
 ): Promise<void> {
   const entries = Object.entries(data).filter(([, v]) => v !== undefined);
@@ -457,17 +463,17 @@ export async function getPipelineSummary() {
       -- Funnel 2 — Producer stages (cumulative from quote-ready)
       COUNT(*) FILTER (
         WHERE "grade" = 'A'
-          AND "status" IN ('contacted','qualified','quote_sent','bound')
+          AND "status" IN ('rated','indicative_sent','pos_ran','quote_issued','bound')
       )                                                                          AS "rightPartyContact",
       COUNT(*) FILTER (
         WHERE "grade" = 'A'
           AND ("authorizationDate" IS NOT NULL
-               OR "status" IN ('qualified','quote_sent','bound'))
+               OR "status" IN ('indicative_sent','pos_ran','quote_issued','bound'))
       )                                                                          AS "authorizedToQuote",
       COUNT(*) FILTER (
         WHERE "grade" = 'A'
           AND ("posQuoteNumber" IS NOT NULL
-               OR "status" IN ('quote_sent','bound'))
+               OR "status" IN ('pos_ran','quote_issued','bound'))
       )                                                                          AS "quotedPos",
       COUNT(*) FILTER (WHERE "status" = 'bound')                                AS bound,
 
@@ -481,7 +487,7 @@ export async function getPipelineSummary() {
       -- Working stock: leads actively in-flight (producer has touched them)
       COUNT(*) FILTER (
         WHERE "grade" = 'A'
-          AND "status" IN ('contacted','qualified','quote_sent')
+          AND "status" IN ('rated','indicative_sent','pos_ran','quote_issued')
       )                                                                          AS "workingStock",
 
       -- Binds in the last 30 days — the flow denominator for stock/flow ratio

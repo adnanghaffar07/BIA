@@ -71,6 +71,25 @@ export function getRenewalTargetDate(lead: any): Date | null {
 }
 
 /**
+ * Effective date for triage (Frank Phase 5):
+ *   Engine 1 (New Purchase): origination/sale date + 90 days.
+ *   Engine 2 (Renewal): the renewal target date (policy anniversary − 90 days).
+ */
+export function getEffectiveDate(lead: any): Date | null {
+  const engine = lead.engine ?? assignPipelineEngine(lead);
+  if (engine === 2) return getRenewalTargetDate(lead);
+  if (engine !== 1) return null; // unassigned/old leads have no actionable triage date
+
+  const dateStr = lead.currentMortgages?.[0]?.recordingDate || lead.lastSaleDate || lead.recordingDate;
+  if (!dateStr) return null;
+  const base = new Date(dateStr);
+  if (isNaN(base.getTime())) return null;
+  const eff = new Date(base);
+  eff.setDate(eff.getDate() + ENGINE1_DAYS);
+  return eff;
+}
+
+/**
  * Check if an Engine 2 lead is in its active renewal window
  * (i.e., today is on or after the target contact date).
  */

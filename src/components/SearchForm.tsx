@@ -29,9 +29,10 @@ const GRADE_OPTIONS = [
 const STATUS_OPTIONS = [
   { value: '', label: 'All Statuses' },
   { value: 'new', label: 'New' },
-  { value: 'contacted', label: 'Contacted' },
-  { value: 'qualified', label: 'Qualified' },
-  { value: 'quote_sent', label: 'Quote Sent' },
+  { value: 'rated', label: 'Rated' },
+  { value: 'indicative_sent', label: 'Indicative Pricing Sent' },
+  { value: 'pos_ran', label: 'POS Ran' },
+  { value: 'quote_issued', label: 'Quote Issued' },
   { value: 'bound', label: 'Bound' },
   { value: 'lost', label: 'Lost' },
 ];

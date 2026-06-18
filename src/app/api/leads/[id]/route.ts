@@ -43,19 +43,21 @@ export async function PUT(
 
     const now = new Date();
 
-    // Auto-stamp: firstRpcAt — set once when status first moves to 'contacted'
+    // Auto-stamp: firstRpcAt — set once when the lead first moves off 'new'
+    // (producer engagement = enters the active queue, Frank Phase 5).
     if (
-      updateData.status === 'contacted' &&
+      updateData.status &&
+      updateData.status !== 'new' &&
       !existing.firstRpcAt &&
       existing.status === 'new'
     ) {
       updateData.firstRpcAt = now;
     }
 
-    // Auto-increment: contactAttempts when producer logs a contact event
+    // Auto-increment: contactAttempts on each producer-stage transition
     if (
       updateData.status &&
-      ['contacted', 'qualified'].includes(updateData.status) &&
+      ['rated', 'indicative_sent', 'pos_ran', 'quote_issued'].includes(updateData.status) &&
       updateData.status !== existing.status
     ) {
       updateData.contactAttempts = (existing.contactAttempts ?? 0) + 1;

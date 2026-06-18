@@ -36,13 +36,39 @@ export type PipelineEngine = 1 | 2;
 
 export type LeadGradeValue = 'A' | 'B' | 'C' | 'D';
 
+// Frank Phase 5 workflow: NEW → RATED → INDICATIVE PRICING SENT → POS RAN → QUOTE ISSUED → BOUND/LOST
 export type LeadStatus =
   | 'new'
-  | 'contacted'
-  | 'qualified'
-  | 'quote_sent'
+  | 'rated'
+  | 'indicative_sent'
+  | 'pos_ran'
+  | 'quote_issued'
   | 'bound'
   | 'lost';
+
+/** Single source of truth for status display + workflow grouping (Frank Phase 5). */
+export const LEAD_STATUS_OPTIONS: Array<{
+  value: LeadStatus;
+  label: string;
+  color: 'info' | 'warning' | 'primary' | 'secondary' | 'success' | 'error';
+}> = [
+  { value: 'new',             label: 'New',                     color: 'info' },
+  { value: 'rated',           label: 'Rated',                   color: 'secondary' },
+  { value: 'indicative_sent', label: 'Indicative Pricing Sent', color: 'warning' },
+  { value: 'pos_ran',         label: 'POS Ran',                 color: 'warning' },
+  { value: 'quote_issued',    label: 'Quote Issued',            color: 'primary' },
+  { value: 'bound',           label: 'Bound',                   color: 'success' },
+  { value: 'lost',            label: 'Lost',                    color: 'error' },
+];
+
+export function leadStatusLabel(s: string | null | undefined): string {
+  return LEAD_STATUS_OPTIONS.find((o) => o.value === s)?.label ?? 'New';
+}
+
+/** Producer-engaged statuses (past 'new', not yet closed) — these belong in the queue. */
+export const ACTIVE_PRODUCER_STATUSES: LeadStatus[] = ['rated', 'indicative_sent', 'pos_ran', 'quote_issued'];
+/** Closed / terminal statuses. */
+export const CLOSED_STATUSES: LeadStatus[] = ['bound', 'lost'];
 
 export type LostReason =
   | 'price'
@@ -249,6 +275,12 @@ export interface Lead {
 
   // Effective date — tied to the new-purchase / renewal 90-day logic
   effectiveDate?: string;
+
+  // ─── Frank Phase 5: editable carrier pricing + close-out ────────────────────
+  travelersPremium?: number;   // producer-entered Travelers indicative $
+  plymouthPremium?: number;    // producer-entered Plymouth Rock indicative $
+  assignedCarrier?: 'travelers' | 'plymouth'; // the cheaper / front-running carrier
+  doNotRevisit?: boolean;      // close-out: explicitly do NOT revisit next year
 
   // Manual grade override — BIA staff can upgrade/downgrade with a comment (§2, §11)
   manualGrade?: LeadGradeValue;

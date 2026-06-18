@@ -4,6 +4,7 @@ import { calculateCoastDistance } from './coastDistance.service';
 import { calculateLeadGrade } from './grade.service';
 import { calculateIndicativePremium } from './pricing.service';
 import { getFemaFloodZone } from './femaFlood.service';
+import { getEffectiveDate } from './pipeline.service';
 import { updateLead } from './storage.service';
 
 /**
@@ -70,6 +71,13 @@ export async function enrichLead(lead: any): Promise<void> {
     const pricing = calculateIndicativePremium(mappedLead);
     const coast = calculateCoastDistance(mappedLead.latitude, mappedLead.longitude);
 
+    // Effective date for triage — auto-compute if a producer hasn't set one.
+    const effPatch: Record<string, any> = {};
+    if (!lead.effectiveDate) {
+      const eff = getEffectiveDate(mappedLead);
+      if (eff) effPatch.effectiveDate = eff.toISOString().slice(0, 10);
+    }
+
     await updateLead(propertyId, {
       grade,
       travelersEligible: eligibility.travelers.status,
@@ -85,6 +93,7 @@ export async function enrichLead(lead: any): Promise<void> {
         coastExposure: coast.exposure,
       }),
       ...floodPatch,
+      ...effPatch,
     });
   } catch (err) {
     console.error(`[enrichment] Failed to enrich lead ${lead.propertyId}:`, err);

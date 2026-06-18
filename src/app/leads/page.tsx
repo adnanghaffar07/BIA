@@ -65,15 +65,22 @@ export default function LeadsPage() {
   };
 
   const handleSearch = (newFilters: LeadFilters) => {
+    // Engine is filtered client-side by the pipeline tabs (so the tab counts stay
+    // correct against the full set). The top engine toggle just drives the active
+    // tab; grade / status / size are the server-side filters.
+    setActiveTab(
+      newFilters.engine === 1 ? 'engine1' :
+      newFilters.engine === 2 ? 'engine2' : 'all'
+    );
     setFilters(newFilters);
-    fetchLeads(newFilters);
+    const serverFilters: LeadFilters = { ...newFilters };
+    delete serverFilters.engine;
+    fetchLeads(serverFilters);
   };
 
-  // When engine tab changes, re-fetch with same filters but new engine
+  // Tab switching is purely client-side on the already-loaded allLeads.
   const handleTabChange = (_e: React.SyntheticEvent, v: TabValue) => {
     setActiveTab(v);
-    // Only re-fetch if we are currently applying an engine filter in SearchForm
-    // Tab switching is purely client-side on the already-loaded allLeads
   };
 
   // Filter leads by pipeline engine for tabs
