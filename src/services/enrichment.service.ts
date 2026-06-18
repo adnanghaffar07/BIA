@@ -3,6 +3,7 @@ import { checkCarrierEligibility } from './carrier.service';
 import { calculateCoastDistance } from './coastDistance.service';
 import { calculateLeadGrade } from './grade.service';
 import { calculateIndicativePremium } from './pricing.service';
+import { getFemaFloodZone } from './femaFlood.service';
 import { updateLead } from './storage.service';
 
 /**
@@ -39,6 +40,29 @@ export async function enrichLead(lead: any): Promise<void> {
     };
 
     const eligibility = checkCarrierEligibility(mappedLead);
+
+    // FEMA NFHL flood lookup (authoritative). Skip when a producer has manually
+    // overridden the zone — never clobber a manual entry. Failures are swallowed
+    // inside getFemaFloodZone, so this never breaks enrichment.
+    let floodPatch: Record<string, any> = {};
+    if (!(lead.floodZoneManual === true)) {
+      const fema = await getFemaFloodZone(mappedLead.latitude, mappedLead.longitude);
+      if (fema) {
+        // Reflect onto mappedLead so the grade computation sees fresh flood data.
+        mappedLead.floodZoneType = fema.zone ?? undefined;
+        (mappedLead as any).floodZoneSubtype = fema.subtype ?? undefined;
+        (mappedLead as any).floodSfha = fema.sfha;
+        mappedLead.floodZone = fema.sfha;
+        floodPatch = {
+          floodZone: fema.sfha,
+          floodZoneType: fema.zone ?? undefined,
+          floodZoneSubtype: fema.subtype ?? undefined,
+          floodSfha: fema.sfha,
+          floodCheckedAt: new Date().toISOString(),
+        };
+      }
+    }
+
     // Honor a producer's manual grade override — never clobber it with the
     // computed grade on re-enrichment (§2/§11 real-time upgrade/downgrade).
     const computedGrade = calculateLeadGrade(mappedLead, eligibility);
@@ -60,6 +84,7 @@ export async function enrichLead(lead: any): Promise<void> {
         coastDistanceMiles: coast.distanceMiles,
         coastExposure: coast.exposure,
       }),
+      ...floodPatch,
     });
   } catch (err) {
     console.error(`[enrichment] Failed to enrich lead ${lead.propertyId}:`, err);
@@ -127,6 +152,9 @@ export async function reEnrichLead(dbLead: any): Promise<any> {
     reo: dbLead.reo ?? undefined,
     floodZone: dbLead.floodZone ?? undefined,
     floodZoneType: dbLead.floodZoneType || undefined,
+    floodZoneSubtype: dbLead.floodZoneSubtype || undefined,
+    floodSfha: dbLead.floodSfha ?? undefined,
+    floodZoneManual: dbLead.floodZoneManual ?? undefined,
     pool: dbLead.pool ?? undefined,
     latitude: dbLead.latitude ? parseFloat(dbLead.latitude) : undefined,
     longitude: dbLead.longitude ? parseFloat(dbLead.longitude) : undefined,

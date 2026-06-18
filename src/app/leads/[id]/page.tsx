@@ -93,6 +93,33 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+// Compact labelled <Select> for the editable Home-Features / confirm-on-call forms.
+// `options` are [value, label] tuples; an "Unknown" (empty) choice is always first.
+function FeatureSelect({ label, value, onChange, options, unknownLabel = 'Unknown' }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<[string, string]>;
+  unknownLabel?: string;
+}) {
+  return (
+    <FormControl size="small" fullWidth>
+      <InputLabel>{label}</InputLabel>
+      <Select value={value ?? ''} label={label} onChange={(e) => onChange(e.target.value)}>
+        <MenuItem value=""><em>{unknownLabel}</em></MenuItem>
+        {options.map(([v, l]) => <MenuItem key={v} value={v}>{l}</MenuItem>)}
+      </Select>
+    </FormControl>
+  );
+}
+
+// Travelers Q#7 restricted dog breeds — confirmed by a BIA employee on first contact.
+const RESTRICTED_DOG_BREEDS = [
+  'Akita', 'Alaskan Malamute', 'American Bull Terrier', 'American Staffordshire Terrier',
+  'Mastiff', 'Chow Chow', 'Doberman Pinscher', 'Pit Bull', 'Presa Canario',
+  'Rottweiler', 'Staffordshire Bull Terrier', 'Wolf Hybrid',
+];
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function LeadDetailPage() {
@@ -130,6 +157,9 @@ export default function LeadDetailPage() {
   // Roof confirmation (year clears the B/C roof-age gate; type drives carrier eligibility)
   const [roofYear, setRoofYear] = useState('');
   const [roofType, setRoofType] = useState('');
+  // Frank Jun-2026: dual insureds / DOB / confirm-on-call / home features (single bag)
+  const [extra, setExtra] = useState<Record<string, any>>({});
+  const setEx = (k: string, v: any) => setExtra((p) => ({ ...p, [k]: v }));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -158,6 +188,35 @@ export default function LeadDetailPage() {
       setCompetitorPremium(l.competitorPremium != null ? String(l.competitorPremium) : '');
       setRoofYear(l.roofYear != null ? String(l.roofYear) : '');
       setRoofType(l.roofType ?? '');
+      setExtra({
+        owner2FirstName: l.owner2FirstName ?? '',
+        owner2LastName: l.owner2LastName ?? '',
+        maritalStatus: l.maritalStatus ?? '',
+        owner1Dob: l.owner1Dob ? String(l.owner1Dob).slice(0, 10) : '',
+        owner2Dob: l.owner2Dob ? String(l.owner2Dob).slice(0, 10) : '',
+        dogBreed: l.dogBreed ?? '',
+        insuranceHistory: l.insuranceHistory ?? 'currently_insured', // assumed valid until call
+        heatingRenovatedYear: l.heatingRenovatedYear != null ? String(l.heatingRenovatedYear) : '',
+        bathroomsFull: l.bathroomsFull != null ? String(l.bathroomsFull) : '',
+        bathroomsHalf: l.bathroomsHalf != null ? String(l.bathroomsHalf) : '',
+        garageType: l.garageType ?? '',
+        garageCount: l.garageCount != null ? String(l.garageCount) : '',
+        sidingType: l.sidingType ?? '',
+        foundationType: l.foundationType ?? '',
+        heatSource: l.heatSource ?? 'gas', // NJ default
+        feetFromHydrant: l.feetFromHydrant != null ? String(l.feetFromHydrant) : '',
+        burglarAlarm: l.burglarAlarm ?? '',
+        fireAlarm: l.fireAlarm ?? '',
+        sprinklerSystem: !!l.sprinklerSystem,
+        smokeDetector: l.smokeDetector ?? '',
+        waterSensor: l.waterSensor ?? '',
+        autoWaterShutoff: l.autoWaterShutoff ?? '',
+        lowTempSensor: l.lowTempSensor ?? '',
+        leedCertified: !!l.leedCertified,
+        effectiveDate: l.effectiveDate ? String(l.effectiveDate).slice(0, 10) : '',
+        floodZoneType: l.floodZoneType ?? '',
+        floodZoneManual: !!l.floodZoneManual,
+      });
     }
     setLoading(false);
   }, [id]);
@@ -211,6 +270,36 @@ export default function LeadDetailPage() {
       // Roof confirmation (producer-entered). Empty roof type → left as 'Unknown'.
       roofYear: roofYear ? parseInt(roofYear, 10) : undefined,
       roofType: roofType || undefined,
+      // Frank Jun-2026: dual insureds / DOB / confirm-on-call / home features
+      owner2FirstName: extra.owner2FirstName || undefined,
+      owner2LastName: extra.owner2LastName || undefined,
+      maritalStatus: extra.maritalStatus || undefined,
+      owner1Dob: extra.owner1Dob || undefined,
+      owner2Dob: extra.owner2Dob || undefined,
+      dogBreed: extra.dogBreed || undefined,
+      insuranceHistory: extra.insuranceHistory || undefined,
+      heatingRenovatedYear: extra.heatingRenovatedYear ? parseInt(extra.heatingRenovatedYear, 10) : undefined,
+      bathroomsFull: extra.bathroomsFull !== '' && extra.bathroomsFull != null ? parseInt(extra.bathroomsFull, 10) : undefined,
+      bathroomsHalf: extra.bathroomsHalf !== '' && extra.bathroomsHalf != null ? parseInt(extra.bathroomsHalf, 10) : undefined,
+      garageType: extra.garageType || undefined,
+      garageCount: extra.garageCount !== '' && extra.garageCount != null ? parseInt(extra.garageCount, 10) : undefined,
+      sidingType: extra.sidingType || undefined,
+      foundationType: extra.foundationType || undefined,
+      heatSource: extra.heatSource || undefined,
+      feetFromHydrant: extra.feetFromHydrant !== '' && extra.feetFromHydrant != null ? parseInt(extra.feetFromHydrant, 10) : undefined,
+      burglarAlarm: extra.burglarAlarm || undefined,
+      fireAlarm: extra.fireAlarm || undefined,
+      sprinklerSystem: !!extra.sprinklerSystem,
+      smokeDetector: extra.smokeDetector || undefined,
+      waterSensor: extra.waterSensor || undefined,
+      autoWaterShutoff: extra.autoWaterShutoff || undefined,
+      lowTempSensor: extra.lowTempSensor || undefined,
+      leedCertified: !!extra.leedCertified,
+      effectiveDate: extra.effectiveDate || undefined,
+      // FEMA flood override (Phase 3a): when manual, send the zone + flag so
+      // re-enrichment won't overwrite it with the FEMA lookup.
+      floodZoneManual: !!extra.floodZoneManual,
+      floodZoneType: extra.floodZoneManual ? (extra.floodZoneType || undefined) : undefined,
       _createdBy: lead?.producerEmail || undefined,
       _activityNote: producerNote || `Status updated to ${statusLabel(status)}`,
       _activityType: status === 'bound' ? 'bound' : status === 'lost' ? 'lost' : 'status_change',
@@ -278,6 +367,16 @@ export default function LeadDetailPage() {
   const address = `${lead.addressStreet}, ${lead.addressCity}, ${lead.addressState} ${lead.addressZip}`;
   const ownerName = [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—';
 
+  // Flood grade-cap signal (Frank Jun-2026) — mirrors floodZoneGradeCap() in grade.service.
+  const floodZ = String(lead.floodZoneType ?? '').trim().toUpperCase();
+  const floodSub = String(lead.floodZoneSubtype ?? '').toUpperCase();
+  const floodCapNote: { severity: 'error' | 'warning'; text: string } | null =
+    (lead.floodSfha === true || /^(A|V)/.test(floodZ))
+      ? { severity: 'error', text: `High-risk SFHA flood zone ${lead.floodZoneType || ''} — downgraded to D for Travelers & Plymouth.` }
+      : (floodZ === 'X500' || floodZ.includes('0.2') || floodSub.includes('0.2') || floodSub.includes('SHADED'))
+        ? { severity: 'warning', text: 'Moderate (shaded Zone X) flood — grade capped at C.' }
+        : null;
+
   const varDiff = lead.boundPremium && lead.expectedPremium
     ? lead.boundPremium - lead.expectedPremium
     : null;
@@ -333,11 +432,21 @@ export default function LeadDetailPage() {
             <Grid size={{ xs: 12, lg: 6 }}>
             <Section title="Property Details">
               <Row label="Owner" value={ownerName} />
+              {(lead.owner2FirstName || lead.owner2LastName) && (
+                <Row label="Co-Owner" value={`${lead.owner2FirstName ?? ''} ${lead.owner2LastName ?? ''}`.trim()} />
+              )}
+              {lead.maritalStatus && (
+                <Row label="Marital Status" value={lead.maritalStatus === 'married' ? 'Married' : lead.maritalStatus === 'single' ? 'Single' : '—'} />
+              )}
               <Row label="Property Type" value={lead.propertyType} />
               <Row label="Land Use" value={lead.landUse} />
               <Row label="Year Built" value={lead.yearBuilt} />
               <Row label="Sq Ft" value={lead.squareFeet ? Number(lead.squareFeet).toLocaleString() : undefined} />
-              <Row label="Bedrooms / Bath" value={`${lead.bedrooms ?? '—'} bd / ${lead.bathrooms ?? '—'} ba`} />
+              <Row label="Bedrooms / Bath" value={
+                (lead.bathroomsFull != null || lead.bathroomsHalf != null)
+                  ? `${lead.bedrooms ?? '—'} bd / ${lead.bathroomsFull ?? 0} full · ${lead.bathroomsHalf ?? 0} half`
+                  : `${lead.bedrooms ?? '—'} bd / ${lead.bathrooms ?? '—'} ba`
+              } />
               <Row label="Stories" value={lead.stories} />
               <Row label="Lot Sq Ft" value={lead.lotSquareFeet ? Number(lead.lotSquareFeet).toLocaleString() : undefined} />
               <Row label="Pool" value={lead.pool ? 'Yes' : 'No'} />
@@ -448,7 +557,113 @@ export default function LeadDetailPage() {
               <Row label="Renewal Target" value={lead.renewalTargetDate ? new Date(lead.renewalTargetDate).toLocaleDateString() : undefined} />
               <Row label="Owner Occupied" value={lead.ownerOccupied ? 'Yes' : 'No'} />
               <Row label="Absentee Owner" value={lead.absenteeOwner ? 'Yes' : 'No'} />
-              <Row label="Flood Zone" value={lead.floodZone ? `Yes — ${lead.floodZoneType ?? ''}` : 'No'} />
+              <Row label="FEMA Flood Zone" value={
+                lead.floodZoneType
+                  ? `${lead.floodZoneType}${lead.floodSfha ? ' · SFHA' : ''}${lead.floodZoneManual ? ' · manual' : ''}`
+                  : (lead.floodCheckedAt ? 'X — minimal' : '— (not checked)')
+              } />
+              {lead.floodZoneSubtype && <Row label="Zone Detail" value={lead.floodZoneSubtype} />}
+              <Row label="Effective Date" value={lead.effectiveDate ? new Date(lead.effectiveDate).toLocaleDateString() : undefined} />
+              <Box sx={{ mt: 0.75 }}>
+                <Link href="https://msc.fema.gov/portal/home" target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: '#1565c0', fontWeight: 600 }}>
+                  Verify on FEMA map ↗
+                </Link>
+                {lead.floodCheckedAt && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                    Auto-checked via FEMA NFHL {new Date(lead.floodCheckedAt).toLocaleDateString()}
+                  </Typography>
+                )}
+              </Box>
+              {floodCapNote && (
+                <Alert severity={floodCapNote.severity} sx={{ mt: 1, py: 0, fontSize: 12 }}>{floodCapNote.text}</Alert>
+              )}
+            </Section>
+            </Grid>
+
+            <Grid size={{ xs: 12 }}>
+            <Section title="Home Features (Travelers rating)">
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+                Source from a listing (Zillow / Realtor.com) or confirm on the call. Heat defaults to gas for NJ.
+              </Typography>
+              <Grid container spacing={1.5}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FeatureSelect label="Garage Type" value={extra.garageType ?? ''} onChange={(v) => setEx('garageType', v)}
+                    options={[['attached', 'Attached'], ['detached', 'Detached'], ['none', 'None']]} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <TextField label="# Garages" type="number" size="small" fullWidth value={extra.garageCount ?? ''}
+                    onChange={(e) => setEx('garageCount', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FeatureSelect label="Foundation" value={extra.foundationType ?? ''} onChange={(v) => setEx('foundationType', v)}
+                    options={[['basement', 'Basement'], ['crawl_space', 'Crawl space'], ['slab', 'Slab']]} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FeatureSelect label="Siding Type" value={extra.sidingType ?? ''} onChange={(v) => setEx('sidingType', v)}
+                    options={[['vinyl', 'Vinyl'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['fiber_cement', 'Fiber cement'], ['aluminum', 'Aluminum'], ['stone', 'Stone'], ['other', 'Other']]} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FeatureSelect label="Primary Heat" value={extra.heatSource ?? 'gas'} onChange={(v) => setEx('heatSource', v)}
+                    options={[['gas', 'Gas'], ['oil', 'Oil'], ['electric', 'Electric'], ['propane', 'Propane'], ['heat_pump', 'Heat pump'], ['other', 'Other']]} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <TextField label="Feet from Hydrant" type="number" size="small" fullWidth value={extra.feetFromHydrant ?? ''}
+                    onChange={(e) => setEx('feetFromHydrant', e.target.value)} placeholder="e.g. 50" slotProps={{ inputLabel: { shrink: true } }} />
+                </Grid>
+              </Grid>
+
+              <Divider textAlign="left" sx={{ my: 1.5 }}>
+                <Typography variant="caption" color="text.secondary">PROTECTIVE DEVICES</Typography>
+              </Divider>
+              <Grid container spacing={1.5}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FeatureSelect label="Burglar Alarm" value={extra.burglarAlarm ?? ''} onChange={(v) => setEx('burglarAlarm', v)}
+                    options={[['local', 'Local'], ['smart', 'Smart'], ['central', 'Central'], ['none', 'None']]} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FeatureSelect label="Fire Alarm" value={extra.fireAlarm ?? ''} onChange={(v) => setEx('fireAlarm', v)}
+                    options={[['local', 'Local'], ['central', 'Central'], ['none', 'None']]} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FeatureSelect label="Smoke Detector" value={extra.smokeDetector ?? ''} onChange={(v) => setEx('smokeDetector', v)}
+                    options={[['regular', 'Regular'], ['smart', 'Smart'], ['none', 'None']]} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FeatureSelect label="Water Sensor" value={extra.waterSensor ?? ''} onChange={(v) => setEx('waterSensor', v)}
+                    options={[['regular', 'Regular'], ['smart', 'Smart'], ['central', 'Central'], ['none', 'None']]} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FeatureSelect label="Auto Water Shutoff" value={extra.autoWaterShutoff ?? ''} onChange={(v) => setEx('autoWaterShutoff', v)}
+                    options={[['regular', 'Regular'], ['smart', 'Smart'], ['none', 'None']]} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FeatureSelect label="Low Temp Sensor" value={extra.lowTempSensor ?? ''} onChange={(v) => setEx('lowTempSensor', v)}
+                    options={[['regular', 'Regular'], ['smart', 'Smart'], ['central', 'Central'], ['none', 'None']]} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FormControlLabel control={<Checkbox size="small" checked={!!extra.sprinklerSystem} onChange={(e) => setEx('sprinklerSystem', e.target.checked)} />} label="Sprinkler System" />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <FormControlLabel control={<Checkbox size="small" checked={!!extra.leedCertified} onChange={(e) => setEx('leedCertified', e.target.checked)} />} label="LEED Certified Home" />
+                </Grid>
+              </Grid>
+
+              <Divider textAlign="left" sx={{ my: 1.5 }}>
+                <Typography variant="caption" color="text.secondary">FLOOD ZONE (FEMA NFHL)</Typography>
+              </Divider>
+              <Stack spacing={1}>
+                <Typography variant="caption" color="text.secondary">
+                  Auto-sourced from FEMA by coordinates. Override only if you verified a different zone on the FEMA map.
+                </Typography>
+                <FormControlLabel
+                  control={<Checkbox size="small" checked={!!extra.floodZoneManual} onChange={(e) => setEx('floodZoneManual', e.target.checked)} />}
+                  label={<Typography variant="body2">Manually override FEMA flood zone</Typography>}
+                />
+                {extra.floodZoneManual && (
+                  <FeatureSelect label="Flood Zone" value={extra.floodZoneType ?? ''} onChange={(v) => setEx('floodZoneType', v)}
+                    options={[['X', 'X — minimal risk'], ['X500', 'X (shaded) — 0.2% / moderate'], ['AE', 'AE — SFHA'], ['A', 'A — SFHA'], ['AH', 'AH — SFHA'], ['AO', 'AO — SFHA'], ['AR', 'AR — SFHA'], ['VE', 'VE — coastal SFHA'], ['V', 'V — coastal SFHA']]} />
+                )}
+              </Stack>
             </Section>
             </Grid>
 
@@ -585,6 +800,54 @@ export default function LeadDetailPage() {
                     High-risk roof type — both carriers ineligible (grade D).
                   </Alert>
                 )}
+
+                {/* ── Insured & call-prep: confirm on first contact (Frank Jun-2026) ── */}
+                <Divider textAlign="left">
+                  <Typography variant="caption" color="text.secondary">INSURED & CALL PREP (confirm on call)</Typography>
+                </Divider>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField label="Co-Owner First" size="small" fullWidth value={extra.owner2FirstName ?? ''}
+                    onChange={(e) => setEx('owner2FirstName', e.target.value)} placeholder="spouse / co-borrower" slotProps={{ inputLabel: { shrink: true } }} />
+                  <TextField label="Co-Owner Last" size="small" fullWidth value={extra.owner2LastName ?? ''}
+                    onChange={(e) => setEx('owner2LastName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+                </Stack>
+                <FeatureSelect label="Marital Status" value={extra.maritalStatus ?? ''} onChange={(v) => setEx('maritalStatus', v)}
+                  options={[['married', 'Married'], ['single', 'Single']]} />
+                <Stack direction="row" spacing={1}>
+                  <TextField label="Owner 1 DOB" type="date" size="small" fullWidth value={extra.owner1Dob ?? ''}
+                    onChange={(e) => setEx('owner1Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+                  <TextField label="Owner 2 DOB" type="date" size="small" fullWidth value={extra.owner2Dob ?? ''}
+                    onChange={(e) => setEx('owner2Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+                </Stack>
+                <Typography variant="caption" color="text.secondary">
+                  DOB + phone drive the Travelers insurance score (phone is a required portal field).
+                </Typography>
+
+                <FeatureSelect label="Dog Breed (restricted)" value={extra.dogBreed ?? ''} onChange={(v) => setEx('dogBreed', v)}
+                  options={[['none', 'None / not restricted'], ...RESTRICTED_DOG_BREEDS.map((b) => [b, b] as [string, string])]} />
+                {extra.dogBreed && extra.dogBreed !== 'none' && (
+                  <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>
+                    Restricted breed (Travelers Q#7) — may impact eligibility. Confirm with underwriting.
+                  </Alert>
+                )}
+
+                <FeatureSelect label="Insurance History" value={extra.insuranceHistory ?? ''} onChange={(v) => setEx('insuranceHistory', v)}
+                  options={[['currently_insured', 'Currently insured (assumed)'], ['lapsed', 'Lapsed'], ['new', 'New / first-time']]} />
+
+                <Stack direction="row" spacing={1}>
+                  <TextField label="Full Baths" type="number" size="small" fullWidth value={extra.bathroomsFull ?? ''}
+                    onChange={(e) => setEx('bathroomsFull', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+                  <TextField label="Half Baths" type="number" size="small" fullWidth value={extra.bathroomsHalf ?? ''}
+                    onChange={(e) => setEx('bathroomsHalf', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+                </Stack>
+
+                <TextField label="Heating Renovated (year)" type="number" size="small" fullWidth value={extra.heatingRenovatedYear ?? ''}
+                  onChange={(e) => setEx('heatingRenovatedYear', e.target.value)} placeholder="e.g. 2018" slotProps={{ inputLabel: { shrink: true } }} />
+
+                <TextField label="Effective Date" type="date" size="small" fullWidth value={extra.effectiveDate ?? ''}
+                  onChange={(e) => setEx('effectiveDate', e.target.value)} slotProps={{ inputLabel: { shrink: true } }}
+                  helperText="New purchase ≈ 90 days from sale · Renewal = x-date − 90 days" />
 
                 <Divider />
 

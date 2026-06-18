@@ -16,7 +16,8 @@ const LEAD_COLS = [
   'owner1LastName', 'owner1FirstName', 'companyName', 'ownerOccupied',
   'corporateOwned', 'absenteeOwner', 'investorBuyer',
   'vacant', 'preForeclosure', 'foreclosure', 'reo', 'highEquity',
-  'floodZone', 'floodZoneType', 'hoa', 'latitude', 'longitude', 'fips', 'apn',
+  'floodZone', 'floodZoneType', 'floodZoneSubtype', 'floodSfha', 'floodZoneManual', 'floodCheckedAt',
+  'hoa', 'latitude', 'longitude', 'fips', 'apn',
   'recordingDate', 'lastUpdateDate', 'skipTraced', 'skipTracedAt',
   'phone1', 'phone2', 'email1', 'email2', 'engine', 'renewalTargetDate', 'grade',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
@@ -36,6 +37,12 @@ const LEAD_COLS = [
   'manualGrade', 'gradeOverrideReason', 'gradeOverrideBy', 'gradeOverrideAt',
   'revisitFlag', 'revisitDate', 'revisitNote',
   'competitorCarrier', 'competitorPremium',
+  // Frank Jun-2026: dual insureds + DOB, confirm-on-call, home features
+  'owner2FirstName', 'owner2LastName', 'maritalStatus', 'owner1Dob', 'owner2Dob',
+  'dogBreed', 'insuranceHistory', 'heatingRenovatedYear', 'bathroomsFull', 'bathroomsHalf',
+  'garageType', 'garageCount', 'sidingType', 'foundationType', 'heatSource', 'feetFromHydrant',
+  'burglarAlarm', 'fireAlarm', 'sprinklerSystem', 'smokeDetector', 'waterSensor',
+  'autoWaterShutoff', 'lowTempSensor', 'leedCertified', 'effectiveDate',
   'createdAt', 'updatedAt',
 ] as const;
 
@@ -57,6 +64,14 @@ const CRM_ONLY_FIELDS = new Set([
   'manualGrade', 'gradeOverrideReason', 'gradeOverrideBy', 'gradeOverrideAt',
   'revisitFlag', 'revisitDate', 'revisitNote',
   'competitorCarrier', 'competitorPremium',
+  // FEMA flood (authoritative source) + manual override — REAPI must never clobber
+  'floodZone', 'floodZoneType', 'floodZoneSubtype', 'floodSfha', 'floodZoneManual', 'floodCheckedAt',
+  // Frank Jun-2026: producer/skip-trace-entered — never clobber on REAPI re-ingest
+  'owner2FirstName', 'owner2LastName', 'maritalStatus', 'owner1Dob', 'owner2Dob',
+  'dogBreed', 'insuranceHistory', 'heatingRenovatedYear', 'bathroomsFull', 'bathroomsHalf',
+  'garageType', 'garageCount', 'sidingType', 'foundationType', 'heatSource', 'feetFromHydrant',
+  'burglarAlarm', 'fireAlarm', 'sprinklerSystem', 'smokeDetector', 'waterSensor',
+  'autoWaterShutoff', 'lowTempSensor', 'leedCertified', 'effectiveDate',
 ]);
 
 // ─── Value helpers ───────────────────────────────────────────────────────────
@@ -371,6 +386,19 @@ export async function updateLead(
     manualGrade: string; gradeOverrideReason: string; gradeOverrideBy: string; gradeOverrideAt: Date;
     revisitFlag: boolean; revisitDate: Date; revisitNote: string;
     competitorCarrier: string; competitorPremium: number;
+    // Frank Jun-2026: dual insureds + DOB, confirm-on-call, home features
+    owner2FirstName: string; owner2LastName: string; maritalStatus: string;
+    owner1Dob: string; owner2Dob: string;
+    dogBreed: string; insuranceHistory: string; heatingRenovatedYear: number;
+    bathroomsFull: number; bathroomsHalf: number;
+    garageType: string; garageCount: number; sidingType: string; foundationType: string;
+    heatSource: string; feetFromHydrant: number;
+    burglarAlarm: string; fireAlarm: string; sprinklerSystem: boolean;
+    smokeDetector: string; waterSensor: string; autoWaterShutoff: string; lowTempSensor: string;
+    leedCertified: boolean; effectiveDate: string;
+    // FEMA flood (Phase 3a)
+    floodZone: boolean; floodZoneType: string; floodZoneSubtype: string;
+    floodSfha: boolean; floodZoneManual: boolean; floodCheckedAt: string;
   }>,
 ): Promise<void> {
   const entries = Object.entries(data).filter(([, v]) => v !== undefined);

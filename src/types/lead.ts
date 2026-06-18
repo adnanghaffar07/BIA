@@ -123,6 +123,10 @@ export interface Lead {
   highEquity?: boolean;
   floodZone?: boolean;
   floodZoneType?: string;
+  floodZoneSubtype?: string;   // FEMA ZONE_SUBTY (e.g. '0.2 PCT ANNUAL CHANCE FLOOD HAZARD')
+  floodSfha?: boolean;         // FEMA SFHA_TF — true = Special Flood Hazard Area (high-risk)
+  floodZoneManual?: boolean;   // producer override — FEMA enrichment won't overwrite
+  floodCheckedAt?: string;     // ISO timestamp of last FEMA lookup
   hoa?: boolean;
 
   // Tax & Legal Info
@@ -209,6 +213,42 @@ export interface Lead {
   priorCarrier?: string;
   priorPremium?: number;
   indicativeBasis?: string;
+
+  // ─── Frank Jun-2026: dual insureds, DOB, confirm-on-call, home features ─────
+  // Both named insureds — husband + wife are almost always both on the HO policy
+  owner2FirstName?: string;
+  owner2LastName?: string;
+  maritalStatus?: 'married' | 'single' | 'unknown';
+  owner1Dob?: string;            // ISO date — drives the insurance score (Travelers requires it)
+  owner2Dob?: string;
+
+  // Confirm-on-call — unknown until first contact is made
+  dogBreed?: string;             // restricted-breed name | 'none' | undefined = unknown
+  insuranceHistory?: 'currently_insured' | 'lapsed' | 'new' | 'unknown'; // assumed currently_insured
+  heatingRenovatedYear?: number;
+  bathroomsFull?: number;
+  bathroomsHalf?: number;
+
+  // Home features — listing-sourced or manual
+  garageType?: 'attached' | 'detached' | 'none';
+  garageCount?: number;
+  sidingType?: string;
+  foundationType?: 'basement' | 'crawl_space' | 'slab';
+  heatSource?: string;           // defaults to 'gas' for NJ
+  feetFromHydrant?: number;
+
+  // Travelers "Home Features" protective devices
+  burglarAlarm?: 'local' | 'smart' | 'central' | 'none';
+  fireAlarm?: 'local' | 'central' | 'none';
+  sprinklerSystem?: boolean;
+  smokeDetector?: 'regular' | 'smart' | 'none';
+  waterSensor?: 'regular' | 'smart' | 'central' | 'none';
+  autoWaterShutoff?: 'regular' | 'smart' | 'none';
+  lowTempSensor?: 'regular' | 'smart' | 'central' | 'none';
+  leedCertified?: boolean;
+
+  // Effective date — tied to the new-purchase / renewal 90-day logic
+  effectiveDate?: string;
 
   // Manual grade override — BIA staff can upgrade/downgrade with a comment (§2, §11)
   manualGrade?: LeadGradeValue;
