@@ -282,6 +282,12 @@ export interface Lead {
   assignedCarrier?: 'travelers' | 'plymouth'; // the cheaper / front-running carrier
   doNotRevisit?: boolean;      // close-out: explicitly do NOT revisit next year
 
+  // ─── Frank Phase 5b: Home Upgrades + basement finish ────────────────────────
+  basementFinishedPct?: string; // % complete when foundation = basement
+  bathroomGrade?: string;       // Builders Grade | Semi-Custom | Custom | Designer
+  kitchenCount?: number;
+  kitchenGrade?: string;
+
   // Manual grade override — BIA staff can upgrade/downgrade with a comment (§2, §11)
   manualGrade?: LeadGradeValue;
   gradeOverrideReason?: string;

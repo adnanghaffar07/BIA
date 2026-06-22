@@ -53,26 +53,26 @@ function statusLabel(s: string | null) {
 function coastChip(exposure: string | null) {
   if (!exposure) return <Chip label="No coord data" size="small" />;
   const map: Record<string, { color: 'error' | 'warning' | 'info' | 'success', label: string }> = {
-    extreme:  { color: 'error',   label: '🔴 Extreme Coastal' },
-    high:     { color: 'warning', label: '🟠 High Coastal' },
-    moderate: { color: 'info',    label: '🟡 Moderate Coastal' },
-    low:      { color: 'success', label: '🟢 Low Coastal Risk' },
+    extreme: { color: 'error', label: '🔴 Extreme Coastal' },
+    high: { color: 'warning', label: '🟠 High Coastal' },
+    moderate: { color: 'info', label: '🟡 Moderate Coastal' },
+    low: { color: 'success', label: '🟢 Low Coastal Risk' },
   };
   const cfg = map[exposure] ?? { color: 'default' as any, label: exposure };
   return <Chip label={cfg.label} color={cfg.color} size="small" />;
 }
 
 function eligibilityIcon(status: string | null) {
-  if (status === 'eligible')   return <CheckCircleIcon fontSize="small" color="success" />;
+  if (status === 'eligible') return <CheckCircleIcon fontSize="small" color="success" />;
   if (status === 'ineligible') return <CancelIcon fontSize="small" color="error" />;
   return <HelpOutlineIcon fontSize="small" color="warning" />;
 }
 
 // ─── Section card ─────────────────────────────────────────────────────────────
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children, sx }: { title: string; children: React.ReactNode; sx?: object }) {
   return (
-    <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2, height: '100%' }}>
+    <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2, ...sx }}>
       <Typography variant="subtitle2" color="text.secondary" gutterBottom sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 11 }}>
         {title}
       </Typography>
@@ -87,6 +87,15 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
       <Typography variant="body2" color="text.secondary" noWrap sx={{ minWidth: 110, flexShrink: 0 }}>{label}</Typography>
       <Typography variant="body2" component="div" sx={{ fontWeight: 500, textAlign: 'right', minWidth: 0, wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
     </Stack>
+  );
+}
+
+// Labelled heading for a sub-section inside the Row 1 / Row 2 worksheet bands.
+function SubHead({ children }: { children: React.ReactNode }) {
+  return (
+    <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'primary.main', display: 'block', mb: 0.75, pb: 0.5, borderBottom: '2px solid', borderColor: 'divider' }}>
+      {children}
+    </Typography>
   );
 }
 
@@ -218,6 +227,10 @@ export default function LeadDetailPage() {
         doNotRevisit: !!l.doNotRevisit,
         phone1: l.phone1 ?? '',
         email1: l.email1 ?? '',
+        basementFinishedPct: l.basementFinishedPct ?? '',
+        bathroomGrade: l.bathroomGrade ?? '',
+        kitchenCount: l.kitchenCount != null ? String(l.kitchenCount) : '',
+        kitchenGrade: l.kitchenGrade ?? '',
       });
     }
     setLoading(false);
@@ -239,7 +252,28 @@ export default function LeadDetailPage() {
 
   useEffect(() => { prefetchNextLead(); }, [prefetchNextLead]);
 
+  // ── Dirty tracking ──────────────────────────────────────────────────────────
+  // Snapshot every editable field; Save stays disabled until one of them changes.
+  const [pristine, setPristine] = useState<string | null>(null);
+  const formSnapshot = JSON.stringify({
+    status, posQuotePremium, boundPremium, varianceNotes, varianceReason,
+    authorizationMethod, lostReason, lostStage, producerNote, manualGrade,
+    gradeOverrideReason, revisitFlag, revisitDate, revisitNote,
+    competitorCarrier, competitorPremium, roofYear, roofType, extra,
+  });
+  useEffect(() => {
+    // Re-baseline the snapshot whenever a fresh lead is loaded or a save returns new data.
+    if (!loading && lead) setPristine(formSnapshot);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lead, loading]);
+  const dirty = pristine !== null && formSnapshot !== pristine;
+
   const save = async (andNext = false) => {
+    // Grade-override gate (Frank Phase 5b): changing the grade requires a comment.
+    if (manualGrade && !gradeOverrideReason.trim()) {
+      setSnackbar({ open: true, msg: 'A reason is required to save a manual grade override.', severity: 'error' });
+      return;
+    }
     // Close-out gate (Frank Phase 5): a lead can't be marked LOST without an
     // explanation (reason + stage) AND a revisit election (revisit OR do-not-revisit).
     if (status === 'lost') {
@@ -253,24 +287,24 @@ export default function LeadDetailPage() {
       }
     }
     setSaving(true);
-    const bp  = boundPremium     ? parseFloat(boundPremium)     : undefined;
-    const pqp = posQuotePremium  ? parseFloat(posQuotePremium)  : undefined;
+    const bp = boundPremium ? parseFloat(boundPremium) : undefined;
+    const pqp = posQuotePremium ? parseFloat(posQuotePremium) : undefined;
     const varianceAmount = bp && lead?.expectedPremium
       ? Math.round((bp - lead.expectedPremium) * 10) / 10
       : undefined;
 
     const body: any = {
       status,
-      posQuoteNumber:     posQuoteNumber     || undefined,
-      posCarrier:         posCarrier         || undefined,
-      posQuotePremium:    pqp,
-      boundPremium:       bp,
-      varianceNotes:      varianceNotes      || undefined,
-      varianceReason:     varianceReason     || undefined,
+      posQuoteNumber: posQuoteNumber || undefined,
+      posCarrier: posCarrier || undefined,
+      posQuotePremium: pqp,
+      boundPremium: bp,
+      varianceNotes: varianceNotes || undefined,
+      varianceReason: varianceReason || undefined,
       varianceAmount,
       authorizationMethod: authorizationMethod || undefined,
-      lostReason:  status === 'lost' ? (lostReason  || undefined) : undefined,
-      lostStage:   status === 'lost' ? (lostStage   || undefined) : undefined,
+      lostReason: status === 'lost' ? (lostReason || undefined) : undefined,
+      lostStage: status === 'lost' ? (lostStage || undefined) : undefined,
       // Manual grade override — send the field so the API can clear it when blank
       manualGrade: manualGrade || '',
       gradeOverrideReason: gradeOverrideReason || undefined,
@@ -325,6 +359,10 @@ export default function LeadDetailPage() {
       doNotRevisit: !!extra.doNotRevisit,
       phone1: extra.phone1 || undefined,
       email1: extra.email1 || undefined,
+      basementFinishedPct: extra.basementFinishedPct || undefined,
+      bathroomGrade: extra.bathroomGrade || undefined,
+      kitchenCount: extra.kitchenCount !== '' && extra.kitchenCount != null ? parseInt(extra.kitchenCount, 10) : undefined,
+      kitchenGrade: extra.kitchenGrade || undefined,
       _createdBy: lead?.producerEmail || undefined,
       _activityNote: producerNote || `Status updated to ${statusLabel(status)}`,
       _activityType: status === 'bound' ? 'bound' : status === 'lost' ? 'lost' : 'status_change',
@@ -392,6 +430,17 @@ export default function LeadDetailPage() {
   const address = `${lead.addressStreet}, ${lead.addressCity}, ${lead.addressState} ${lead.addressZip}`;
   const ownerName = [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—';
 
+  // Save gate (Frank Phase 5b): disable Save / Save & Next until required fields pass —
+  // a grade override needs a reason; a LOST lead needs reason + stage + revisit election.
+  const overrideNeedsReason = !!manualGrade && !gradeOverrideReason.trim();
+  const lostNeedsFields = status === 'lost' && (!lostReason || !lostStage || (!revisitFlag && !extra.doNotRevisit));
+  const saveBlocked = overrideNeedsReason || lostNeedsFields;
+  const saveBlockedMsg = overrideNeedsReason
+    ? 'Enter a reason for the manual grade override to save.'
+    : lostNeedsFields
+      ? 'Complete all Lost fields (reason, stage, revisit election) to save.'
+      : '';
+
   // Flood grade-cap signal (Frank Jun-2026) — mirrors floodZoneGradeCap() in grade.service.
   const floodZ = String(lead.floodZoneType ?? '').trim().toUpperCase();
   const floodSub = String(lead.floodZoneSubtype ?? '').toUpperCase();
@@ -419,9 +468,9 @@ export default function LeadDetailPage() {
   const gradeInfo = GRADE_INFO[(lead.grade ?? '') as LeadGrade];
   const ineligibleReasons = lead.grade === 'D'
     ? Array.from(new Set([
-        ...(lead.travelersEligible === 'ineligible' ? travelersNotes : []),
-        ...(lead.plymouthEligible === 'ineligible' ? plymouthNotes : []),
-      ]))
+      ...(lead.travelersEligible === 'ineligible' ? travelersNotes : []),
+      ...(lead.plymouthEligible === 'ineligible' ? plymouthNotes : []),
+    ]))
     : [];
 
   return (
@@ -447,36 +496,23 @@ export default function LeadDetailPage() {
         </Stack>
       </Stack>
 
-      <Grid container spacing={2.5}>
+      <Stack spacing={2.5}>
 
-        {/* ── LEFT: read-only data (2-up cards) + activity log ──────────── */}
-        <Grid size={{ xs: 12, md: 8 }}>
-          <Stack spacing={2.5}>
-          <Grid container spacing={2.5}>
+        {/* ══ ROW 1 · ACCOUNT DATA (read-only) ══════════════════════════ */}
+        <Section title="Account Data">
+          <Grid container spacing={{ xs: 2, md: 2.5 }} sx={{ mt: 0.5, alignItems: 'stretch', '& > .MuiGrid-root': { border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 2, bgcolor: 'background.paper' } }}>
 
-            <Grid size={{ xs: 12, lg: 6 }}>
-            <Section title="Insured Information">
+            {/* Insured */}
+            <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+              <SubHead>Insured</SubHead>
               <Row label="Insured Named" value={ownerName} />
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1, mb: 1 }}>
-                <TextField label="Co-Insured First" size="small" fullWidth value={extra.owner2FirstName ?? ''} onChange={(e) => setEx('owner2FirstName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="spouse / co-borrower" />
-                <TextField label="Co-Insured Last" size="small" fullWidth value={extra.owner2LastName ?? ''} onChange={(e) => setEx('owner2LastName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-              </Stack>
-              <Box sx={{ mb: 1 }}>
-                <FeatureSelect label="Married / Single" value={extra.maritalStatus ?? ''} onChange={(v) => setEx('maritalStatus', v)}
-                  options={[['married', 'Married (M)'], ['single', 'Single (S)']]} />
-              </Box>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 1 }}>
-                <TextField label="Phone" size="small" fullWidth value={extra.phone1 ?? ''} onChange={(e) => setEx('phone1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="skip-trace / call" />
-                <TextField label="Email" size="small" fullWidth value={extra.email1 ?? ''} onChange={(e) => setEx('email1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-              </Stack>
-              <Divider sx={{ my: 1 }} />
               <Row label="Owner Occupied" value={lead.ownerOccupied ? 'Yes' : 'No'} />
               <Row label="Absentee Owner" value={lead.absenteeOwner ? 'Yes' : 'No'} />
-            </Section>
             </Grid>
 
-            <Grid size={{ xs: 12, lg: 6 }}>
-            <Section title="Property Details">
+            {/* Property Details */}
+            <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+              <SubHead>Property Details</SubHead>
               <Row label="Property Type" value={lead.propertyType} />
               <Row label="Land Use" value={lead.landUse} />
               <Row label="Year Built" value={lead.yearBuilt} />
@@ -492,11 +528,11 @@ export default function LeadDetailPage() {
               <Row label="Garage" value={lead.garage ? 'Yes' : 'No'} />
               <Row label="Basement" value={lead.basement ? 'Yes' : 'No'} />
               <Row label="A/C" value={lead.airConditioning ? 'Yes' : 'No'} />
-            </Section>
             </Grid>
 
-            <Grid size={{ xs: 12, lg: 6 }}>
-            <Section title="Financials">
+            {/* Financials */}
+            <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+              <SubHead>Financials</SubHead>
               <Row label="Estimated Value" value={fmtCurrency(lead.estimatedValue)} />
               <Row label="Assessed Value" value={fmtCurrency(lead.assessedValue)} />
               <Row label="Last Sale" value={fmtCurrency(lead.lastSaleAmount)} />
@@ -505,11 +541,11 @@ export default function LeadDetailPage() {
               <Row label="Lender" value={lead.lenderName} />
               <Row label="Mortgage Type" value={lead.mortgageType} />
               <Row label="Est. Equity" value={fmtCurrency(lead.estimatedEquity)} />
-            </Section>
             </Grid>
 
-            <Grid size={{ xs: 12, lg: 6 }}>
-            <Section title="Carrier Eligibility">
+            {/* Carrier Eligibility */}
+            <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+              <SubHead>Carrier Eligibility</SubHead>
               {/* Travelers */}
               <Stack direction="row" sx={{ alignItems: 'center', mb: 0.5 }} spacing={1}>
                 {eligibilityIcon(lead.travelersEligible)}
@@ -543,63 +579,11 @@ export default function LeadDetailPage() {
                   ))}
                 </Box>
               )}
-            </Section>
             </Grid>
 
-            <Grid size={{ xs: 12, lg: 6 }}>
-            <Section title="Carrier Pricing (indicative)">
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                Enter the indicative band you ran in each portal. The cheaper carrier is auto-assigned to this lead.
-              </Typography>
-              {(() => {
-                const t = parseFloat(extra.travelersPremium); const p = parseFloat(extra.plymouthPremium);
-                const tOk = !isNaN(t); const pOk = !isNaN(p);
-                const winner = tOk && pOk ? (t <= p ? 'travelers' : 'plymouth') : tOk ? 'travelers' : pOk ? 'plymouth' : null;
-                const boxSx = (who: string) => ({
-                  p: 1, borderRadius: 1, border: '1px solid',
-                  borderColor: winner === who ? 'success.main' : 'divider',
-                  bgcolor: winner === who ? 'success.50' : 'transparent',
-                });
-                return (
-                  <Stack spacing={1.25}>
-                    <Box sx={boxSx('travelers')}>
-                      <TextField label={`Travelers $${winner === 'travelers' ? '  ✓ assigned' : ''}`} type="number" size="small" fullWidth
-                        value={extra.travelersPremium ?? ''} onChange={(e) => setEx('travelersPremium', e.target.value)}
-                        slotProps={{ inputLabel: { shrink: true } }} placeholder="e.g. 2800" />
-                    </Box>
-                    <Box sx={boxSx('plymouth')}>
-                      <TextField label={`Plymouth Rock $${winner === 'plymouth' ? '  ✓ assigned' : ''}`} type="number" size="small" fullWidth
-                        value={extra.plymouthPremium ?? ''} onChange={(e) => setEx('plymouthPremium', e.target.value)}
-                        slotProps={{ inputLabel: { shrink: true } }} placeholder="e.g. 2500" />
-                    </Box>
-                    {winner && (
-                      <Alert severity="success" sx={{ py: 0, fontSize: 12 }}>
-                        Assigned carrier: <strong>{winner === 'travelers' ? 'Travelers' : 'Plymouth Rock'}</strong>
-                        {tOk && pOk && t !== p && ` — cheaper by ${fmtCurrency(Math.abs(t - p))}`}
-                      </Alert>
-                    )}
-                  </Stack>
-                );
-              })()}
-              {varDiff != null && (
-                <>
-                  <Divider sx={{ my: 1 }} />
-                  <Row label="Bound Premium" value={<Typography color={varDiff >= 0 ? 'success.main' : 'error.main'} sx={{ fontWeight: 700 }}>{fmtCurrency(lead.boundPremium)}</Typography>} />
-                  <Row label="Variance" value={
-                    <Tooltip title="Bound minus indicative expected">
-                      <Typography variant="body2" color={varDiff >= 0 ? 'success.main' : 'error.main'} sx={{ fontWeight: 700 }}>
-                        {varDiff >= 0 ? '+' : ''}{fmtCurrency(varDiff)} ({varDiff >= 0 ? '+' : ''}{Math.round((varDiff / lead.expectedPremium) * 100)}%)
-                      </Typography>
-                    </Tooltip>
-                  } />
-                  {lead.varianceReason && <Row label="Variance Reason" value={lead.varianceReason} />}
-                </>
-              )}
-            </Section>
-            </Grid>
-
-            <Grid size={{ xs: 12, lg: 6 }}>
-            <Section title="Flood & Coastal Risk">
+            {/* Flood & Coastal Risk */}
+            <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+              <SubHead>Flood & Coastal Risk</SubHead>
               {/* Coastal exposure */}
               <Stack direction="row" sx={{ alignItems: 'center', mb: 1 }} spacing={1}>
                 <WavesIcon color="action" fontSize="small" />
@@ -635,272 +619,369 @@ export default function LeadDetailPage() {
               {floodCapNote && (
                 <Alert severity={floodCapNote.severity} sx={{ mt: 1, py: 0, fontSize: 12 }}>{floodCapNote.text}</Alert>
               )}
-              <Divider sx={{ my: 1 }} />
-              <FormControlLabel
-                control={<Checkbox size="small" checked={!!extra.floodZoneManual} onChange={(e) => setEx('floodZoneManual', e.target.checked)} />}
-                label={<Typography variant="body2">Manually override FEMA flood zone</Typography>}
-              />
-              {extra.floodZoneManual && (
-                <FeatureSelect label="Flood Zone" value={extra.floodZoneType ?? ''} onChange={(v) => setEx('floodZoneType', v)}
-                  options={[['X', 'X — minimal risk'], ['X500', 'X (shaded) — 0.2% / moderate'], ['AE', 'AE — SFHA'], ['A', 'A — SFHA'], ['AH', 'AH — SFHA'], ['AO', 'AO — SFHA'], ['AR', 'AR — SFHA'], ['VE', 'VE — coastal SFHA'], ['V', 'V — coastal SFHA']]} />
-              )}
-            </Section>
             </Grid>
 
-            <Grid size={{ xs: 12, lg: 6 }}>
-            <Section title="Pipeline">
+            {/* Pipeline */}
+            <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+              <SubHead>Pipeline</SubHead>
               <Row label="Engine" value={lead.engine === 1 ? '1 — New Purchase' : lead.engine === 2 ? '2 — Renewal/Win-Back' : undefined} />
               <Row label="Recording Date" value={lead.recordingDate} />
               <Row label="Renewal Target" value={lead.renewalTargetDate ? new Date(lead.renewalTargetDate).toLocaleDateString() : undefined} />
               <Row label="Effective Date" value={lead.effectiveDate ? new Date(lead.effectiveDate).toLocaleDateString() : undefined} />
-            </Section>
-            </Grid>
-
-            <Grid size={{ xs: 12 }}>
-            <Section title="Property Details — Home Features & QC (editable)">
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-                All editable for QC — flag REAPI inaccuracies or record info confirmed on the call.
-                Source from a listing (Zillow / Realtor.com). Heat defaults to gas for NJ.
-              </Typography>
-              <Grid container spacing={1.5}>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FeatureSelect label="Garage Type" value={extra.garageType ?? ''} onChange={(v) => setEx('garageType', v)}
-                    options={[['attached', 'Attached'], ['detached', 'Detached'], ['none', 'None']]} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <TextField label="# Garages" type="number" size="small" fullWidth value={extra.garageCount ?? ''}
-                    onChange={(e) => setEx('garageCount', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FeatureSelect label="Foundation" value={extra.foundationType ?? ''} onChange={(v) => setEx('foundationType', v)}
-                    options={[['basement', 'Basement'], ['crawl_space', 'Crawl space'], ['slab', 'Slab']]} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FeatureSelect label="Siding Type" value={extra.sidingType ?? ''} onChange={(v) => setEx('sidingType', v)}
-                    options={[['vinyl', 'Vinyl'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['fiber_cement', 'Fiber cement'], ['aluminum', 'Aluminum'], ['stone', 'Stone'], ['other', 'Other']]} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FeatureSelect label="Primary Heat" value={extra.heatSource ?? 'gas'} onChange={(v) => setEx('heatSource', v)}
-                    options={[['gas', 'Gas'], ['oil', 'Oil'], ['electric', 'Electric'], ['propane', 'Propane'], ['heat_pump', 'Heat pump'], ['other', 'Other']]} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <TextField label="Feet from Hydrant" type="number" size="small" fullWidth value={extra.feetFromHydrant ?? ''}
-                    onChange={(e) => setEx('feetFromHydrant', e.target.value)} placeholder="e.g. 50" slotProps={{ inputLabel: { shrink: true } }} />
-                </Grid>
-              </Grid>
-
-              <Divider textAlign="left" sx={{ my: 1.5 }}>
-                <Typography variant="caption" color="text.secondary">PROTECTIVE DEVICES</Typography>
-              </Divider>
-              <Grid container spacing={1.5}>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FeatureSelect label="Burglar Alarm" value={extra.burglarAlarm ?? ''} onChange={(v) => setEx('burglarAlarm', v)}
-                    options={[['local', 'Local'], ['smart', 'Smart'], ['central', 'Central'], ['none', 'None']]} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FeatureSelect label="Fire Alarm" value={extra.fireAlarm ?? ''} onChange={(v) => setEx('fireAlarm', v)}
-                    options={[['local', 'Local'], ['central', 'Central'], ['none', 'None']]} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FeatureSelect label="Smoke Detector" value={extra.smokeDetector ?? ''} onChange={(v) => setEx('smokeDetector', v)}
-                    options={[['regular', 'Regular'], ['smart', 'Smart'], ['none', 'None']]} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FeatureSelect label="Water Sensor" value={extra.waterSensor ?? ''} onChange={(v) => setEx('waterSensor', v)}
-                    options={[['regular', 'Regular'], ['smart', 'Smart'], ['central', 'Central'], ['none', 'None']]} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FeatureSelect label="Auto Water Shutoff" value={extra.autoWaterShutoff ?? ''} onChange={(v) => setEx('autoWaterShutoff', v)}
-                    options={[['regular', 'Regular'], ['smart', 'Smart'], ['none', 'None']]} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FeatureSelect label="Low Temp Sensor" value={extra.lowTempSensor ?? ''} onChange={(v) => setEx('lowTempSensor', v)}
-                    options={[['regular', 'Regular'], ['smart', 'Smart'], ['central', 'Central'], ['none', 'None']]} />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FormControlLabel control={<Checkbox size="small" checked={!!extra.sprinklerSystem} onChange={(e) => setEx('sprinklerSystem', e.target.checked)} />} label="Sprinkler System" />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                  <FormControlLabel control={<Checkbox size="small" checked={!!extra.leedCertified} onChange={(e) => setEx('leedCertified', e.target.checked)} />} label="LEED Certified Home" />
-                </Grid>
-              </Grid>
-
-              <Divider textAlign="left" sx={{ my: 1.5 }}>
-                <Typography variant="caption" color="text.secondary">ROOF</Typography>
-              </Divider>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                <TextField label="Roof Year" type="number" value={roofYear} onChange={(e) => setRoofYear(e.target.value)} size="small" fullWidth placeholder="e.g. 2019" slotProps={{ inputLabel: { shrink: true } }} />
-                <FormControl size="small" fullWidth>
-                  <InputLabel>Roof Type</InputLabel>
-                  <Select value={roofType} label="Roof Type" onChange={(e) => setRoofType(e.target.value)}>
-                    <MenuItem value="">Unknown</MenuItem>
-                    <MenuItem value="Asphalt Shingle">Asphalt Shingle</MenuItem>
-                    <MenuItem value="Architectural Shingle">Architectural Shingle</MenuItem>
-                    <MenuItem value="Metal (Standing Seam)">Metal (Standing Seam)</MenuItem>
-                    <MenuItem value="Slate">Slate</MenuItem>
-                    <MenuItem value="Flat Metal">Flat Metal ⚠</MenuItem>
-                    <MenuItem value="Tile">Tile ⚠</MenuItem>
-                    <MenuItem value="Wood Shake">Wood Shake ⚠</MenuItem>
-                    <MenuItem value="Other">Other</MenuItem>
-                  </Select>
-                </FormControl>
-              </Stack>
-              <Typography variant="caption" color="text.secondary">
-                Confirming roof year clears the B/C roof-age gate (homes &gt;15 yrs). Flat-metal, tile and wood are carrier-ineligible.
-              </Typography>
-              {['Flat Metal', 'Tile', 'Wood Shake'].includes(roofType) && (
-                <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>
-                  High-risk roof type — both carriers ineligible (grade D).
-                </Alert>
-              )}
-            </Section>
             </Grid>
 
           </Grid>
+        </Section>
 
-          {lead.activities?.length > 0 && (
-            <Section title={`Activity Log (${lead.activities.length})`}>
-              <Stack spacing={1} sx={{ mt: 0.5 }}>
-                {lead.activities.map((a: any) => (
-                  <Box key={a.id} sx={{ borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, py: 0.25 }}>
-                    <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-                      <Typography variant="body2">{a.content}</Typography>
-                      <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 2 }}>
-                        {new Date(a.createdAt).toLocaleString()}
-                        {a.createdBy ? ` · ${a.createdBy}` : ''}
-                      </Typography>
-                    </Stack>
-                  </Box>
-                ))}
+        <Divider textAlign="center"><Typography variant="body1" color="text.secondary" sx={{ fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>PRODUCER WORKSHEET</Typography></Divider>
+
+
+        {/* ══ ROW 2 · PRODUCER WORKSHEET (editable) ═════════════════════ */}
+        {/* <Section title="Producer Worksheet (editable)" sx={{ bgcolor: 'transparent' }}>
+        </Section> */}
+        <Grid container spacing={{ xs: 2, md: 2.5 }} sx={{ mt: 0.5, alignItems: 'stretch', '& > .MuiGrid-root': { border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 2, bgcolor: 'background.paper' } }}>
+
+          {/* Insured Details (editable) */}
+          <Grid size={{ xs: 12, md: 6 }}>
+            <SubHead>Insured Details</SubHead>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1.7, mb: 1 }}>
+              <TextField label="Co-Insured First" size="small" fullWidth value={extra.owner2FirstName ?? ''} onChange={(e) => setEx('owner2FirstName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="spouse / co-borrower" />
+              <TextField label="Co-Insured Last" size="small" fullWidth value={extra.owner2LastName ?? ''} onChange={(e) => setEx('owner2LastName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+            </Stack>
+            <Box sx={{ mb: 1.7 }}>
+              <FeatureSelect label="Married / Single" value={extra.maritalStatus ?? ''} onChange={(v) => setEx('maritalStatus', v)}
+                options={[['married', 'Married (M)'], ['single', 'Single (S)']]} />
+            </Box>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 1.7 }}>
+              <TextField label="Phone" size="small" fullWidth value={extra.phone1 ?? ''} onChange={(e) => setEx('phone1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="skip-trace / call" />
+              <TextField label="Email" size="small" fullWidth value={extra.email1 ?? ''} onChange={(e) => setEx('email1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+            </Stack>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 1.5 }}>
+              <TextField label="Owner 1 DOB" type="date" size="small" fullWidth value={extra.owner1Dob ?? ''}
+                onChange={(e) => setEx('owner1Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+              <TextField label="Owner 2 DOB" type="date" size="small" fullWidth value={extra.owner2Dob ?? ''}
+                onChange={(e) => setEx('owner2Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.7 }}>
+              DOB + phone drive the Travelers insurance score (phone is a required portal field).
+            </Typography>
+            <Box sx={{ mb: 1 }}>
+              <FeatureSelect label="Insurance History" value={extra.insuranceHistory ?? ''} onChange={(v) => setEx('insuranceHistory', v)}
+                options={[['currently_insured', 'Currently insured (assumed)'], ['lapsed', 'Lapsed'], ['new', 'New / first-time']]} />
+            </Box>
+          </Grid>
+
+          {/* Grade Review */}
+          <Grid size={{ xs: 12, md: 6 }}>
+            <SubHead>Grade Review</SubHead>
+            <Stack spacing={1.5} sx={{ mt: 0.5 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Chip label={`Grade ${lead.grade ?? '?'}`} sx={gradeChipSx(lead.grade)} size="small" />
+                {lead.manualGrade && (
+                  <Chip label="Manual override" color="secondary" size="small" variant="outlined" />
+                )}
               </Stack>
-            </Section>
-          )}
 
-          </Stack>
-        </Grid>
+              {lead.grade && lead.grade !== 'A' && gradeInfo && (
+                <Box sx={{ p: 1.25, borderRadius: 1, bgcolor: gradeInfo.backgroundColor, border: '1px solid', borderColor: gradeInfo.borderColor }}>
+                  {missingFields.length > 0 ? (
+                    <>
+                      <Typography variant="caption" sx={{ fontWeight: 700, color: gradeInfo.color }}>
+                        Missing for Grade A ({missingFields.length})
+                      </Typography>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                        {missingFields.map((f) => (
+                          <Chip key={f} label={f} size="small" variant="outlined"
+                            sx={{ color: gradeInfo.color, borderColor: gradeInfo.borderColor, bgcolor: 'transparent' }} />
+                        ))}
+                      </Box>
+                    </>
+                  ) : (
+                    <Typography variant="caption" color="text.secondary">All quote-ready fields present.</Typography>
+                  )}
+                  {lead.grade === 'D' && ineligibleReasons.length > 0 && (
+                    <Box sx={{ mt: missingFields.length > 0 ? 1 : 0 }}>
+                      <Typography variant="caption" sx={{ fontWeight: 700, color: gradeInfo.color, display: 'block' }}>
+                        Ineligible — carrier appetite
+                      </Typography>
+                      <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                        {ineligibleReasons.map((r, i) => (
+                          <Typography key={i} component="li" variant="caption" color="text.secondary">{r}</Typography>
+                        ))}
+                      </Box>
+                    </Box>
+                  )}
+                </Box>
+              )}
 
-        {/* ── RIGHT: producer actions (sticky rail) ─────────────────────── */}
-        <Grid size={{ xs: 12, md: 4 }}>
-          <Box sx={{ position: { md: 'sticky' }, top: 16 }}>
-          <Stack spacing={2}>
+              <FormControl size="small" fullWidth>
+                <InputLabel>Manual Grade Override</InputLabel>
+                <Select value={manualGrade} label="Manual Grade Override" onChange={(e) => setManualGrade(e.target.value)}>
+                  <MenuItem value="">(no override — use computed)</MenuItem>
+                  <MenuItem value="A">A — Quote-ready</MenuItem>
+                  <MenuItem value="B">B — Needs info (1 field)</MenuItem>
+                  <MenuItem value="C">C — Needs info (2+ fields)</MenuItem>
+                  <MenuItem value="D">D — Discard / quarantine</MenuItem>
+                </Select>
+              </FormControl>
 
-            <Section title="Grade Review">
-              <Stack spacing={1.5} sx={{ mt: 0.5 }}>
-                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                  <Chip label={`Grade ${lead.grade ?? '?'}`} sx={gradeChipSx(lead.grade)} size="small" />
-                  {lead.manualGrade && (
-                    <Chip label="Manual override" color="secondary" size="small" variant="outlined" />
+              {manualGrade && (
+                <TextField
+                  label="Reason for Producer Manual Override *"
+                  value={gradeOverrideReason}
+                  onChange={(e) => setGradeOverrideReason(e.target.value)}
+                  size="small" fullWidth multiline rows={2}
+                  required
+                  error={!gradeOverrideReason}
+                  helperText={!gradeOverrideReason ? 'Required — a comment is needed to save a grade override.' : ' '}
+                  placeholder="e.g. Roof age confirmed 2019 on call — upgrade B→A"
+                />
+              )}
+              {lead.gradeOverrideAt && (
+                <Typography variant="caption" color="text.secondary">
+                  Overridden {new Date(lead.gradeOverrideAt).toLocaleString()}
+                  {lead.gradeOverrideBy ? ` · ${lead.gradeOverrideBy}` : ''}
+                </Typography>
+              )}
+
+              {/* Phase 5b: roof, DOB, insurance history, dog, baths, heating relocated.
+                    Grade Review now shows only: override + reason + effective date. */}
+              <Divider sx={{ my: 0.5 }} />
+              <TextField label="Effective Date" type="date" size="small" fullWidth value={extra.effectiveDate ?? ''}
+                onChange={(e) => setEx('effectiveDate', e.target.value)} slotProps={{ inputLabel: { shrink: true } }}
+                helperText="New purchase ≈ 90 days from sale · Renewal = x-date − 90 days" />
+            </Stack>
+          </Grid>
+
+          {/* Carrier Pricing (indicative) */}
+          <Grid size={{ xs: 12, md: 6 }}>
+            <SubHead>Carrier Pricing (indicative)</SubHead>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+              Enter the indicative band you ran in each portal. The cheaper carrier is auto-assigned to this lead.
+            </Typography>
+            {(() => {
+              const t = parseFloat(extra.travelersPremium); const p = parseFloat(extra.plymouthPremium);
+              const tOk = !isNaN(t); const pOk = !isNaN(p);
+              const winner = tOk && pOk ? (t <= p ? 'travelers' : 'plymouth') : tOk ? 'travelers' : pOk ? 'plymouth' : null;
+              const boxSx = (who: string) => ({
+                p: 1, borderRadius: 1, border: '1px solid',
+                borderColor: winner === who ? 'success.main' : 'divider',
+                bgcolor: winner === who ? 'success.50' : 'transparent',
+              });
+              return (
+                <Stack spacing={1.25}>
+                  <Box sx={boxSx('travelers')}>
+                    <TextField label={`Travelers $${winner === 'travelers' ? '  ✓ assigned' : ''}`} type="number" size="small" fullWidth
+                      value={extra.travelersPremium ?? ''} onChange={(e) => setEx('travelersPremium', e.target.value)}
+                      slotProps={{ inputLabel: { shrink: true } }} placeholder="e.g. 2800" />
+                  </Box>
+                  <Box sx={boxSx('plymouth')}>
+                    <TextField label={`Plymouth Rock $${winner === 'plymouth' ? '  ✓ assigned' : ''}`} type="number" size="small" fullWidth
+                      value={extra.plymouthPremium ?? ''} onChange={(e) => setEx('plymouthPremium', e.target.value)}
+                      slotProps={{ inputLabel: { shrink: true } }} placeholder="e.g. 2500" />
+                  </Box>
+                  {winner && (
+                    <Alert severity="success" sx={{ py: 0, fontSize: 12 }}>
+                      Carrier Assigned: <strong>{winner === 'travelers' ? 'Travelers' : 'Plymouth Rock'}</strong>
+                      {tOk && pOk && t !== p && ` — cheaper by ${fmtCurrency(Math.abs(t - p))}`}
+                    </Alert>
                   )}
                 </Stack>
+              );
+            })()}
+            {varDiff != null && (
+              <>
+                <Divider sx={{ my: 1 }} />
+                <Row label="Bound Premium" value={<Typography color={varDiff >= 0 ? 'success.main' : 'error.main'} sx={{ fontWeight: 700 }}>{fmtCurrency(lead.boundPremium)}</Typography>} />
+                <Row label="Variance" value={
+                  <Tooltip title="Bound minus indicative expected">
+                    <Typography variant="body2" color={varDiff >= 0 ? 'success.main' : 'error.main'} sx={{ fontWeight: 700 }}>
+                      {varDiff >= 0 ? '+' : ''}{fmtCurrency(varDiff)} ({varDiff >= 0 ? '+' : ''}{Math.round((varDiff / lead.expectedPremium) * 100)}%)
+                    </Typography>
+                  </Tooltip>
+                } />
+                {lead.varianceReason && <Row label="Variance Reason" value={lead.varianceReason} />}
+              </>
+            )}
+          </Grid>
 
-                {lead.grade && lead.grade !== 'A' && gradeInfo && (
-                  <Box sx={{ p: 1.25, borderRadius: 1, bgcolor: gradeInfo.backgroundColor, border: '1px solid', borderColor: gradeInfo.borderColor }}>
-                    {missingFields.length > 0 ? (
-                      <>
-                        <Typography variant="caption" sx={{ fontWeight: 700, color: gradeInfo.color }}>
-                          Missing for Grade A ({missingFields.length})
-                        </Typography>
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
-                          {missingFields.map((f) => (
-                            <Chip key={f} label={f} size="small" variant="outlined"
-                              sx={{ color: gradeInfo.color, borderColor: gradeInfo.borderColor, bgcolor: 'transparent' }} />
-                          ))}
-                        </Box>
-                      </>
-                    ) : (
-                      <Typography variant="caption" color="text.secondary">All quote-ready fields present.</Typography>
-                    )}
-                    {lead.grade === 'D' && ineligibleReasons.length > 0 && (
-                      <Box sx={{ mt: missingFields.length > 0 ? 1 : 0 }}>
-                        <Typography variant="caption" sx={{ fontWeight: 700, color: gradeInfo.color, display: 'block' }}>
-                          Ineligible — carrier appetite
-                        </Typography>
-                        <Box component="ul" sx={{ m: 0, pl: 2 }}>
-                          {ineligibleReasons.map((r, i) => (
-                            <Typography key={i} component="li" variant="caption" color="text.secondary">{r}</Typography>
-                          ))}
-                        </Box>
-                      </Box>
-                    )}
-                  </Box>
-                )}
+          {/* Flood Zone Override */}
+          <Grid size={{ xs: 12, md: 6 }}>
+            <SubHead>Flood Zone Override</SubHead>
+            <FormControlLabel
+              control={<Checkbox size="small" checked={!!extra.floodZoneManual} onChange={(e) => setEx('floodZoneManual', e.target.checked)} />}
+              label={<Typography variant="body2">Manually override FEMA flood zone</Typography>}
+            />
+            {extra.floodZoneManual && (
+              <FeatureSelect label="Flood Zone" value={extra.floodZoneType ?? ''} onChange={(v) => setEx('floodZoneType', v)}
+                options={[['X', 'X — minimal risk'], ['X500', 'X (shaded) — 0.2% / moderate'], ['AE', 'AE — SFHA'], ['A', 'A — SFHA'], ['AH', 'AH — SFHA'], ['AO', 'AO — SFHA'], ['AR', 'AR — SFHA'], ['VE', 'VE — coastal SFHA'], ['V', 'V — coastal SFHA']]} />
+            )}
+          </Grid>
 
-                <FormControl size="small" fullWidth>
-                  <InputLabel>Manual Grade Override</InputLabel>
-                  <Select value={manualGrade} label="Manual Grade Override" onChange={(e) => setManualGrade(e.target.value)}>
-                    <MenuItem value="">(no override — use computed)</MenuItem>
-                    <MenuItem value="A">A — Quote-ready</MenuItem>
-                    <MenuItem value="B">B — Needs info (1 field)</MenuItem>
-                    <MenuItem value="C">C — Needs info (2+ fields)</MenuItem>
-                    <MenuItem value="D">D — Discard / quarantine</MenuItem>
-                  </Select>
-                </FormControl>
-
-                {manualGrade && (
-                  <TextField
-                    label="Override Reason"
-                    value={gradeOverrideReason}
-                    onChange={(e) => setGradeOverrideReason(e.target.value)}
-                    size="small" fullWidth multiline rows={2}
-                    placeholder="e.g. Roof age confirmed 2019 on call — upgrade B→A"
-                  />
-                )}
-                {lead.gradeOverrideAt && (
-                  <Typography variant="caption" color="text.secondary">
-                    Overridden {new Date(lead.gradeOverrideAt).toLocaleString()}
-                    {lead.gradeOverrideBy ? ` · ${lead.gradeOverrideBy}` : ''}
-                  </Typography>
-                )}
-
-                {/* Roof moved to "Property Details — Home Features & QC" (Frank Phase 5) */}
-
-                {/* ── Insured & call-prep: confirm on first contact (Frank Jun-2026) ── */}
-                <Divider textAlign="left">
-                  <Typography variant="caption" color="text.secondary">INSURED & CALL PREP (confirm on call)</Typography>
-                </Divider>
-                <Typography variant="caption" color="text.secondary">
-                  Insured names, phone & marital status are in the Insured Information box.
-                </Typography>
-
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                  <TextField label="Owner 1 DOB" type="date" size="small" fullWidth value={extra.owner1Dob ?? ''}
-                    onChange={(e) => setEx('owner1Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-                  <TextField label="Owner 2 DOB" type="date" size="small" fullWidth value={extra.owner2Dob ?? ''}
-                    onChange={(e) => setEx('owner2Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-                </Stack>
-                <Typography variant="caption" color="text.secondary">
-                  DOB + phone drive the Travelers insurance score (phone is a required portal field).
-                </Typography>
-
+          {/* Property Details — Home Features & QC */}
+          <Grid size={{ xs: 12 }}>
+            <SubHead>Property Details — Home Features & QC</SubHead>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+              All editable for QC — flag REAPI inaccuracies or record info confirmed on the call.
+              Source from a listing (Zillow / Realtor.com). Heat defaults to gas for NJ.
+            </Typography>
+            <Grid container spacing={1.5}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FeatureSelect label="Garage Type" value={extra.garageType ?? ''} onChange={(v) => setEx('garageType', v)}
+                  options={[['attached', 'Attached'], ['detached', 'Detached'], ['none', 'None']]} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <TextField label="# Garages" type="number" size="small" fullWidth value={extra.garageCount ?? ''}
+                  onChange={(e) => setEx('garageCount', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FeatureSelect label="Foundation" value={extra.foundationType ?? ''} onChange={(v) => setEx('foundationType', v)}
+                  options={[['basement', 'Basement'], ['crawl_space', 'Crawl space'], ['slab', 'Slab']]} />
+              </Grid>
+              {extra.foundationType === 'basement' && (
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <TextField label="Basement % Complete" size="small" fullWidth value={extra.basementFinishedPct ?? ''}
+                    onChange={(e) => setEx('basementFinishedPct', e.target.value)} placeholder="e.g. 75%" slotProps={{ inputLabel: { shrink: true } }} />
+                </Grid>
+              )}
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FeatureSelect label="Siding Type" value={extra.sidingType ?? ''} onChange={(v) => setEx('sidingType', v)}
+                  options={[['vinyl', 'Vinyl'], ['wood', 'Wood'], ['brick', 'Brick'], ['stucco', 'Stucco'], ['fiber_cement', 'Fiber cement'], ['aluminum', 'Aluminum'], ['stone', 'Stone'], ['other', 'Other']]} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FeatureSelect label="Primary Heat" value={extra.heatSource ?? 'gas'} onChange={(v) => setEx('heatSource', v)}
+                  options={[['gas', 'Gas'], ['oil', 'Oil'], ['electric', 'Electric'], ['propane', 'Propane'], ['heat_pump', 'Heat pump'], ['other', 'Other']]} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <TextField label="Feet from Hydrant" type="number" size="small" fullWidth value={extra.feetFromHydrant ?? ''}
+                  onChange={(e) => setEx('feetFromHydrant', e.target.value)} placeholder="e.g. 50" slotProps={{ inputLabel: { shrink: true } }} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                 <FeatureSelect label="Dog Breed (restricted)" value={extra.dogBreed ?? ''} onChange={(v) => setEx('dogBreed', v)}
                   options={[['none', 'None / not restricted'], ...RESTRICTED_DOG_BREEDS.map((b) => [b, b] as [string, string])]} />
-                {extra.dogBreed && extra.dogBreed !== 'none' && (
-                  <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>
-                    Restricted breed (Travelers Q#7) — may impact eligibility. Confirm with underwriting.
-                  </Alert>
-                )}
+              </Grid>
+            </Grid>
+            {extra.dogBreed && extra.dogBreed !== 'none' && (
+              <Alert severity="warning" sx={{ mt: 1, py: 0, fontSize: 12 }}>
+                Restricted breed (Travelers Q#7) — may impact eligibility. Confirm with underwriting.
+              </Alert>
+            )}
 
-                <FeatureSelect label="Insurance History" value={extra.insuranceHistory ?? ''} onChange={(v) => setEx('insuranceHistory', v)}
-                  options={[['currently_insured', 'Currently insured (assumed)'], ['lapsed', 'Lapsed'], ['new', 'New / first-time']]} />
+            <Divider textAlign="left" sx={{ my: 1.5 }}>
+              <Typography variant="caption" color="text.secondary">PROTECTIVE DEVICES</Typography>
+            </Divider>
+            <Grid container spacing={1.5}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FeatureSelect label="Burglar Alarm" value={extra.burglarAlarm ?? ''} onChange={(v) => setEx('burglarAlarm', v)}
+                  options={[['local', 'Local'], ['smart', 'Smart'], ['central', 'Central'], ['none', 'None']]} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FeatureSelect label="Fire Alarm" value={extra.fireAlarm ?? ''} onChange={(v) => setEx('fireAlarm', v)}
+                  options={[['local', 'Local'], ['central', 'Central'], ['none', 'None']]} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FeatureSelect label="Smoke Detector" value={extra.smokeDetector ?? ''} onChange={(v) => setEx('smokeDetector', v)}
+                  options={[['regular', 'Regular'], ['smart', 'Smart'], ['none', 'None']]} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FeatureSelect label="Water Sensor" value={extra.waterSensor ?? ''} onChange={(v) => setEx('waterSensor', v)}
+                  options={[['regular', 'Regular'], ['smart', 'Smart'], ['central', 'Central'], ['none', 'None']]} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FeatureSelect label="Auto Water Shutoff" value={extra.autoWaterShutoff ?? ''} onChange={(v) => setEx('autoWaterShutoff', v)}
+                  options={[['regular', 'Regular'], ['smart', 'Smart'], ['none', 'None']]} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FeatureSelect label="Low Temp Sensor" value={extra.lowTempSensor ?? ''} onChange={(v) => setEx('lowTempSensor', v)}
+                  options={[['regular', 'Regular'], ['smart', 'Smart'], ['central', 'Central'], ['none', 'None']]} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FormControlLabel control={<Checkbox size="small" checked={!!extra.sprinklerSystem} onChange={(e) => setEx('sprinklerSystem', e.target.checked)} />} label="Sprinkler System" />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <FormControlLabel control={<Checkbox size="small" checked={!!extra.leedCertified} onChange={(e) => setEx('leedCertified', e.target.checked)} />} label="LEED Certified Home" />
+              </Grid>
+            </Grid>
 
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                  <TextField label="Full Baths" type="number" size="small" fullWidth value={extra.bathroomsFull ?? ''}
-                    onChange={(e) => setEx('bathroomsFull', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-                  <TextField label="Half Baths" type="number" size="small" fullWidth value={extra.bathroomsHalf ?? ''}
-                    onChange={(e) => setEx('bathroomsHalf', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-                </Stack>
-
+            <Divider textAlign="left" sx={{ my: 1.5 }}>
+              <Typography variant="caption" color="text.secondary">HOME UPGRADES</Typography>
+            </Divider>
+            <Grid container spacing={1.5}>
+              <Grid size={{ xs: 6, sm: 4, md: 3 }}>
+                <TextField label="Full Baths" type="number" size="small" fullWidth value={extra.bathroomsFull ?? ''}
+                  onChange={(e) => setEx('bathroomsFull', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 4, md: 3 }}>
+                <TextField label="Half Baths" type="number" size="small" fullWidth value={extra.bathroomsHalf ?? ''}
+                  onChange={(e) => setEx('bathroomsHalf', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 4, md: 6 }}>
+                <TextField label="Bathroom Grade" size="small" fullWidth value={extra.bathroomGrade ?? ''}
+                  onChange={(e) => setEx('bathroomGrade', e.target.value)} placeholder="Builders Grade / Semi-Custom / Custom / Designer" slotProps={{ inputLabel: { shrink: true } }} />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 4, md: 3 }}>
+                <TextField label="# Kitchens" type="number" size="small" fullWidth value={extra.kitchenCount ?? ''}
+                  onChange={(e) => setEx('kitchenCount', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 8, md: 6 }}>
+                <TextField label="Kitchen Grade" size="small" fullWidth value={extra.kitchenGrade ?? ''}
+                  onChange={(e) => setEx('kitchenGrade', e.target.value)} placeholder="Builders Grade / Semi-Custom / Custom / Designer" slotProps={{ inputLabel: { shrink: true } }} />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 4, md: 3 }}>
                 <TextField label="Heating Renovated (year)" type="number" size="small" fullWidth value={extra.heatingRenovatedYear ?? ''}
                   onChange={(e) => setEx('heatingRenovatedYear', e.target.value)} placeholder="e.g. 2018" slotProps={{ inputLabel: { shrink: true } }} />
+              </Grid>
+            </Grid>
 
-                <TextField label="Effective Date" type="date" size="small" fullWidth value={extra.effectiveDate ?? ''}
-                  onChange={(e) => setEx('effectiveDate', e.target.value)} slotProps={{ inputLabel: { shrink: true } }}
-                  helperText="New purchase ≈ 90 days from sale · Renewal = x-date − 90 days" />
-              </Stack>
-            </Section>
+            <Divider textAlign="left" sx={{ my: 1.5 }}>
+              <Typography variant="caption" color="text.secondary">ROOF</Typography>
+            </Divider>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <TextField label="Roof Year" type="number" value={roofYear} onChange={(e) => setRoofYear(e.target.value)} size="small" fullWidth placeholder="e.g. 2019" slotProps={{ inputLabel: { shrink: true } }} />
+              <FormControl size="small" fullWidth>
+                <InputLabel>Roof Type</InputLabel>
+                <Select value={roofType} label="Roof Type" onChange={(e) => setRoofType(e.target.value)}>
+                  <MenuItem value="">Unknown</MenuItem>
+                  <MenuItem value="Asphalt Shingle">Asphalt Shingle</MenuItem>
+                  <MenuItem value="Architectural Shingle">Architectural Shingle</MenuItem>
+                  <MenuItem value="Metal (Standing Seam)">Metal (Standing Seam)</MenuItem>
+                  <MenuItem value="Slate">Slate</MenuItem>
+                  <MenuItem value="Flat Metal">Flat Metal ⚠</MenuItem>
+                  <MenuItem value="Tile">Tile ⚠</MenuItem>
+                  <MenuItem value="Wood Shake">Wood Shake ⚠</MenuItem>
+                  <MenuItem value="Other">Other</MenuItem>
+                </Select>
+              </FormControl>
+            </Stack>
+            <Typography variant="caption" color="text.secondary">
+              Confirming roof year clears the B/C roof-age gate (homes &gt;15 yrs). Flat-metal, tile and wood are carrier-ineligible.
+            </Typography>
+            {['Flat Metal', 'Tile', 'Wood Shake'].includes(roofType) && (
+              <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>
+                High-risk roof type — both carriers ineligible (grade D).
+              </Alert>
+            )}
+          </Grid>
 
-            <Section title="Producer Workflow">
-              <Stack spacing={2} sx={{ mt: 0.5 }}>
+          {/* Producer Workflow */}
+          <Grid size={{ xs: 12 }}>
+            <SubHead>Producer Workflow</SubHead>
+            <Grid container spacing={2} sx={{ mt: 1.5 }}>
+              {/* POS Quote # removed (Frank Phase 5b). Carrier is auto-assigned from the cheaper indicative price. */}
+              <Grid size={{ xs: 12, sm: 6 }}>
+                {(() => {
+                  const t = parseFloat(extra.travelersPremium); const p = parseFloat(extra.plymouthPremium);
+                  const tOk = !isNaN(t); const pOk = !isNaN(p);
+                  const winner = tOk && pOk ? (t <= p ? 'Travelers' : 'Plymouth Rock') : tOk ? 'Travelers' : pOk ? 'Plymouth Rock' : null;
+                  return (
+                    <Box sx={{ p: 1, borderRadius: 1, border: '1px solid', borderColor: winner ? 'success.main' : 'divider', bgcolor: winner ? 'success.50' : 'transparent', height: '100%' }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Carrier Assigned (cheaper indicative)</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{winner ?? '— enter Travelers / PM indicative pricing first'}</Typography>
+                    </Box>
+                  );
+                })()}
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
                 <FormControl size="small" fullWidth>
                   <InputLabel>Lead Status</InputLabel>
                   <Select value={status} label="Lead Status" onChange={(e) => setStatus(e.target.value)}>
@@ -909,9 +990,9 @@ export default function LeadDetailPage() {
                     ))}
                   </Select>
                 </FormControl>
+              </Grid>
 
-                <TextField label="POS Quote #" value={posQuoteNumber} onChange={(e) => setPosQuoteNumber(e.target.value)} size="small" fullWidth />
-                <TextField label="Carrier (POS)" value={posCarrier} onChange={(e) => setPosCarrier(e.target.value)} size="small" fullWidth placeholder="e.g. Travelers" />
+              <Grid size={{ xs: 12, sm: 6 }}>
                 <TextField
                   label="POS Quote Premium ($)"
                   value={posQuotePremium}
@@ -920,21 +1001,24 @@ export default function LeadDetailPage() {
                   placeholder="Actual carrier quote amount"
                   slotProps={{ input: { startAdornment: <Typography color="text.secondary" sx={{ mr: 0.5 }}>$</Typography> } }}
                 />
+              </Grid>
 
-                {/* POS vs indicative variance preview */}
-                {posQuotePremium && lead?.expectedPremium && (
+
+              {/* POS vs indicative variance preview */}
+              {posQuotePremium && lead?.expectedPremium && (
+                <Grid size={{ xs: 12, sm: 6 }}>
                   <Alert severity={parseFloat(posQuotePremium) > lead.expectedPremium ? 'warning' : 'success'} sx={{ py: 0, fontSize: 12 }}>
                     POS vs indicative: {parseFloat(posQuotePremium) > lead.expectedPremium ? '+' : ''}
                     {fmtCurrency(parseFloat(posQuotePremium) - lead.expectedPremium)}
                     {' '}({Math.round(((parseFloat(posQuotePremium) - lead.expectedPremium) / lead.expectedPremium) * 100)}%)
                   </Alert>
-                )}
+                </Grid>
+              )}
 
-                <Divider />
-
-                {/* Authorization method + one-click date stamp — visible when status >= qualified */}
-                {['qualified', 'quote_sent', 'bound'].includes(status) && (
-                  <>
+              {/* Authorization method + one-click date stamp — visible when status >= qualified */}
+              {['qualified', 'quote_sent', 'bound'].includes(status) && (
+                <Grid size={12}>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' } }}>
                     <FormControl size="small" fullWidth>
                       <InputLabel>Authorization Method</InputLabel>
                       <Select value={authorizationMethod} label="Authorization Method" onChange={(e) => setAuthorizationMethod(e.target.value)}>
@@ -947,7 +1031,7 @@ export default function LeadDetailPage() {
 
                     {/* Authorization date stamp */}
                     {authorizationDate ? (
-                      <Alert severity="success" icon={<GavelIcon fontSize="small" />} sx={{ py: 0.5, fontSize: 12 }}>
+                      <Alert severity="success" icon={<GavelIcon fontSize="small" />} sx={{ py: 0.5, fontSize: 12, flex: 1 }}>
                         Authorized on {new Date(authorizationDate).toLocaleString()}
                       </Alert>
                     ) : (
@@ -958,18 +1042,20 @@ export default function LeadDetailPage() {
                         startIcon={stampingAuth ? <CircularProgress size={14} color="inherit" /> : <GavelIcon />}
                         onClick={stampAuthDate}
                         disabled={stampingAuth}
-                        fullWidth
+                        sx={{ flexShrink: 0 }}
                       >
                         {stampingAuth ? 'Stamping…' : 'Mark Authorized (now)'}
                       </Button>
                     )}
-                  </>
-                )}
+                  </Stack>
+                </Grid>
+              )}
 
-                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  Bound / Variance Tracking
-                </Typography>
+              <Grid size={12}>
+                <Divider textAlign="center"><Typography variant="caption" color="text.secondary" sx={{ fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>Bound / Variance Tracking</Typography></Divider>
+              </Grid>
 
+              <Grid size={{ xs: 12, sm: 6 }}>
                 <TextField
                   label="Bound Premium ($)"
                   value={boundPremium}
@@ -977,14 +1063,9 @@ export default function LeadDetailPage() {
                   size="small" fullWidth type="number"
                   slotProps={{ input: { startAdornment: <Typography color="text.secondary" sx={{ mr: 0.5 }}>$</Typography> } }}
                 />
+              </Grid>
 
-                {boundPremium && lead?.expectedPremium && (
-                  <Alert severity={parseFloat(boundPremium) > lead.expectedPremium ? 'info' : 'success'} sx={{ py: 0, fontSize: 12 }}>
-                    Variance: {parseFloat(boundPremium) > lead.expectedPremium ? '+' : ''}
-                    {fmtCurrency(parseFloat(boundPremium) - lead.expectedPremium)} vs indicative expected ({fmtCurrency(lead.expectedPremium)})
-                  </Alert>
-                )}
-
+              <Grid size={{ xs: 12, sm: 6 }}>
                 <FormControl size="small" fullWidth>
                   <InputLabel>Variance Reason</InputLabel>
                   <Select value={varianceReason} label="Variance Reason" onChange={(e) => setVarianceReason(e.target.value)}>
@@ -1000,7 +1081,18 @@ export default function LeadDetailPage() {
                     <MenuItem value="other">Other</MenuItem>
                   </Select>
                 </FormControl>
+              </Grid>
 
+              {boundPremium && lead?.expectedPremium && (
+                <Grid size={12}>
+                  <Alert severity={parseFloat(boundPremium) > lead.expectedPremium ? 'info' : 'success'} sx={{ py: 0, fontSize: 12 }}>
+                    Variance: {parseFloat(boundPremium) > lead.expectedPremium ? '+' : ''}
+                    {fmtCurrency(parseFloat(boundPremium) - lead.expectedPremium)} vs indicative expected ({fmtCurrency(lead.expectedPremium)})
+                  </Alert>
+                </Grid>
+              )}
+
+              <Grid size={12}>
                 <TextField
                   label="Variance Notes"
                   value={varianceNotes}
@@ -1008,11 +1100,12 @@ export default function LeadDetailPage() {
                   size="small" fullWidth multiline rows={2}
                   placeholder="Explain why bound premium differs from indicative..."
                 />
+              </Grid>
 
-                {/* Lost reason + stage — only shown when status = lost */}
-                {status === 'lost' && (
-                  <>
-                    <Divider />
+              {/* Lost reason + stage — only shown when status = lost */}
+              {status === 'lost' && (
+                <Grid size={12}>
+                  <Stack spacing={2}>
                     <Typography variant="caption" color="error" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                       Lost — Required Fields
                     </Typography>
@@ -1089,11 +1182,13 @@ export default function LeadDetailPage() {
                         <TextField label="Revisit Note" value={revisitNote} onChange={(e) => setRevisitNote(e.target.value)} size="small" fullWidth multiline rows={2} placeholder="Why revisit? e.g. renewal X-date, price not competitive this year" />
                       </>
                     )}
-                  </>
-                )}
+                  </Stack>
+                </Grid>
+              )}
 
-                <Divider />
+              <Grid size={12}><Divider /></Grid>
 
+              <Grid size={12}>
                 <TextField
                   label="Producer Note (logged as activity)"
                   value={producerNote}
@@ -1104,39 +1199,70 @@ export default function LeadDetailPage() {
                   rows={2}
                   placeholder="Optional note to log with this save..."
                 />
+              </Grid>
+            </Grid>
+          </Grid>
 
-                <Stack direction="row" spacing={1}>
+        </Grid>
+
+        {/* Action bar (end of Row 2) — Save (persists changes) and Next (open next lead) are independent.
+              Save is disabled until a field changes; Next is disabled while there are unsaved changes. */}
+
+        <Section title='' >
+          <Box sx={{ mt: 2 }}>
+            {saveBlocked && dirty && (
+              <Alert severity="warning" sx={{ py: 0, fontSize: 12, mb: 1 }}>{saveBlockedMsg}</Alert>
+            )}
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <Tooltip title={!dirty ? 'No changes to save' : saveBlocked ? saveBlockedMsg : 'Save changes'}>
+                <span style={{ flex: 1, display: 'flex' }}>
                   <Button
-                    variant="outlined"
+                    variant="contained"
                     startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <SaveIcon />}
                     onClick={() => save(false)}
-                    disabled={saving}
+                    disabled={saving || !dirty || saveBlocked}
                     sx={{ flex: 1 }}
                   >
                     {saving ? 'Saving…' : 'Save'}
                   </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={nextLeadId ? 'Open the next priority lead' : 'Back to the leads queue'}>
+                <span style={{ flex: 1, display: 'flex' }}>
                   <Button
-                    variant="contained"
-                    startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <SkipNextIcon />}
-                    onClick={() => save(true)}
-                    disabled={saving || !nextLeadId}
+                    variant="outlined"
+                    endIcon={<SkipNextIcon />}
+                    onClick={() => router.push(nextLeadId ? `/leads/${nextLeadId}` : '/leads')}
                     sx={{ flex: 1 }}
-                    title={nextLeadId ? 'Save and open the next priority lead' : 'No more active leads in queue'}
                   >
-                    {saving ? 'Saving…' : 'Save & Next'}
+                    Next
                   </Button>
-                </Stack>
-              </Stack>
-            </Section>
-
-          </Stack>
+                </span>
+              </Tooltip>
+            </Stack>
           </Box>
-        </Grid>
+        </Section>
 
-        {/* Activity Log now lives in the left column (above) so it fills the
-            space beside the taller sticky actions rail. */}
+        {/* ══ ACTIVITY LOG (full width) ═════════════════════════════════ */}
+        {lead.activities?.length > 0 && (
+          <Section title={`Activity Log (${lead.activities.length})`}>
+            <Stack spacing={1} sx={{ mt: 0.5 }}>
+              {lead.activities.map((a: any) => (
+                <Box key={a.id} sx={{ borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, py: 0.25 }}>
+                  <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
+                    <Typography variant="body2">{a.content}</Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 2 }}>
+                      {new Date(a.createdAt).toLocaleString()}
+                      {a.createdBy ? ` · ${a.createdBy}` : ''}
+                    </Typography>
+                  </Stack>
+                </Box>
+              ))}
+            </Stack>
+          </Section>
+        )}
 
-      </Grid>
+      </Stack>
 
       <Snackbar
         open={snackbar.open}

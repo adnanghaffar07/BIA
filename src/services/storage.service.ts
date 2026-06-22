@@ -45,6 +45,8 @@ const LEAD_COLS = [
   'autoWaterShutoff', 'lowTempSensor', 'leedCertified', 'effectiveDate',
   // Phase 5: editable carrier pricing + close-out
   'travelersPremium', 'plymouthPremium', 'assignedCarrier', 'doNotRevisit',
+  // Phase 5b: Home Upgrades + basement finish
+  'basementFinishedPct', 'bathroomGrade', 'kitchenCount', 'kitchenGrade',
   'createdAt', 'updatedAt',
 ] as const;
 
@@ -76,6 +78,8 @@ const CRM_ONLY_FIELDS = new Set([
   'autoWaterShutoff', 'lowTempSensor', 'leedCertified', 'effectiveDate',
   // Phase 5: producer-entered — never clobber on REAPI re-ingest
   'travelersPremium', 'plymouthPremium', 'assignedCarrier', 'doNotRevisit',
+  // Phase 5b
+  'basementFinishedPct', 'bathroomGrade', 'kitchenCount', 'kitchenGrade',
 ]);
 
 // ─── Value helpers ───────────────────────────────────────────────────────────
@@ -405,6 +409,8 @@ export async function updateLead(
     floodSfha: boolean; floodZoneManual: boolean; floodCheckedAt: string;
     // Phase 5: carrier pricing + close-out
     travelersPremium: number; plymouthPremium: number; assignedCarrier: string; doNotRevisit: boolean;
+    // Phase 5b: Home Upgrades + basement finish
+    basementFinishedPct: string; bathroomGrade: string; kitchenCount: number; kitchenGrade: string;
   }>,
 ): Promise<void> {
   const entries = Object.entries(data).filter(([, v]) => v !== undefined);
