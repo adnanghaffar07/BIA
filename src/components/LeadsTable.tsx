@@ -325,7 +325,9 @@ export default function LeadsTable({
   onRowsPerPageChange,
 }: LeadsTableProps) {
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(fetchSize);
+  const [rowsPerPage, setRowsPerPage] = useState<number>(
+    () => ([25, 50, 100, 250, 500].includes(fetchSize) ? fetchSize : 100),
+  );
 
   // ── Filter state ────────────────────────────────────────────────────────────
   const [search, setSearch]         = useState('');
@@ -366,16 +368,17 @@ export default function LeadsTable({
   };
 
   const totalRows = filteredLeads.length;
-  const maxPage = useMemo(() => Math.max(0, Math.ceil(totalRows / rowsPerPage) - 1), [totalRows, rowsPerPage]);
+  // rowsPerPage === -1 → "All" (show every loaded row on one page)
+  const effRpp = rowsPerPage === -1 ? Math.max(totalRows, 1) : rowsPerPage;
+  const maxPage = useMemo(() => Math.max(0, Math.ceil(totalRows / effRpp) - 1), [totalRows, effRpp]);
   const safePage = Math.min(page, maxPage);
 
   useEffect(() => { setPage(0); }, [leads, search, filterZip, filterStatus]);
-  useEffect(() => { if (fetchSize > 0) { setRowsPerPage(fetchSize); setPage(0); } }, [fetchSize]);
   useEffect(() => { if (page > maxPage) setPage(maxPage); }, [page, maxPage]);
 
-  const paginatedLeads = filteredLeads.slice(safePage * rowsPerPage, safePage * rowsPerPage + rowsPerPage);
-  const rangeStart = totalRows === 0 ? 0 : safePage * rowsPerPage + 1;
-  const rangeEnd = Math.min((safePage + 1) * rowsPerPage, totalRows);
+  const paginatedLeads = filteredLeads.slice(safePage * effRpp, safePage * effRpp + effRpp);
+  const rangeStart = totalRows === 0 ? 0 : safePage * effRpp + 1;
+  const rangeEnd = Math.min((safePage + 1) * effRpp, totalRows);
 
   if (loading && leads.length === 0) {
     return <Paper sx={{ p: 4, display: 'flex', justifyContent: 'center' }}><CircularProgress /></Paper>;
@@ -478,7 +481,7 @@ export default function LeadsTable({
       </TableContainer>
 
       <TablePagination
-        rowsPerPageOptions={[10, 20, 25, 50, 100]}
+        rowsPerPageOptions={[25, 50, 100, 250, 500, { label: 'All', value: -1 }]}
         component="div"
         count={totalRows}
         rowsPerPage={rowsPerPage}

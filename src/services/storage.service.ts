@@ -71,6 +71,7 @@ const CRM_ONLY_FIELDS = new Set([
   // FEMA flood (authoritative source) + manual override — REAPI must never clobber
   'floodZone', 'floodZoneType', 'floodZoneSubtype', 'floodSfha', 'floodZoneManual', 'floodCheckedAt',
   // Frank Jun-2026: producer/skip-trace-entered — never clobber on REAPI re-ingest
+  'skipTraceData',
   'owner2FirstName', 'owner2LastName', 'maritalStatus', 'owner1Dob', 'owner2Dob',
   'dogBreed', 'insuranceHistory', 'heatingRenovatedYear', 'bathroomsFull', 'bathroomsHalf',
   'garageType', 'garageCount', 'sidingType', 'foundationType', 'heatSource', 'feetFromHydrant',
@@ -339,6 +340,42 @@ export async function getLeadsFromDb(filters?: {
   return rows;
 }
 
+/** Given a set of candidate propertyIds, return those already stored (for credit de-dup). */
+export async function getExistingPropertyIds(ids: string[]): Promise<string[]> {
+  if (!ids.length) return [];
+  const { rows } = await pool.query(
+    `SELECT DISTINCT "propertyId" FROM "Lead" WHERE "propertyId" = ANY($1)`,
+    [ids],
+  );
+  return rows.map((r) => String(r.propertyId));
+}
+
+/**
+ * DB-wide lead counts (total + per engine), honoring optional grade/status filters
+ * but NOT engine — so the pipeline tabs can show true totals regardless of how many
+ * rows are currently loaded.
+ */
+export async function getLeadCounts(filters?: {
+  grade?: string;
+  status?: string;
+}): Promise<{ total: number; engine1: number; engine2: number }> {
+  const conditions: string[] = [];
+  const params: any[] = [];
+  if (filters?.grade) { params.push(filters.grade); conditions.push(`"grade" = $${params.length}`); }
+  if (filters?.status) { params.push(filters.status); conditions.push(`"status" = $${params.length}`); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int                                AS total,
+            COUNT(*) FILTER (WHERE "engine" = 1)::int    AS engine1,
+            COUNT(*) FILTER (WHERE "engine" = 2)::int    AS engine2
+     FROM "Lead" ${where}`,
+    params,
+  );
+  const r = rows[0] as any;
+  return { total: Number(r.total), engine1: Number(r.engine1), engine2: Number(r.engine2) };
+}
+
 /** Get a single lead by propertyId, including its activity log. */
 export async function getLeadByPropertyId(propertyId: string): Promise<any | null> {
   const { rows } = await pool.query(
@@ -374,7 +411,7 @@ export async function updateLead(
     travelersEligible: string; travelersNotes: any;
     plymouthEligible: string; plymouthNotes: any;
     lowPremium: number; expectedPremium: number; highPremium: number; pricingConfidence: number;
-    skipTraced: boolean; skipTracedAt: Date;
+    skipTraced: boolean; skipTracedAt: Date; skipTraceData: any;
     phone1: string; phone2: string; email1: string; email2: string;
     producerEmail: string; posQuoteNumber: string; posCarrier: string;
     boundPremium: number; boundDate: Date; authorizationDate: Date;

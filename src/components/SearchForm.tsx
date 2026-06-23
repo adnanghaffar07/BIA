@@ -145,8 +145,8 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
             variant="outlined"
             size="small"
             sx={{ width: 120 }}
-            slotProps={{ htmlInput: { min: 1, max: 100 } }}
-            helperText="1–100"
+            slotProps={{ htmlInput: { min: 1, max: 100000 } }}
+            helperText="or Load all"
           />
 
           {/* Buttons */}

@@ -13,6 +13,7 @@ import QueueIcon from '@mui/icons-material/PlaylistAddCheck';
 import LogoutIcon from '@mui/icons-material/Logout';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import CloudSyncIcon from '@mui/icons-material/CloudSync';
+import EventRepeatIcon from '@mui/icons-material/EventRepeat';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useAuth } from '@/context/AuthContext';
@@ -57,6 +58,7 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
     { label: 'Lead Queues', icon: <QueueIcon />,            path: '/queue' },
     ...(user?.role === 'superadmin' ? [
       { label: 'Users',       icon: <ManageAccountsIcon />,  path: '/admin/users' },
+      { label: 'Weekly Pull', icon: <EventRepeatIcon />,     path: '/admin/pull-weekly' },
       { label: 'Seed Control',icon: <CloudSyncIcon />,       path: '/admin/seed' },
     ] : []),
   ];

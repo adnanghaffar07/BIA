@@ -1,9 +1,9 @@
 import { Lead, PipelineEngine } from '@/types/lead';
 
-const ENGINE1_DAYS = 90; // New Purchase: mortgage within last 90 days
+const ENGINE1_DAYS = 90; // New Purchase: policy effective ~90 days after mortgage origination
 const ENGINE2_START = new Date('2022-01-01');
 const ENGINE2_END = new Date('2025-12-31');
-const RENEWAL_LEAD_DAYS = 90; // Contact 90 days before policy anniversary
+const RENEWAL_LEAD_DAYS = 60; // Frank Jun-2026: work renewals 60 days before anniversary (was 90)
 
 /**
  * Determine which pipeline engine a lead belongs to based on mortgage/sale date.
@@ -40,30 +40,39 @@ export function assignPipelineEngine(lead: any): PipelineEngine | null {
 }
 
 /**
- * Calculate the renewal target date for Engine 2 leads.
- * Returns the next policy anniversary minus RENEWAL_LEAD_DAYS.
+ * Project an Engine 2 lead's next policy anniversary (the renewal EFFECTIVE date).
+ * A policy renews on the same calendar day it originated, so the anniversary is the
+ * origination month/day in the current year — or next year if it has already passed.
  */
-export function getRenewalTargetDate(lead: any): Date | null {
+export function getRenewalAnniversary(lead: any): Date | null {
   const mortgageDate = lead.currentMortgages?.[0]?.recordingDate;
-  if (!mortgageDate && !lead.lastSaleDate && !lead.recordingDate) return null;
+  const dateStr = mortgageDate || lead.lastSaleDate || lead.recordingDate;
+  if (!dateStr) return null;
 
-  const dateStr = mortgageDate || lead.lastSaleDate || lead.recordingDate!
   const saleDate = new Date(dateStr);
   if (isNaN(saleDate.getTime())) return null;
 
   const now = new Date();
-  const currentYear = now.getFullYear();
-
-  // Project the anniversary to the current or next year
   const anniversary = new Date(saleDate);
-  anniversary.setFullYear(currentYear);
+  anniversary.setFullYear(now.getFullYear());
 
   // If this year's anniversary has already passed, use next year
   if (anniversary <= now) {
-    anniversary.setFullYear(currentYear + 1);
+    anniversary.setFullYear(now.getFullYear() + 1);
   }
 
-  // Target contact date = anniversary minus 90 days
+  return anniversary;
+}
+
+/**
+ * Calculate the renewal CONTACT date (x-date) for Engine 2 leads.
+ * Returns the next policy anniversary minus RENEWAL_LEAD_DAYS (60) — i.e. when the
+ * producer should start working the renewal.
+ */
+export function getRenewalTargetDate(lead: any): Date | null {
+  const anniversary = getRenewalAnniversary(lead);
+  if (!anniversary) return null;
+
   const targetDate = new Date(anniversary);
   targetDate.setDate(targetDate.getDate() - RENEWAL_LEAD_DAYS);
 
@@ -71,13 +80,14 @@ export function getRenewalTargetDate(lead: any): Date | null {
 }
 
 /**
- * Effective date for triage (Frank Phase 5):
+ * Effective date = the policy's actual effective/renewal date (Frank Jun-2026):
  *   Engine 1 (New Purchase): origination/sale date + 90 days.
- *   Engine 2 (Renewal): the renewal target date (policy anniversary − 90 days).
+ *   Engine 2 (Renewal):      the policy anniversary (origination month/day, this/next year).
+ * (The renewal CONTACT date — anniversary − 60 — is getRenewalTargetDate.)
  */
 export function getEffectiveDate(lead: any): Date | null {
   const engine = lead.engine ?? assignPipelineEngine(lead);
-  if (engine === 2) return getRenewalTargetDate(lead);
+  if (engine === 2) return getRenewalAnniversary(lead);
   if (engine !== 1) return null; // unassigned/old leads have no actionable triage date
 
   const dateStr = lead.currentMortgages?.[0]?.recordingDate || lead.lastSaleDate || lead.recordingDate;
@@ -118,4 +128,89 @@ export function getDaysSinceSale(lead: Lead): number | null {
   return Math.floor(
     (new Date().getTime() - saleDate.getTime()) / (1000 * 60 * 60 * 24)
   );
+}
+
+// ─── Weekly REAPI pull windows (Frank Jun-2026) ────────────────────────────────
+//
+// Each weekly pull grabs a rolling 7-day slice, filtered on the mortgage
+// origination (first-mortgage recording) date:
+//
+//   New biz : policy is effective ~90 days after origination, so to catch policies
+//             effective THIS week we pull origination = this-week − 90 days.
+//   Renewal : a policy renews on its anniversary. We work renewals 60 days early,
+//             so the anniversaries we want are this-week + 60 days; the matching
+//             origination dates are that same month/day in each prior year
+//             (1–4 years back → 2022–2025 for a 2026 anniversary).
+//
+// The slice is anchored at the run date (the 7 days starting that day). Run the
+// pull weekly for contiguous, non-overlapping coverage. Re-runs are safe — the
+// two-phase ids_only de-dup means already-pulled records cost no credits.
+
+export const PULL_WINDOW_DAYS = 7;
+export const NEW_BIZ_LEAD_DAYS = ENGINE1_DAYS;        // 90
+export const RENEWAL_PULL_LEAD_DAYS = RENEWAL_LEAD_DAYS; // 60
+export const RENEWAL_ORIGINATION_YEARS_BACK = [1, 2, 3, 4]; // 2025,2024,2023,2022 for a 2026 anniversary
+
+export interface PullWindow {
+  kind: 'new_biz' | 'renewal';
+  label: string;
+  /** Inclusive origination-date filter sent to REAPI (first_mortgage_recording_date_min/max) */
+  originationMin: string; // YYYY-MM-DD
+  originationMax: string; // YYYY-MM-DD
+  /** The policy effective/anniversary window these map to */
+  effectiveMin: string;
+  effectiveMax: string;
+  /** For renewals only — the origination year this window targets */
+  originationYear?: number;
+}
+
+function ymd(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+// UTC-consistent so REAPI date filters don't shift by a day in non-UTC timezones.
+function addDays(d: Date, n: number): Date {
+  const x = new Date(d);
+  x.setUTCDate(x.getUTCDate() + n);
+  return x;
+}
+
+/**
+ * Compute this run's weekly pull windows (1 new-biz + 4 renewal years).
+ * Pass an explicit runDate to reproduce a past/future week (defaults to today).
+ */
+export function computePullWindows(runDate: Date = new Date()): PullWindow[] {
+  const weekStart = new Date(ymd(runDate)); // normalize to midnight UTC
+  const weekEnd = addDays(weekStart, PULL_WINDOW_DAYS - 1);
+  const windows: PullWindow[] = [];
+
+  // New biz — effective = this week; origination = effective − 90 days
+  windows.push({
+    kind: 'new_biz',
+    label: 'New biz',
+    originationMin: ymd(addDays(weekStart, -NEW_BIZ_LEAD_DAYS)),
+    originationMax: ymd(addDays(weekEnd, -NEW_BIZ_LEAD_DAYS)),
+    effectiveMin: ymd(weekStart),
+    effectiveMax: ymd(weekEnd),
+  });
+
+  // Renewal — anniversary = this week + 60 days; origination = same month/day, prior years
+  const annivStart = addDays(weekStart, RENEWAL_PULL_LEAD_DAYS);
+  const annivEnd = addDays(weekEnd, RENEWAL_PULL_LEAD_DAYS);
+  const effYear = annivStart.getUTCFullYear();
+  for (const back of RENEWAL_ORIGINATION_YEARS_BACK) {
+    const year = effYear - back;
+    const oMin = new Date(annivStart); oMin.setUTCFullYear(year);
+    const oMax = new Date(annivEnd); oMax.setUTCFullYear(year);
+    windows.push({
+      kind: 'renewal',
+      label: `Renewal ${year}`,
+      originationMin: ymd(oMin),
+      originationMax: ymd(oMax),
+      effectiveMin: ymd(annivStart),
+      effectiveMax: ymd(annivEnd),
+      originationYear: year,
+    });
+  }
+
+  return windows;
 }

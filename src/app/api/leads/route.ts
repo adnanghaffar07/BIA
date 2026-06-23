@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ERROR_MESSAGES, API_CONFIG } from '@/lib/constants';
-import { upsertLeads, getLeadsFromDb } from '@/services/storage.service';
+import { upsertLeads, getLeadsFromDb, getLeadCounts } from '@/services/storage.service';
 import { enrichLeadBatch } from '@/services/enrichment.service';
 import sql from '@/lib/neon';
 
@@ -67,7 +67,9 @@ export async function GET(request: NextRequest) {
       const result = closed
         ? leads.filter((l) => l.status === 'bound' || l.status === 'lost')
         : leads;
-      return NextResponse.json({ success: true, data: result, total: result.length, source: 'db' });
+      // DB-wide counts (per engine) so the UI can show totals + offer "load all"
+      const counts = await getLeadCounts({ grade, status: closed ? undefined : (status || undefined) });
+      return NextResponse.json({ success: true, data: result, total: result.length, counts, source: 'db' });
     }
 
     // ── Hard lock: REAPI is only called once, via POST /api/admin/seed ────────

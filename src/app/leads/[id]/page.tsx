@@ -20,6 +20,8 @@ import WavesIcon from '@mui/icons-material/Waves';
 import SaveIcon from '@mui/icons-material/Save';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
 import GavelIcon from '@mui/icons-material/Gavel';
+import PersonSearchIcon from '@mui/icons-material/PersonSearch';
+import SkipTraceDialog from '@/components/SkipTraceDialog';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -149,6 +151,9 @@ export default function LeadDetailPage() {
   const [authorizationMethod, setAuthorizationMethod] = useState('');
   const [authorizationDate, setAuthorizationDate] = useState<string | null>(null);
   const [stampingAuth, setStampingAuth] = useState(false);
+  const [skipTracing, setSkipTracing] = useState(false);
+  const [floodChecking, setFloodChecking] = useState(false);
+  const [skipDialogOpen, setSkipDialogOpen] = useState(false);
   const [lostReason, setLostReason] = useState('');
   const [lostStage, setLostStage] = useState('');
   const [producerNote, setProducerNote] = useState('');
@@ -410,6 +415,59 @@ export default function LeadDetailPage() {
     setStampingAuth(false);
   };
 
+  /** Run a REAPI skip trace for this lead (gated: carrier-qualified + not yet traced). */
+  const runSkipTraceAction = async () => {
+    setSkipTracing(true);
+    try {
+      const res = await fetch(`/api/leads/${id}/skip-trace`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ _createdBy: lead?.producerEmail || undefined }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        const r = json.result ?? {};
+        const found = (r.phones?.length ?? 0) + (r.emails?.length ?? 0);
+        setSnackbar({
+          open: true,
+          msg: found > 0
+            ? `Skip trace: ${r.phones?.length ?? 0} phone(s), ${r.emails?.length ?? 0} email(s) found`
+            : 'Skip trace ran — no contact match found',
+          severity: found > 0 ? 'success' : 'error',
+        });
+        await load(); // refresh phone/email/skipTraced from the server
+      } else {
+        setSnackbar({ open: true, msg: json.error || 'Skip trace failed', severity: 'error' });
+      }
+    } catch {
+      setSnackbar({ open: true, msg: 'Skip trace failed — try again', severity: 'error' });
+    }
+    setSkipTracing(false);
+  };
+
+  /** Re-check FEMA flood zone for this lead (FREE — no credits). */
+  const runFloodCheckAction = async () => {
+    setFloodChecking(true);
+    try {
+      const res = await fetch(`/api/leads/${id}/flood`, { method: 'POST' });
+      const json = await res.json();
+      if (json.success) {
+        const z = json.result ?? {};
+        setSnackbar({
+          open: true,
+          msg: `FEMA flood: ${z.zone ?? '—'}${z.sfha ? ' (SFHA high-risk)' : ''}`,
+          severity: 'success',
+        });
+        await load(); // refresh flood fields + grade from the server
+      } else {
+        setSnackbar({ open: true, msg: json.error || 'Flood re-check failed', severity: 'error' });
+      }
+    } catch {
+      setSnackbar({ open: true, msg: 'Flood re-check failed — try again', severity: 'error' });
+    }
+    setFloodChecking(false);
+  };
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
@@ -619,6 +677,21 @@ export default function LeadDetailPage() {
               {floodCapNote && (
                 <Alert severity={floodCapNote.severity} sx={{ mt: 1, py: 0, fontSize: 12 }}>{floodCapNote.text}</Alert>
               )}
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={floodChecking ? <CircularProgress size={14} color="inherit" /> : <WavesIcon />}
+                onClick={runFloodCheckAction}
+                disabled={floodChecking || lead.floodZoneManual === true || lead.latitude == null}
+                sx={{ mt: 1 }}
+              >
+                {floodChecking ? 'Checking…' : 'Re-check Flood (FEMA)'}
+              </Button>
+              {lead.floodZoneManual === true && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                  Manual override active — clear it to re-check FEMA.
+                </Typography>
+              )}
             </Grid>
 
             {/* Pipeline */}
@@ -644,7 +717,33 @@ export default function LeadDetailPage() {
           {/* Insured Details (editable) */}
           <Grid size={{ xs: 12, md: 6 }}>
             <SubHead>Insured Details</SubHead>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1.7, mb: 1 }}>
+            {/* Skip trace (REAPI) — gated to carrier-qualified leads that haven't been traced yet */}
+            {lead.skipTraced ? (
+              <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', mt: 1, mb: 0.5 }}>
+                <Chip size="small" color="success" variant="outlined" icon={<PersonSearchIcon />}
+                  label={`Skip traced${lead.skipTracedAt ? ` · ${new Date(lead.skipTracedAt).toLocaleDateString()}` : ''}`} />
+                {lead.skipTraceData && (
+                  <Button size="small" variant="outlined" startIcon={<PersonSearchIcon />} onClick={() => setSkipDialogOpen(true)}>
+                    View Skip Trace
+                  </Button>
+                )}
+              </Stack>
+            ) : (lead.travelersEligible === 'eligible' || lead.plymouthEligible === 'eligible') ? (
+              <Button
+                variant="outlined" size="small"
+                startIcon={skipTracing ? <CircularProgress size={14} color="inherit" /> : <PersonSearchIcon />}
+                onClick={runSkipTraceAction}
+                disabled={skipTracing}
+                sx={{ mt: 1, mb: 0.5 }}
+              >
+                {skipTracing ? 'Tracing…' : 'Run Skip Trace'}
+              </Button>
+            ) : (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, mb: 0.5 }}>
+                Skip trace unlocks once the lead passes a carrier.
+              </Typography>
+            )}
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1, mb: 1 }}>
               <TextField label="Co-Insured First" size="small" fullWidth value={extra.owner2FirstName ?? ''} onChange={(e) => setEx('owner2FirstName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="spouse / co-borrower" />
               <TextField label="Co-Insured Last" size="small" fullWidth value={extra.owner2LastName ?? ''} onChange={(e) => setEx('owner2LastName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
             </Stack>
@@ -1263,6 +1362,13 @@ export default function LeadDetailPage() {
         )}
 
       </Stack>
+
+      <SkipTraceDialog
+        open={skipDialogOpen}
+        onClose={() => setSkipDialogOpen(false)}
+        data={lead.skipTraceData}
+        tracedAt={lead.skipTracedAt}
+      />
 
       <Snackbar
         open={snackbar.open}

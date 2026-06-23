@@ -184,6 +184,8 @@ export interface Lead {
   // Skip trace results (populated ONLY after carrier qualification)
   skipTraced?: boolean;
   skipTracedAt?: string;
+  /** Full REAPI v2 SkipTrace response (identity, phones, emails, demographics, …). */
+  skipTraceData?: any;
   phone1?: string;
   phone2?: string;
   email1?: string;

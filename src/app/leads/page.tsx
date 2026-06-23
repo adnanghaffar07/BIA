@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  Container, Box, Alert, CircularProgress, Typography,
+  Container, Box, Alert, CircularProgress, Typography, Button,
   Snackbar, Tabs, Tab, Chip, FormControl, InputLabel, Select, MenuItem,
 } from '@mui/material';
 import HomeWorkIcon from '@mui/icons-material/HomeWork';
@@ -17,17 +17,21 @@ type TabValue = 'all' | 'engine1' | 'engine2';
 
 export default function LeadsPage() {
   const [allLeads, setAllLeads] = useState<any[]>([]);
+  const [counts, setCounts] = useState<{ total: number; engine1: number; engine2: number }>({ total: 0, engine1: 0, engine2: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<LeadFilters>({});
+  const [filters, setFilters] = useState<{ grade?: string; status?: string; size: number }>({ size: 100 });
   const [activeTab, setActiveTab] = useState<TabValue>('all');
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
 
+  const engineForTab = (t: TabValue): 1 | 2 | undefined => (t === 'engine1' ? 1 : t === 'engine2' ? 2 : undefined);
+
   useEffect(() => {
-    fetchLeads(filters);
+    fetchLeads('all', { size: 100 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fetchLeads = async (currentFilters: LeadFilters) => {
+  const fetchLeads = async (tab: TabValue, f: { grade?: string; status?: string; size: number }) => {
     try {
       setLoading(true);
       setError(null);
@@ -35,16 +39,11 @@ export default function LeadsPage() {
       // Always read from DB — REAPI is locked after one-time seed
       const url = new URL('/api/leads', window.location.origin);
       url.searchParams.set('source', 'db');
-      url.searchParams.set('size', String(currentFilters.size || 100));
-      if (currentFilters.engine) {
-        url.searchParams.set('engine', String(currentFilters.engine));
-      }
-      if (currentFilters.grade) {
-        url.searchParams.set('grade', currentFilters.grade);
-      }
-      if (currentFilters.status) {
-        url.searchParams.set('status', currentFilters.status);
-      }
+      url.searchParams.set('size', String(f.size || 100));
+      const engine = engineForTab(tab);
+      if (engine) url.searchParams.set('engine', String(engine));
+      if (f.grade) url.searchParams.set('grade', f.grade);
+      if (f.status) url.searchParams.set('status', f.status);
 
       const res = await fetch(url.toString());
       if (!res.ok) throw new Error('Failed to fetch leads');
@@ -52,6 +51,7 @@ export default function LeadsPage() {
       const result = await res.json();
       if (result.success) {
         setAllLeads(result.data || []);
+        if (result.counts) setCounts(result.counts);
       } else {
         throw new Error(result.error || 'Failed to fetch leads');
       }
@@ -65,32 +65,36 @@ export default function LeadsPage() {
   };
 
   const handleSearch = (newFilters: LeadFilters) => {
-    // Engine is filtered client-side by the pipeline tabs (so the tab counts stay
-    // correct against the full set). The top engine toggle just drives the active
-    // tab; grade / status / size are the server-side filters.
-    setActiveTab(
+    // The engine toggle and the pipeline tabs both drive the server-side engine
+    // filter; grade / status / size are the other server-side filters.
+    const tab: TabValue =
       newFilters.engine === 1 ? 'engine1' :
-      newFilters.engine === 2 ? 'engine2' : 'all'
-    );
-    setFilters(newFilters);
-    const serverFilters: LeadFilters = { ...newFilters };
-    delete serverFilters.engine;
-    fetchLeads(serverFilters);
+      newFilters.engine === 2 ? 'engine2' : 'all';
+    const f = { grade: newFilters.grade, status: newFilters.status, size: newFilters.size || 100 };
+    setActiveTab(tab);
+    setFilters(f);
+    fetchLeads(tab, f);
   };
 
-  // Tab switching is purely client-side on the already-loaded allLeads.
-  const handleTabChange = (_e: React.SyntheticEvent, v: TabValue) => {
+  // Tabs are server-driven so per-engine rows AND counts are always correct.
+  const selectTab = (v: TabValue) => {
     setActiveTab(v);
+    fetchLeads(v, filters);
+  };
+  const handleTabChange = (_e: React.SyntheticEvent, v: TabValue) => selectTab(v);
+
+  // Load every lead in the current view (no practical cap).
+  const loadAll = () => {
+    const f = { ...filters, size: 100000 };
+    setFilters(f);
+    fetchLeads(activeTab, f);
   };
 
-  // Filter leads by pipeline engine for tabs
-  const engine1Leads = allLeads.filter((l) => l.engine === 1);
-  const engine2Leads = allLeads.filter((l) => l.engine === 2);
-
-  const displayLeads =
-    activeTab === 'engine1' ? engine1Leads :
-    activeTab === 'engine2' ? engine2Leads :
-    allLeads;
+  const displayLeads = allLeads;
+  const viewTotal =
+    activeTab === 'engine1' ? counts.engine1 :
+    activeTab === 'engine2' ? counts.engine2 :
+    counts.total;
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
@@ -115,11 +119,11 @@ export default function LeadsPage() {
           labelId="pipeline-view-label"
           label="View"
           value={activeTab}
-          onChange={(e) => setActiveTab(e.target.value as TabValue)}
+          onChange={(e) => selectTab(e.target.value as TabValue)}
         >
-          <MenuItem value="all">All Leads ({allLeads.length})</MenuItem>
-          <MenuItem value="engine1">Engine 1 — New Purchase ({engine1Leads.length})</MenuItem>
-          <MenuItem value="engine2">Engine 2 — Renewal ({engine2Leads.length})</MenuItem>
+          <MenuItem value="all">All Leads ({counts.total})</MenuItem>
+          <MenuItem value="engine1">Engine 1 — New Purchase ({counts.engine1})</MenuItem>
+          <MenuItem value="engine2">Engine 2 — Renewal ({counts.engine2})</MenuItem>
         </Select>
       </FormControl>
 
@@ -139,7 +143,7 @@ export default function LeadsPage() {
             label={
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 All Leads
-                <Chip label={allLeads.length} size="small" sx={{ height: 18, fontSize: '0.7rem' }} />
+                <Chip label={counts.total} size="small" sx={{ height: 18, fontSize: '0.7rem' }} />
               </Box>
             }
             value="all"
@@ -151,7 +155,7 @@ export default function LeadsPage() {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 Engine 1 — New Purchase
                 <Chip
-                  label={engine1Leads.length}
+                  label={counts.engine1}
                   size="small"
                   sx={{ height: 18, fontSize: '0.7rem', backgroundColor: '#c8e6c9', color: '#1b5e20' }}
                 />
@@ -166,7 +170,7 @@ export default function LeadsPage() {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 Engine 2 — Renewal
                 <Chip
-                  label={engine2Leads.length}
+                  label={counts.engine2}
                   size="small"
                   sx={{ height: 18, fontSize: '0.7rem', backgroundColor: '#fff3e0', color: '#e65100' }}
                 />
@@ -185,9 +189,23 @@ export default function LeadsPage() {
       )}
       {activeTab === 'engine2' && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          <strong>Engine 2 — Renewal / Win-Back:</strong> Mortgage originations from 2022–2025. Targeted ~90 days before their expected policy renewal date.
+          <strong>Engine 2 — Renewal / Win-Back:</strong> Mortgage originations from 2022–2025. Targeted ~60 days before their expected policy renewal date.
         </Alert>
       )}
+
+      {/* Total in DB + load-all control */}
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mb: 1.5 }}>
+        <Typography variant="body2" color="text.secondary">
+          Showing <strong>{displayLeads.length.toLocaleString()}</strong> of{' '}
+          <strong>{viewTotal.toLocaleString()}</strong>{' '}
+          {activeTab === 'engine1' ? 'New Purchase' : activeTab === 'engine2' ? 'Renewal' : ''} leads in database
+        </Typography>
+        {displayLeads.length < viewTotal && (
+          <Button size="small" variant="outlined" onClick={loadAll} disabled={loading}>
+            Load all {viewTotal.toLocaleString()}
+          </Button>
+        )}
+      </Box>
 
       {loading && allLeads.length === 0 ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
