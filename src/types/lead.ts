@@ -329,6 +329,8 @@ export interface LeadFilters {
   engine?: PipelineEngine;
   grade?: LeadGradeValue;
   status?: LeadStatus;
+  effectiveDate?: string;
+  effectiveTo?: string;
 }
 
 export interface LeadPageFilters {

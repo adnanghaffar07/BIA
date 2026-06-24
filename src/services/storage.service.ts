@@ -289,6 +289,9 @@ export async function getLeadsFromDb(filters?: {
   engine?: number;
   grade?: string;
   status?: string;
+  /** Effective-date filter (daily triage): single day, or a [from,to] range */
+  effectiveDate?: string;
+  effectiveTo?: string;
   /** Exclude leads with these statuses — e.g. ['bound','lost'] for the active queue */
   excludeStatuses?: string[];
   /** 'xdate' = renewalTargetDate ASC NULLS LAST (producer priority queue)
@@ -311,6 +314,15 @@ export async function getLeadsFromDb(filters?: {
   if (filters?.status) {
     params.push(filters.status);
     conditions.push(`"status" = $${params.length}`);
+  }
+  if (filters?.effectiveDate) {
+    if (filters.effectiveTo) {
+      params.push(filters.effectiveDate, filters.effectiveTo);
+      conditions.push(`"effectiveDate"::date BETWEEN $${params.length - 1} AND $${params.length}`);
+    } else {
+      params.push(filters.effectiveDate);
+      conditions.push(`"effectiveDate"::date = $${params.length}`);
+    }
   }
   if (filters?.excludeStatuses?.length) {
     const placeholders = filters.excludeStatuses.map((_, i) => `$${params.length + i + 1}`).join(', ');
@@ -358,11 +370,22 @@ export async function getExistingPropertyIds(ids: string[]): Promise<string[]> {
 export async function getLeadCounts(filters?: {
   grade?: string;
   status?: string;
+  effectiveDate?: string;
+  effectiveTo?: string;
 }): Promise<{ total: number; engine1: number; engine2: number }> {
   const conditions: string[] = [];
   const params: any[] = [];
   if (filters?.grade) { params.push(filters.grade); conditions.push(`"grade" = $${params.length}`); }
   if (filters?.status) { params.push(filters.status); conditions.push(`"status" = $${params.length}`); }
+  if (filters?.effectiveDate) {
+    if (filters.effectiveTo) {
+      params.push(filters.effectiveDate, filters.effectiveTo);
+      conditions.push(`"effectiveDate"::date BETWEEN $${params.length - 1} AND $${params.length}`);
+    } else {
+      params.push(filters.effectiveDate);
+      conditions.push(`"effectiveDate"::date = $${params.length}`);
+    }
+  }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const { rows } = await pool.query(

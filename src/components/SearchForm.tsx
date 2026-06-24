@@ -42,15 +42,29 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
   const [engine, setEngine] = useState<'all' | '1' | '2'>('all');
   const [grade, setGrade] = useState('');
   const [status, setStatus] = useState('');
+  const [effDate, setEffDate] = useState('');
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  // The renewal slate worked "today" is 60 days out (eff = today + 60).
+  const todaysSlate = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 60);
+    return d.toISOString().slice(0, 10);
+  };
+
+  const submit = (over?: { effDate?: string }) => {
+    const eff = over?.effDate ?? effDate;
     onSearch({
       size: size ? parseInt(size) : 100,
       engine: engine === 'all' ? undefined : (parseInt(engine) as 1 | 2),
       grade: (grade || undefined) as LeadGradeValue | undefined,
       status: (status || undefined) as LeadStatus | undefined,
+      effectiveDate: eff || undefined,
     });
+  };
+
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    submit();
   };
 
   const handleReset = () => {
@@ -58,10 +72,11 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
     setEngine('all');
     setGrade('');
     setStatus('');
+    setEffDate('');
     onSearch({});
   };
 
-  const hasActiveFilters = engine !== 'all' || grade !== '' || status !== '';
+  const hasActiveFilters = engine !== 'all' || grade !== '' || status !== '' || effDate !== '';
 
   return (
     <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
@@ -136,6 +151,31 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
             </Select>
           </FormControl>
 
+          {/* Effective-date filter — daily triage slate (Frank Jun-2026) */}
+          <TextField
+            label="Effective Date"
+            type="date"
+            value={effDate}
+            onChange={(e) => setEffDate(e.target.value)}
+            variant="outlined"
+            size="small"
+            sx={{ width: 170 }}
+            slotProps={{ inputLabel: { shrink: true } }}
+            helperText="work this day's slate"
+          />
+          <Tooltip title="Jump to today's slate — leads renewing 60 days out">
+            <Button
+              type="button"
+              variant="outlined"
+              size="small"
+              onClick={() => { const d = todaysSlate(); setEffDate(d); submit({ effDate: d }); }}
+              disabled={loading}
+              sx={{ height: 40, alignSelf: 'flex-start' }}
+            >
+              Today&apos;s slate
+            </Button>
+          </Tooltip>
+
           {/* Size */}
           <TextField
             label="Show leads"
@@ -174,13 +214,14 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
         </Box>
 
         {/* Active filter hint */}
-        {(engine !== 'all' || grade || status) && (
+        {(engine !== 'all' || grade || status || effDate) && (
           <Box sx={{ mt: 1.5, p: 1, backgroundColor: '#f0f4ff', borderRadius: 1, border: '1px solid #c5cae9' }}>
             <Typography variant="caption" color="primary">
               Filters active:
               {engine !== 'all' && <strong> Engine {engine}</strong>}
               {grade && <strong> · Grade {grade}</strong>}
               {status && <strong> · Status: {STATUS_OPTIONS.find(o => o.value === status)?.label}</strong>}
+              {effDate && <strong> · Effective {effDate}</strong>}
             </Typography>
           </Box>
         )}

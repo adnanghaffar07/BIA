@@ -35,9 +35,11 @@ export default function QueuePage() {
     setLoading(true);
     setError(null);
     try {
+      // size is uncapped so the queue counts/cards reflect the full working set
+      // (a 200-row cap previously under-counted Quote-Ready vs the dashboard).
       const [activeRes, closedRes, dashRes] = await Promise.all([
-        fetch('/api/leads?source=db&size=200&active=true&orderBy=xdate'),
-        fetch('/api/leads?source=db&size=200&closed=true&orderBy=updated'),
+        fetch('/api/leads?source=db&size=100000&active=true&orderBy=xdate'),
+        fetch('/api/leads?source=db&size=100000&closed=true&orderBy=updated'),
         fetch('/api/dashboard'),
       ]);
       const [activeJson, closedJson, dashJson] = await Promise.all([

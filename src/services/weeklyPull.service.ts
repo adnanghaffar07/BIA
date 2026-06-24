@@ -60,8 +60,10 @@ async function scanWindowIds(w: PullWindow): Promise<string[]> {
     ids_only: true, // ← no credits charged
     size: 10000,
     ...BASE_FILTERS,
-    first_mortgage_recording_date_min: w.originationMin,
-    first_mortgage_recording_date_max: w.originationMax,
+    // Sale date is the single anchor (Frank Jun-2026): the date we filter on is the
+    // same one we store, display, and derive the effective date from.
+    last_sale_date_min: w.originationMin,
+    last_sale_date_max: w.originationMax,
   });
   const rows = Array.isArray(data.data) ? data.data : [];
   return rows.map((x: any) => String(x?.id ?? x));

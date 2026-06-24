@@ -46,14 +46,12 @@ const BASE_FILTERS = {
 const FULL_PULL_BATCH = 100;
 
 // ─── Auto-rolling windows (computed from the run date — no edits needed) ───────
-// Mirrors src/services/pipeline.service.ts → computePullWindows. The window
-// defines the policy effective date: every lead is filtered to a first-mortgage
-// origination in [min,max], so they all renew on the upcoming anniversary of that
-// window (the summary API does not expose the per-lead mortgage date, and the deed
-// `recordingDate` is a different/later date).
-//   New biz (90-day lead) : origination = this-week − 90;  eff = this week
-//   Renewal (60-day lead) : origination = anniversary month/day in prior years
-//                           2022–2025;  eff = this-week + 60;  x-date = this week
+// Mirrors src/services/pipeline.service.ts → computePullWindows. Windows are
+// SALE-DATE ranges (the single anchor). Each lead's effective date is then computed
+// per-lead from its own sale date (computeLeadDates), so M/DD always matches.
+//   New biz (90-day lead) : sale date = this-week − 90;  eff = sale + 90
+//   Renewal (60-day lead) : sale date = anniversary month/day in prior years
+//                           2022–2025;  eff = sale M/DD in 2026;  x-date = eff − 60
 const WINDOW_DAYS = 7;
 const NEW_BIZ_LEAD_DAYS = 90;
 const RENEWAL_LEAD_DAYS = 60;
@@ -61,6 +59,31 @@ const RENEWAL_YEARS_BACK = [1, 2, 3, 4];
 
 const ymd = (d) => d.toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const addDaysUTC = (d, n) => { const x = new Date(d); x.setUTCDate(x.getUTCDate() + n); return x; };
+
+/** Parse a sale-date string to a UTC-midnight Date (tz-stable). */
+function parseSale(s) {
+  if (!s) return null;
+  const d = new Date(typeof s === 'string' && s.length === 10 ? s + 'T00:00:00Z' : s);
+  return isNaN(d.getTime()) ? null : new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+/**
+ * Per-lead effective + x-date from the lead's OWN sale date (Frank Jun-2026):
+ *   renewal → effective = sale-date M/DD in the next renewal year; x-date = eff − 60
+ *   new biz → effective = sale date + 90 days
+ */
+function computeLeadDates(saleStr, kind, runDate) {
+  const o = parseSale(saleStr);
+  if (!o) return { eff: null, xdate: null };
+  if (kind === 'renewal') {
+    const t0 = new Date(Date.UTC(runDate.getUTCFullYear(), runDate.getUTCMonth(), runDate.getUTCDate()));
+    let anniv = new Date(Date.UTC(t0.getUTCFullYear(), o.getUTCMonth(), o.getUTCDate()));
+    if (anniv < t0) anniv = new Date(Date.UTC(t0.getUTCFullYear() + 1, o.getUTCMonth(), o.getUTCDate()));
+    return { eff: ymd(anniv), xdate: addDaysUTC(anniv, -RENEWAL_LEAD_DAYS).toISOString() };
+  }
+  return { eff: ymd(addDaysUTC(o, NEW_BIZ_LEAD_DAYS)), xdate: null };
+}
 
 function computeWindows(runDate) {
   const start = new Date(ymd(runDate));            // normalize to UTC midnight
@@ -103,8 +126,10 @@ async function reapi(body) {
   return res.json();
 }
 async function scanIds(w) { // FREE
+  // Sale date = single anchor (Frank Jun-2026): filter, store, display, and effective
+  // date all use the same date.
   const d = await reapi({ ids_only: true, size: 10000, ...BASE_FILTERS,
-    first_mortgage_recording_date_min: w.min, first_mortgage_recording_date_max: w.max });
+    last_sale_date_min: w.min, last_sale_date_max: w.max });
   return (Array.isArray(d.data) ? d.data : []).map((x) => String(x?.id ?? x));
 }
 async function fetchFull(ids) { // CREDITS
@@ -185,11 +210,12 @@ async function saveProperty(property, w) {
   const carriers = checkCarriers(yearBuilt, estimatedValue, property.pool);
   const pricing = calcPricing(estimatedValue, squareFeet, yearBuilt, property.pool, coast.exposure);
 
-  const recordingDate = property.recordingDate || property.lastSaleDate || null; // deed date (real data)
+  const recordingDate = property.lastSaleDate || property.recordingDate || null; // sale date = anchor
   const engine = w.kind === 'renewal' ? 2 : 1;
-  // Effective / x-date come from the WINDOW (see WINDOWS note), not the deed date.
-  const renewalTargetDate = w.xdate ? new Date(w.xdate) : null;
-  const effDate = w.eff ? new Date(w.eff) : null;
+  // Effective / x-date are PER-LEAD from this lead's own sale date (not the window).
+  const dates = computeLeadDates(recordingDate, w.kind, RUN_DATE);
+  const renewalTargetDate = dates.xdate ? new Date(dates.xdate) : null;
+  const effDate = dates.eff ? new Date(dates.eff + 'T00:00:00Z') : null;
 
   const flat = {
     id: pid, propertyId: pid,
@@ -250,19 +276,25 @@ async function saveProperty(property, w) {
   return flat.grade;
 }
 
-// FREE — set/refresh window-based effective + x-date for matched stored leads
+// FREE — set/refresh PER-LEAD effective + x-date (from each lead's own sale date)
 async function applyWindowDates(ids, w) {
   if (!ids.length) return 0;
-  const res = await pool.query(
-    `UPDATE "Lead"
-       SET "engine" = $1,
-           "effectiveDate" = $2,
-           "renewalTargetDate" = $3,
-           "updatedAt" = NOW()
-     WHERE "propertyId" = ANY($4)`,
-    [w.kind === 'renewal' ? 2 : 1, w.eff || null, w.xdate ? new Date(w.xdate).toISOString() : null, ids],
+  const { rows } = await pool.query(
+    `SELECT "propertyId", "lastSaleDate", "recordingDate" FROM "Lead" WHERE "propertyId" = ANY($1)`,
+    [ids],
   );
-  return res.rowCount ?? 0;
+  let n = 0;
+  for (const r of rows) {
+    const d = computeLeadDates(r.lastSaleDate || r.recordingDate, w.kind, RUN_DATE);
+    if (!d.eff) continue;
+    await pool.query(
+      `UPDATE "Lead" SET "engine" = $1, "effectiveDate" = $2, "renewalTargetDate" = $3, "updatedAt" = NOW()
+       WHERE "propertyId" = $4`,
+      [w.kind === 'renewal' ? 2 : 1, d.eff, d.xdate, r.propertyId],
+    );
+    n++;
+  }
+  return n;
 }
 
 async function existingIds(ids) {

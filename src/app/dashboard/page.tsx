@@ -216,9 +216,9 @@ export default function Dashboard() {
             <CardContent sx={{ pb: '16px !important' }}>
               <Stack direction="row" sx={{ alignItems: 'center', mb: 2 }} spacing={1}>
                 <StackedLineChartIcon sx={{ color: '#1565c0' }} />
-                <Typography variant="h6" sx={{ fontWeight: 700 }}>Standing Pipeline — Stock Health</Typography>
+                <Typography variant="h6" sx={{ fontWeight: 700 }}>Pipeline Health</Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                  Trailing 30 days · {s.boundLast30} binds · {s.dailyBurnRate}/day burn rate
+                  Last 30 days · {s.boundLast30} bound · {s.dailyBurnRate}/day
                 </Typography>
               </Stack>
 
@@ -231,9 +231,9 @@ export default function Dashboard() {
                     <Typography variant="h4" sx={{ fontWeight: 'bold', color: '#1565c0' }}>
                       {s.workingStock.toLocaleString()}
                     </Typography>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Working Stock</Typography>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Leads In Progress</Typography>
                     <Typography variant="caption" color="text.secondary">
-                      contacted + qualified + quoted
+                      actively being worked
                     </Typography>
                   </Box>
                 </Grid>
@@ -245,21 +245,21 @@ export default function Dashboard() {
                     <Typography variant="h4" sx={{ fontWeight: 'bold', color: ratioColor }}>
                       {ratioLabel}
                     </Typography>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Stock / Flow</Typography>
-                    <Typography variant="caption" color="text.secondary">target 0.5–0.75×</Typography>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Pipeline Coverage</Typography>
+                    <Typography variant="caption" color="text.secondary">in-progress ÷ monthly sales · target 0.5–0.75×</Typography>
                   </Box>
                 </Grid>
 
-                {/* Buffer days */}
+                {/* Bound (last 30 days) */}
                 <Grid size={{ xs: 6, sm: 3 }}>
-                  <Box sx={{ textAlign: 'center', p: 1.5, borderRadius: 2, bgcolor: bufferStatus === 'success' ? '#e8f5e9' : bufferStatus === 'warning' ? '#fff3e0' : '#ffebee' }}>
-                    <FactCheckIcon sx={{ color: bufferColor, mb: 0.5 }} />
-                    <Typography variant="h4" sx={{ fontWeight: 'bold', color: bufferColor }}>
-                      {s.bufferDays == null ? 'N/A' : `${s.bufferDays} days`}
+                  <Box sx={{ textAlign: 'center', p: 1.5, borderRadius: 2, bgcolor: '#f3e5f5' }}>
+                    <GavelIcon sx={{ color: '#6a1b9a', mb: 0.5 }} />
+                    <Typography variant="h4" sx={{ fontWeight: 'bold', color: '#6a1b9a' }}>
+                      {s.boundLast30.toLocaleString()}
                     </Typography>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Buffer</Typography>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Bound</Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {s.bufferDays == null ? 'no binds yet' : `${s.quoteReadyActive.toLocaleString()} QR leads ÷ burn rate`}
+                      policies bound · last 30 days
                     </Typography>
                   </Box>
                 </Grid>
@@ -284,24 +284,24 @@ export default function Dashboard() {
               <Stack spacing={1} sx={{ mt: 2 }}>
                 {bufferStatus === 'error' && (
                   <Alert severity="error" icon={<WarningAmberIcon />} sx={{ py: 0.5 }}>
-                    Buffer critical ({bufferLabel}) — trigger a new data pull immediately to avoid producer starvation.
+                    Almost out of leads ({bufferLabel}) — pull new leads now so the team doesn&apos;t run dry.
                   </Alert>
                 )}
                 {bufferStatus === 'warning' && (
                   <Alert severity="warning" sx={{ py: 0.5 }}>
-                    Buffer low ({bufferLabel}) — schedule a data pull within the next 7 days.
+                    Running low on leads ({bufferLabel}) — schedule a new pull within the next 7 days.
                   </Alert>
                 )}
                 {ratioStatus === 'warning' && s.stockFlowRatio !== null && (
                   <Alert severity="warning" sx={{ py: 0.5 }}>
-                    Stock/flow ratio {ratioLabel} is outside target (0.5–0.75×).{' '}
-                    {s.stockFlowRatio > 1.0 ? 'Too many leads in flight — producer may be stalling.' : 'Working stock is thin — producer may be idle between contacts.'}
+                    Pipeline coverage {ratioLabel} is outside the 0.5–0.75× target.{' '}
+                    {s.stockFlowRatio > 1.0 ? 'Too many leads in progress — the team may be falling behind.' : 'Too few leads in progress — the team may be idle between calls.'}
                   </Alert>
                 )}
                 {s.staleLeads > 0 && (
                   <Alert severity="info" sx={{ py: 0.5 }}>
-                    {s.staleLeads} stale lead{s.staleLeads > 1 ? 's' : ''} sitting untouched for &gt;14 days.
-                    {s.pastXDate > 0 && ` ${s.pastXDate} have already passed their x-date — consider retiring them.`}
+                    {s.staleLeads} lead{s.staleLeads > 1 ? 's' : ''} untouched for 14+ days.
+                    {s.pastXDate > 0 && ` ${s.pastXDate} have already passed their renewal date — consider retiring them.`}
                   </Alert>
                 )}
               </Stack>
@@ -456,7 +456,7 @@ export default function Dashboard() {
               <Stack spacing={1.5}>
                 {[
                   { label: 'Engine 1 — New Purchase',        value: s.engine1,    color: '#1565c0', icon: <HomeIcon sx={{ fontSize: 18 }} />, sub: 'Mortgage recorded ≤90 days ago' },
-                  { label: 'Engine 2 — Renewal / Win-Back',  value: s.engine2,    color: '#6a1b9a', icon: <CheckCircleIcon sx={{ fontSize: 18 }} />, sub: 'Target 90 days before x-date' },
+                  { label: 'Engine 2 — Renewal / Win-Back',  value: s.engine2,    color: '#6a1b9a', icon: <CheckCircleIcon sx={{ fontSize: 18 }} />, sub: 'Worked 60 days before renewal' },
                   { label: 'Unassigned',                      value: s.unassigned, color: '#757575', icon: <PersonSearchIcon sx={{ fontSize: 18 }} />, sub: 'No mortgage date on record' },
                 ].map(({ label, value, color, icon, sub }) => (
                   <Box key={label} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
