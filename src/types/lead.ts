@@ -331,6 +331,7 @@ export interface LeadFilters {
   status?: LeadStatus;
   effectiveDate?: string;
   effectiveTo?: string;
+  carrier?: string;
 }
 
 export interface LeadPageFilters {

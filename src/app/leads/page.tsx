@@ -20,7 +20,7 @@ export default function LeadsPage() {
   const [counts, setCounts] = useState<{ total: number; engine1: number; engine2: number }>({ total: 0, engine1: 0, engine2: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<{ grade?: string; status?: string; size: number; effectiveDate?: string }>({ size: 100 });
+  const [filters, setFilters] = useState<{ grade?: string; status?: string; size: number; effectiveDate?: string; carrier?: string }>({ size: 100 });
   const [activeTab, setActiveTab] = useState<TabValue>('all');
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
 
@@ -31,7 +31,7 @@ export default function LeadsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fetchLeads = async (tab: TabValue, f: { grade?: string; status?: string; size: number; effectiveDate?: string }) => {
+  const fetchLeads = async (tab: TabValue, f: { grade?: string; status?: string; size: number; effectiveDate?: string; carrier?: string }) => {
     try {
       setLoading(true);
       setError(null);
@@ -44,6 +44,7 @@ export default function LeadsPage() {
       if (engine) url.searchParams.set('engine', String(engine));
       if (f.grade) url.searchParams.set('grade', f.grade);
       if (f.status) url.searchParams.set('status', f.status);
+      if (f.carrier) url.searchParams.set('carrier', f.carrier);
       if (f.effectiveDate) { url.searchParams.set('effectiveDate', f.effectiveDate); url.searchParams.set('orderBy', 'xdate'); }
 
       const res = await fetch(url.toString());
@@ -71,7 +72,7 @@ export default function LeadsPage() {
     const tab: TabValue =
       newFilters.engine === 1 ? 'engine1' :
       newFilters.engine === 2 ? 'engine2' : 'all';
-    const f = { grade: newFilters.grade, status: newFilters.status, size: newFilters.size || 100, effectiveDate: newFilters.effectiveDate };
+    const f = { grade: newFilters.grade, status: newFilters.status, size: newFilters.size || 100, effectiveDate: newFilters.effectiveDate, carrier: newFilters.carrier };
     setActiveTab(tab);
     setFilters(f);
     fetchLeads(tab, f);

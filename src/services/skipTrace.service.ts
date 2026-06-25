@@ -38,6 +38,41 @@ function extractContacts(json: any): { phones: string[]; emails: string[] } {
 }
 
 /**
+ * Map skip-trace persons ("people on loan") onto the lead's Insured Info, filling
+ * EMPTY slots only (never clobber producer entries). Picks the co-insured as the
+ * matched person sharing the owner's surname (spouse / co-borrower), else the next
+ * distinct person. REAPI returns `age`, not a date of birth, so DOB is an estimated
+ * birth year (Jan 1) the producer can refine.
+ */
+export function insuredPatchFromPersons(persons: any[], lead: any): Record<string, any> {
+  const list = Array.isArray(persons) ? persons : [];
+  if (!list.length) return {};
+  const o1First = String(lead.owner1FirstName ?? '').toLowerCase().trim();
+  const o1Last = String(lead.owner1LastName ?? '').toLowerCase().trim();
+
+  const primary =
+    list.find((p) => String(p.firstName ?? '').toLowerCase() === o1First && String(p.lastName ?? '').toLowerCase() === o1Last)
+    ?? list[0];
+  const coInsured =
+    list.find((p) => p !== primary && String(p.lastName ?? '').toLowerCase() === o1Last && o1Last)
+    ?? list.find((p) => p !== primary);
+
+  const estDob = (age: any): string | undefined => {
+    const a = parseInt(String(age), 10);
+    return a > 0 && a < 120 ? `${new Date().getFullYear() - a}-01-01` : undefined;
+  };
+
+  const patch: Record<string, any> = {};
+  if (coInsured) {
+    if (!lead.owner2FirstName && coInsured.firstName) patch.owner2FirstName = coInsured.firstName;
+    if (!lead.owner2LastName && coInsured.lastName) patch.owner2LastName = coInsured.lastName;
+  }
+  if (!lead.owner1Dob && primary?.age) { const d = estDob(primary.age); if (d) patch.owner1Dob = d; }
+  if (!lead.owner2Dob && coInsured?.age) { const d = estDob(coInsured.age); if (d) patch.owner2Dob = d; }
+  return patch;
+}
+
+/**
  * Run a skip trace for a single lead against the owner name + property address.
  * Returns de-duplicated phones/emails; throws on transport / auth errors.
  */

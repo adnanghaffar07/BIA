@@ -47,6 +47,8 @@ const LEAD_COLS = [
   'travelersPremium', 'plymouthPremium', 'assignedCarrier', 'doNotRevisit',
   // Phase 5b: Home Upgrades + basement finish
   'basementFinishedPct', 'bathroomGrade', 'kitchenCount', 'kitchenGrade',
+  // Producer-edit tracking (Recently Edited tab)
+  'lastEditedAt', 'lastEditedBy',
   'createdAt', 'updatedAt',
 ] as const;
 
@@ -81,6 +83,8 @@ const CRM_ONLY_FIELDS = new Set([
   'travelersPremium', 'plymouthPremium', 'assignedCarrier', 'doNotRevisit',
   // Phase 5b
   'basementFinishedPct', 'bathroomGrade', 'kitchenCount', 'kitchenGrade',
+  // Producer-edit tracking — never set by bulk pulls
+  'lastEditedAt', 'lastEditedBy',
 ]);
 
 // ─── Value helpers ───────────────────────────────────────────────────────────
@@ -285,6 +289,13 @@ export async function upsertLeads(properties: any[]): Promise<{
 }
 
 /** Fetch leads from the DB with optional filters. rawData excluded for performance. */
+/** Whitelist a carrier filter to its eligibility column (prevents SQL injection). */
+function carrierColumn(carrier?: string): string | null {
+  if (carrier === 'travelers') return 'travelersEligible';
+  if (carrier === 'plymouth') return 'plymouthEligible';
+  return null;
+}
+
 export async function getLeadsFromDb(filters?: {
   engine?: number;
   grade?: string;
@@ -292,11 +303,16 @@ export async function getLeadsFromDb(filters?: {
   /** Effective-date filter (daily triage): single day, or a [from,to] range */
   effectiveDate?: string;
   effectiveTo?: string;
+  /** Carrier filter: 'travelers' | 'plymouth' — leads strictly eligible for that carrier */
+  carrier?: string;
   /** Exclude leads with these statuses — e.g. ['bound','lost'] for the active queue */
   excludeStatuses?: string[];
+  /** Only leads a producer has edited (lastEditedAt set) — Recently Edited tab */
+  editedOnly?: boolean;
   /** 'xdate' = renewalTargetDate ASC NULLS LAST (producer priority queue)
-   *  'updated' = updatedAt DESC (default / admin view) */
-  orderBy?: 'xdate' | 'updated';
+   *  'updated' = updatedAt DESC (default / admin view)
+   *  'edited'  = lastEditedAt DESC NULLS LAST (Recently Edited) */
+  orderBy?: 'xdate' | 'updated' | 'edited';
   limit?: number;
   offset?: number;
 }): Promise<any[]> {
@@ -324,6 +340,9 @@ export async function getLeadsFromDb(filters?: {
       conditions.push(`"effectiveDate"::date = $${params.length}`);
     }
   }
+  const carrierCol = carrierColumn(filters?.carrier);
+  if (carrierCol) conditions.push(`"${carrierCol}" = 'eligible'`);
+  if (filters?.editedOnly) conditions.push(`"lastEditedAt" IS NOT NULL`);
   if (filters?.excludeStatuses?.length) {
     const placeholders = filters.excludeStatuses.map((_, i) => `$${params.length + i + 1}`).join(', ');
     filters.excludeStatuses.forEach((s) => params.push(s));
@@ -336,6 +355,8 @@ export async function getLeadsFromDb(filters?: {
   // Admin/default: sort by most recently updated
   const orderClause = filters?.orderBy === 'xdate'
     ? `ORDER BY COALESCE("effectiveDate"::date, "renewalTargetDate"::date) ASC NULLS LAST, "createdAt" DESC`
+    : filters?.orderBy === 'edited'
+    ? `ORDER BY "lastEditedAt" DESC NULLS LAST`
     : `ORDER BY "updatedAt" DESC`;
 
   params.push(filters?.limit ?? 100, filters?.offset ?? 0);
@@ -372,11 +393,14 @@ export async function getLeadCounts(filters?: {
   status?: string;
   effectiveDate?: string;
   effectiveTo?: string;
+  carrier?: string;
 }): Promise<{ total: number; engine1: number; engine2: number }> {
   const conditions: string[] = [];
   const params: any[] = [];
   if (filters?.grade) { params.push(filters.grade); conditions.push(`"grade" = $${params.length}`); }
   if (filters?.status) { params.push(filters.status); conditions.push(`"status" = $${params.length}`); }
+  const cCol = carrierColumn(filters?.carrier);
+  if (cCol) conditions.push(`"${cCol}" = 'eligible'`);
   if (filters?.effectiveDate) {
     if (filters.effectiveTo) {
       params.push(filters.effectiveDate, filters.effectiveTo);
@@ -471,6 +495,8 @@ export async function updateLead(
     travelersPremium: number; plymouthPremium: number; assignedCarrier: string; doNotRevisit: boolean;
     // Phase 5b: Home Upgrades + basement finish
     basementFinishedPct: string; bathroomGrade: string; kitchenCount: number; kitchenGrade: string;
+    // Producer-edit tracking (Recently Edited tab)
+    lastEditedAt: Date | string; lastEditedBy: string;
   }>,
 ): Promise<void> {
   const entries = Object.entries(data).filter(([, v]) => v !== undefined);

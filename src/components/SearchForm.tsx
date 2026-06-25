@@ -42,6 +42,7 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
   const [engine, setEngine] = useState<'all' | '1' | '2'>('all');
   const [grade, setGrade] = useState('');
   const [status, setStatus] = useState('');
+  const [carrier, setCarrier] = useState('');
   const [effDate, setEffDate] = useState('');
 
   // The renewal slate worked "today" is 60 days out (eff = today + 60).
@@ -58,6 +59,7 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
       engine: engine === 'all' ? undefined : (parseInt(engine) as 1 | 2),
       grade: (grade || undefined) as LeadGradeValue | undefined,
       status: (status || undefined) as LeadStatus | undefined,
+      carrier: carrier || undefined,
       effectiveDate: eff || undefined,
     });
   };
@@ -72,11 +74,12 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
     setEngine('all');
     setGrade('');
     setStatus('');
+    setCarrier('');
     setEffDate('');
     onSearch({});
   };
 
-  const hasActiveFilters = engine !== 'all' || grade !== '' || status !== '' || effDate !== '';
+  const hasActiveFilters = engine !== 'all' || grade !== '' || status !== '' || carrier !== '' || effDate !== '';
 
   return (
     <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
@@ -151,6 +154,20 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
             </Select>
           </FormControl>
 
+          {/* Carrier filter — leads strictly eligible for the selected carrier */}
+          <FormControl size="small" sx={{ minWidth: 170 }}>
+            <InputLabel>Carrier</InputLabel>
+            <Select
+              value={carrier}
+              label="Carrier"
+              onChange={(e) => setCarrier(e.target.value)}
+            >
+              <MenuItem value="">All Carriers</MenuItem>
+              <MenuItem value="travelers">Travelers</MenuItem>
+              <MenuItem value="plymouth">Plymouth Rock</MenuItem>
+            </Select>
+          </FormControl>
+
           {/* Effective-date filter — daily triage slate (Frank Jun-2026) */}
           <TextField
             label="Effective Date"
@@ -214,13 +231,14 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
         </Box>
 
         {/* Active filter hint */}
-        {(engine !== 'all' || grade || status || effDate) && (
+        {(engine !== 'all' || grade || status || carrier || effDate) && (
           <Box sx={{ mt: 1.5, p: 1, backgroundColor: '#f0f4ff', borderRadius: 1, border: '1px solid #c5cae9' }}>
             <Typography variant="caption" color="primary">
               Filters active:
               {engine !== 'all' && <strong> Engine {engine}</strong>}
               {grade && <strong> · Grade {grade}</strong>}
               {status && <strong> · Status: {STATUS_OPTIONS.find(o => o.value === status)?.label}</strong>}
+              {carrier && <strong> · Carrier: {carrier === 'travelers' ? 'Travelers' : 'Plymouth Rock'}</strong>}
               {effDate && <strong> · Effective {effDate}</strong>}
             </Typography>
           </Box>

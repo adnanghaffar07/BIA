@@ -49,9 +49,12 @@ export async function GET(request: NextRequest) {
     const source  = searchParams.get('source') || 'api';
     const active  = searchParams.get('active') === 'true';
     const closed  = searchParams.get('closed') === 'true';
-    const orderBy = (searchParams.get('orderBy') === 'xdate' ? 'xdate' : 'updated') as 'xdate' | 'updated';
+    const obRaw   = searchParams.get('orderBy');
+    const orderBy = (obRaw === 'xdate' ? 'xdate' : obRaw === 'edited' ? 'edited' : 'updated') as 'xdate' | 'updated' | 'edited';
+    const editedOnly = searchParams.get('editedOnly') === 'true'; // Recently Edited tab
     const effectiveDate = searchParams.get('effectiveDate') || undefined; // daily triage filter
     const effectiveTo   = searchParams.get('effectiveTo') || undefined;   // optional range end
+    const carrier       = searchParams.get('carrier') || undefined;       // 'travelers' | 'plymouth'
 
     const excludeStatuses = active ? ['bound', 'lost'] : undefined;
     const onlyStatuses    = closed ? 'bound' : undefined; // simplified: show bound in closed tab
@@ -61,8 +64,9 @@ export async function GET(request: NextRequest) {
       const leads = await getLeadsFromDb({
         engine, grade,
         status: closed ? undefined : (status || undefined),
-        effectiveDate, effectiveTo,
+        effectiveDate, effectiveTo, carrier,
         excludeStatuses,
+        editedOnly,
         orderBy,
         limit: size,
       });
@@ -71,7 +75,7 @@ export async function GET(request: NextRequest) {
         ? leads.filter((l) => l.status === 'bound' || l.status === 'lost')
         : leads;
       // DB-wide counts (per engine) so the UI can show totals + offer "load all"
-      const counts = await getLeadCounts({ grade, status: closed ? undefined : (status || undefined), effectiveDate, effectiveTo });
+      const counts = await getLeadCounts({ grade, status: closed ? undefined : (status || undefined), effectiveDate, effectiveTo, carrier });
       return NextResponse.json({ success: true, data: result, total: result.length, counts, source: 'db' });
     }
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLeadByPropertyId, updateLead, addActivity } from '@/services/storage.service';
 import { canRunSkipTrace } from '@/services/grade.service';
-import { runSkipTrace } from '@/services/skipTrace.service';
+import { runSkipTrace, insuredPatchFromPersons } from '@/services/skipTrace.service';
 
 /**
  * POST /api/leads/[id]/skip-trace
@@ -53,14 +53,22 @@ export async function POST(
     if (result.emails[0] && !(lead as any).email1) update.email1 = result.emails[0];
     if (result.emails[1] && !(lead as any).email2) update.email2 = result.emails[1];
 
+    // Pull through the co-insured ("people on loan") + DOB into Insured Info.
+    const persons = Array.isArray((result.raw as any)?.persons) ? (result.raw as any).persons : [];
+    const insuredPatch = insuredPatchFromPersons(persons, lead);
+    Object.assign(update, insuredPatch);
+
     await updateLead(id, update);
+    const coInsuredName = [insuredPatch.owner2FirstName, insuredPatch.owner2LastName].filter(Boolean).join(' ');
     await addActivity(
       (lead as any).id,
       'skip_trace',
       result.matched
-        ? `Skip trace: ${result.phones.length} phone(s), ${result.emails.length} email(s) found`
+        ? `Skip trace: ${result.phones.length} phone(s), ${result.emails.length} email(s)`
+          + `${persons.length ? `, ${persons.length} person(s) on loan` : ''}`
+          + `${coInsuredName ? `, co-insured ${coInsuredName}` : ''}`
         : 'Skip trace: no match found',
-      { phones: result.phones, emails: result.emails },
+      { phones: result.phones, emails: result.emails, persons: persons.length, insuredPatch },
       createdBy,
     );
 

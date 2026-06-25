@@ -43,6 +43,10 @@ export async function PUT(
 
     const now = new Date();
 
+    // Producer edit — stamp who/when so this lead surfaces in "Recently Edited".
+    updateData.lastEditedAt = now;
+    updateData.lastEditedBy = _createdBy ?? existing.lastEditedBy ?? null;
+
     // Auto-stamp: firstRpcAt — set once when the lead first moves off 'new'
     // (producer engagement = enters the active queue, Frank Phase 5).
     if (

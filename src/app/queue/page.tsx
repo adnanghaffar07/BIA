@@ -3,15 +3,17 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   Container, Box, Typography, Tabs, Tab, Chip,
   CircularProgress, Alert, Card, CardContent, Stack, Grid, Tooltip,
+  FormControl, InputLabel, Select, MenuItem,
 } from '@mui/material';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
 import PendingActionsIcon from '@mui/icons-material/PendingActions';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import HistoryIcon from '@mui/icons-material/History';
 import LeadsTable from '@/components/LeadsTable';
 
-type QueueTab = 'quoteReady' | 'needsInfo' | 'closed';
+type QueueTab = 'quoteReady' | 'needsInfo' | 'closed' | 'edited';
 
 interface StockHealth {
   quoteReadyActive: number;
@@ -26,10 +28,12 @@ interface StockHealth {
 export default function QueuePage() {
   const [activeLeads, setActiveLeads]   = useState<any[]>([]);
   const [closedLeads, setClosedLeads]   = useState<any[]>([]);
+  const [editedLeads, setEditedLeads]   = useState<any[]>([]);
   const [stock,       setStock]         = useState<StockHealth | null>(null);
   const [loading,     setLoading]       = useState(true);
   const [error,       setError]         = useState<string | null>(null);
   const [activeTab,   setActiveTab]     = useState<QueueTab>('quoteReady');
+  const [carrier,     setCarrier]       = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,17 +41,19 @@ export default function QueuePage() {
     try {
       // size is uncapped so the queue counts/cards reflect the full working set
       // (a 200-row cap previously under-counted Quote-Ready vs the dashboard).
-      const [activeRes, closedRes, dashRes] = await Promise.all([
+      const [activeRes, closedRes, editedRes, dashRes] = await Promise.all([
         fetch('/api/leads?source=db&size=100000&active=true&orderBy=xdate'),
         fetch('/api/leads?source=db&size=100000&closed=true&orderBy=updated'),
+        fetch('/api/leads?source=db&size=200&editedOnly=true&orderBy=edited'),
         fetch('/api/dashboard'),
       ]);
-      const [activeJson, closedJson, dashJson] = await Promise.all([
-        activeRes.json(), closedRes.json(), dashRes.json(),
+      const [activeJson, closedJson, editedJson, dashJson] = await Promise.all([
+        activeRes.json(), closedRes.json(), editedRes.json(), dashRes.json(),
       ]);
       if (activeJson.success) setActiveLeads(activeJson.data || []);
       else setError(activeJson.error || 'Failed to load active leads');
       if (closedJson.success) setClosedLeads(closedJson.data || []);
+      if (editedJson.success) setEditedLeads(editedJson.data || []);
       if (dashJson.success) {
         const d = dashJson.data;
         setStock({
@@ -69,25 +75,47 @@ export default function QueuePage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const quoteReady = activeLeads.filter((l) => l.grade === 'A');
-  const needsInfo  = activeLeads.filter((l) => l.grade === 'B' || l.grade === 'C');
-  const bound      = closedLeads.filter((l) => l.status === 'bound');
-  const lost       = closedLeads.filter((l) => l.status === 'lost');
+  // Carrier filter (client-side): show only leads strictly eligible for the
+  // selected carrier (status 'eligible').
+  const carrierOk = (l: any) => {
+    if (!carrier) return true;
+    const v = carrier === 'travelers' ? l.travelersEligible : l.plymouthEligible;
+    return v === 'eligible';
+  };
+  const active     = activeLeads.filter(carrierOk);
+  const closed     = closedLeads.filter(carrierOk);
+  const edited     = editedLeads.filter(carrierOk);
+  const quoteReady = active.filter((l) => l.grade === 'A');
+  const needsInfo  = active.filter((l) => l.grade === 'B' || l.grade === 'C');
+  const bound      = closed.filter((l) => l.status === 'bound');
+  const lost       = closed.filter((l) => l.status === 'lost');
 
   const displayLeads =
     activeTab === 'quoteReady' ? quoteReady :
     activeTab === 'needsInfo'  ? needsInfo  :
-    closedLeads;
+    activeTab === 'edited'     ? edited     :
+    closed;
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <Box sx={{ mb: 3 }}>
+      <Box sx={{ mb: 3, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
+        <Box>
         <Typography variant="h4" sx={{ fontWeight: 'bold', mb: 0.5 }}>Lead Queues</Typography>
         <Typography variant="body1" color="text.secondary">
-          Active leads sorted by x-date proximity · bound/lost leads moved to Closed
+          Active leads sorted by soonest renewal date · bound/lost leads moved to Closed
         </Typography>
+        </Box>
+        {/* Carrier filter — leads writable by a carrier (eligible/review) */}
+        <FormControl size="small" sx={{ minWidth: 180 }}>
+          <InputLabel>Carrier</InputLabel>
+          <Select value={carrier} label="Carrier" onChange={(e) => setCarrier(e.target.value)}>
+            <MenuItem value="">All Carriers</MenuItem>
+            <MenuItem value="travelers">Travelers</MenuItem>
+            <MenuItem value="plymouth">Plymouth Rock</MenuItem>
+          </Select>
+        </FormControl>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
@@ -103,19 +131,19 @@ export default function QueuePage() {
 
         const bufferText =
           bufferDays == null
-            ? 'Buffer unknown — no binds recorded yet'
+            ? 'No sales recorded yet — lead supply not yet measurable'
             : bufferDays < 7
-            ? `Buffer critical: only ${bufferDays} days of leads ahead — trigger a data pull now`
+            ? `Almost out of leads: only ${bufferDays} days left — pull new leads now`
             : bufferDays < 14
-            ? `Buffer low: ${bufferDays} days of leads ahead — schedule a data pull soon`
-            : `Buffer healthy: ${bufferDays} days of leads queued ahead`;
+            ? `Running low: ${bufferDays} days of leads left — schedule a pull soon`
+            : `Healthy: ${bufferDays} days of leads queued ahead`;
 
         const ratioText = stock.stockFlowRatio != null
-          ? ` · Stock/flow ${stock.stockFlowRatio}× (target 0.5–0.75×)`
+          ? ` · Pipeline coverage ${stock.stockFlowRatio}× (target 0.5–0.75×)`
           : '';
 
         const staleText = stock.staleLeads > 0
-          ? ` · ${stock.staleLeads} stale lead${stock.staleLeads > 1 ? 's' : ''} (>14d untouched)`
+          ? ` · ${stock.staleLeads} lead${stock.staleLeads > 1 ? 's' : ''} untouched 14+ days`
           : '';
 
         return (
@@ -152,7 +180,7 @@ export default function QueuePage() {
                 {loading ? '…' : quoteReady.length}
               </Typography>
               <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>Quote Ready</Typography>
-              <Typography variant="caption" color="text.secondary">Grade A — active, sorted by x-date</Typography>
+              <Typography variant="caption" color="text.secondary">Grade A — active, sorted by renewal date</Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -233,25 +261,43 @@ export default function QueuePage() {
             }
             value="closed"
           />
+          <Tab
+            icon={<HistoryIcon />}
+            iconPosition="start"
+            label={
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <span>Recently Edited</span>
+                <Chip label={edited.length} size="small"
+                  sx={{ height: 18, fontSize: '0.7rem', bgcolor: '#e1f5fe', color: '#0277bd' }} />
+              </Stack>
+            }
+            value="edited"
+          />
         </Tabs>
       </Box>
 
       {/* ── Context alerts ─────────────────────────────────────────────────── */}
       {activeTab === 'quoteReady' && (
         <Alert severity="success" sx={{ mb: 2 }}>
-          <strong>Grade A — Quote Ready:</strong> Sorted by x-date proximity — leads with the soonest policy renewal are at the top.
+          <strong>Grade A — Quote Ready:</strong> Sorted by soonest renewal date — leads renewing soonest are at the top.
           Bound and lost leads have been removed from this view.
         </Alert>
       )}
       {activeTab === 'needsInfo' && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           <strong>Grade B/C — Needs Information:</strong> Pass carrier appetite but missing 1+ critical fields.
-          Enrichment or a quick call may resolve them. Sorted by x-date.
+          Enrichment or a quick call may resolve them. Sorted by renewal date.
         </Alert>
       )}
       {activeTab === 'closed' && (
         <Alert severity="info" sx={{ mb: 2 }}>
           <strong>Closed leads</strong> — bound policies and lost leads. Use this view to review variance data and lost reasons.
+        </Alert>
+      )}
+      {activeTab === 'edited' && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          <strong>Recently Edited</strong> — leads a producer saved from the detail page, most recent at the top.
+          Jump back to a lead you just worked. (Bulk data pulls don&apos;t appear here — only human edits.)
         </Alert>
       )}
 
