@@ -16,6 +16,8 @@ import { LeadFilters, LeadGradeValue, LeadStatus } from '@/types/lead';
 interface SearchFormProps {
   onSearch: (filters: LeadFilters) => void;
   loading?: boolean;
+  /** Seed the controls (used to restore filters when returning from a lead). */
+  initial?: { size?: number; engine?: number; grade?: string; status?: string; carrier?: string; effectiveDate?: string };
 }
 
 const GRADE_OPTIONS = [
@@ -37,13 +39,12 @@ const STATUS_OPTIONS = [
   { value: 'lost', label: 'Lost' },
 ];
 
-export default function SearchForm({ onSearch, loading = false }: SearchFormProps) {
-  const [size, setSize] = useState('100');
-  const [engine, setEngine] = useState<'all' | '1' | '2'>('all');
-  const [grade, setGrade] = useState('');
-  const [status, setStatus] = useState('');
-  const [carrier, setCarrier] = useState('');
-  const [effDate, setEffDate] = useState('');
+export default function SearchForm({ onSearch, loading = false, initial }: SearchFormProps) {
+  const [engine, setEngine] = useState<'all' | '1' | '2'>(initial?.engine ? (String(initial.engine) as '1' | '2') : 'all');
+  const [grade, setGrade] = useState(initial?.grade ?? '');
+  const [status, setStatus] = useState(initial?.status ?? '');
+  const [carrier, setCarrier] = useState(initial?.carrier ?? '');
+  const [effDate, setEffDate] = useState(initial?.effectiveDate ?? '');
 
   // The renewal slate worked "today" is 60 days out (eff = today + 60).
   const todaysSlate = () => {
@@ -55,7 +56,6 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
   const submit = (over?: { effDate?: string }) => {
     const eff = over?.effDate ?? effDate;
     onSearch({
-      size: size ? parseInt(size) : 100,
       engine: engine === 'all' ? undefined : (parseInt(engine) as 1 | 2),
       grade: (grade || undefined) as LeadGradeValue | undefined,
       status: (status || undefined) as LeadStatus | undefined,
@@ -70,7 +70,6 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
   };
 
   const handleReset = () => {
-    setSize('100');
     setEngine('all');
     setGrade('');
     setStatus('');
@@ -94,6 +93,7 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
             exclusive
             onChange={(_e, v) => { if (v) setEngine(v); }}
             size="small"
+            sx={{ flexWrap: 'wrap' }}
           >
             <Tooltip title="All leads — no date filter">
               <ToggleButton value="all">
@@ -192,19 +192,6 @@ export default function SearchForm({ onSearch, loading = false }: SearchFormProp
               Today&apos;s slate
             </Button>
           </Tooltip>
-
-          {/* Size */}
-          <TextField
-            label="Show leads"
-            type="number"
-            value={size}
-            onChange={(e) => setSize(e.target.value)}
-            variant="outlined"
-            size="small"
-            sx={{ width: 120 }}
-            slotProps={{ htmlInput: { min: 1, max: 100000 } }}
-            helperText="or Load all"
-          />
 
           {/* Buttons */}
           <Box sx={{ display: 'flex', gap: 1, pt: 0.25 }}>

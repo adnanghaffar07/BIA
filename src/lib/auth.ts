@@ -7,7 +7,7 @@ const JWT_SECRET = new TextEncoder().encode(
 );
 const SESSION_DURATION_DAYS = 7;
 
-export type UserRole = 'superadmin' | 'admin';
+export type UserRole = 'superadmin' | 'admin' | 'user';
 
 export interface AuthUser {
   id: string;

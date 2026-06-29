@@ -56,8 +56,12 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
     { label: 'Dashboard',   icon: <DashboardIcon />,        path: '/dashboard' },
     { label: 'Leads',       icon: <PeopleIcon />,           path: '/leads' },
     { label: 'Lead Queues', icon: <QueueIcon />,            path: '/queue' },
+    // Super-admin only: user / role management
     ...(user?.role === 'superadmin' ? [
       { label: 'Users',       icon: <ManageAccountsIcon />,  path: '/admin/users' },
+    ] : []),
+    // Admin + super-admin: data operations
+    ...(user?.role === 'superadmin' || user?.role === 'admin' ? [
       { label: 'Weekly Pull', icon: <EventRepeatIcon />,     path: '/admin/pull-weekly' },
       { label: 'Seed Control',icon: <CloudSyncIcon />,       path: '/admin/seed' },
     ] : []),

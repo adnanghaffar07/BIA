@@ -30,6 +30,8 @@ interface LeadsTableProps {
   leads: any[]; // accepts both Lead and DB lead shapes
   loading?: boolean;
   fetchSize?: number;
+  /** When this changes (e.g. the active tab), pagination resets to page 1 @ 25/page. */
+  resetKey?: string | number;
   onPageChange?: (page: number) => void;
   onRowsPerPageChange?: (rowsPerPage: number) => void;
 }
@@ -320,14 +322,12 @@ function LeadRow({ lead }: { lead: any }) {
 export default function LeadsTable({
   leads,
   loading = false,
-  fetchSize = 20,
+  resetKey,
   onPageChange,
   onRowsPerPageChange,
 }: LeadsTableProps) {
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState<number>(
-    () => ([25, 50, 100, 250, 500].includes(fetchSize) ? fetchSize : 100),
-  );
+  const [rowsPerPage, setRowsPerPage] = useState<number>(25);
 
   // ── Filter state ────────────────────────────────────────────────────────────
   const [search, setSearch]         = useState('');
@@ -375,10 +375,30 @@ export default function LeadsTable({
 
   useEffect(() => { setPage(0); }, [leads, search, filterZip, filterStatus]);
   useEffect(() => { if (page > maxPage) setPage(maxPage); }, [page, maxPage]);
+  // Tab change → reset to page 1 @ 25/page (Frank Jun-2026)
+  useEffect(() => { setPage(0); setRowsPerPage(25); }, [resetKey]);
 
   const paginatedLeads = filteredLeads.slice(safePage * effRpp, safePage * effRpp + effRpp);
   const rangeStart = totalRows === 0 ? 0 : safePage * effRpp + 1;
   const rangeEnd = Math.min((safePage + 1) * effRpp, totalRows);
+
+  // Shared pagination control — rendered above AND below the table (Frank Jun-2026).
+  const renderPager = (loc: 'top' | 'bottom') => (
+    <TablePagination
+      key={loc}
+      rowsPerPageOptions={[25, 50, 100, 250, 500, { label: 'All', value: -1 }]}
+      component="div"
+      count={totalRows}
+      rowsPerPage={rowsPerPage}
+      page={safePage}
+      onPageChange={(_e, p) => { setPage(p); onPageChange?.(p); }}
+      onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); onRowsPerPageChange?.(parseInt(e.target.value, 10)); }}
+      labelDisplayedRows={() => `${rangeStart}–${rangeEnd} of ${totalRows}`}
+      showFirstButton
+      showLastButton
+      sx={{ '.MuiTablePagination-toolbar': { flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: 0.5, px: { xs: 0, sm: 2 } } }}
+    />
+  );
 
   if (loading && leads.length === 0) {
     return <Paper sx={{ p: 4, display: 'flex', justifyContent: 'center' }}><CircularProgress /></Paper>;
@@ -453,6 +473,8 @@ export default function LeadsTable({
         <Typography variant="body2" color="textSecondary">Click any row to expand details</Typography>
       </Box>
 
+      {renderPager('top')}
+
       <TableContainer component={Paper}>
         <Table stickyHeader size="small">
           <TableHead>
@@ -480,18 +502,7 @@ export default function LeadsTable({
         </Table>
       </TableContainer>
 
-      <TablePagination
-        rowsPerPageOptions={[25, 50, 100, 250, 500, { label: 'All', value: -1 }]}
-        component="div"
-        count={totalRows}
-        rowsPerPage={rowsPerPage}
-        page={safePage}
-        onPageChange={(_e, p) => { setPage(p); onPageChange?.(p); }}
-        onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); onRowsPerPageChange?.(parseInt(e.target.value, 10)); }}
-        labelDisplayedRows={() => `${rangeStart}–${rangeEnd} of ${totalRows}`}
-        showFirstButton
-        showLastButton
-      />
+      {renderPager('bottom')}
     </Box>
   );
 }

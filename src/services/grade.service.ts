@@ -35,14 +35,16 @@ const CRITICAL_FIELDS: Array<{
   // ── Roof age — the single biggest NJ knockout/rating driver ───────────────
   // Spec §4B/§6: an estimated (vs confirmed) roof age means the lead is NOT
   // quote-ready until a producer confirms roof age on the call and enters it.
-  // Frank (Jun-2026): roof year is ONLY a needed-confirmation field when the home
-  // is OLDER THAN 15 YEARS (age = currentYear − yearBuilt > 15). Newer homes have a
-  // roof young enough that it doesn't gate the quote, so it isn't required there.
+  // Frank (Jun-2026, post-demo): roof year is a needed-confirmation field when the
+  // home is OLDER THAN 20 YEARS (age = currentYear − yearBuilt > 20). Both Travelers
+  // (>20 yr roof out of appetite) and Plymouth (factors roof type/condition) need the
+  // roof confirmed on 20+ yr homes, so an unconfirmed roof there drops the lead off A.
+  // Homes built 2006+ (≤20 yr) have a roof young enough that it doesn't gate the quote.
   {
-    path: 'roofYear', label: 'Roof age / year installed (home >15 yrs)', critical: true,
+    path: 'roofYear', label: 'Roof age / year installed (home >20 yrs)', critical: true,
     appliesWhen: (l) => {
       const yb = Number(l.yearBuilt);
-      return !yb || (new Date().getFullYear() - yb) > 15;
+      return !yb || (new Date().getFullYear() - yb) > 20;
     },
   },
 
@@ -166,10 +168,12 @@ export function getCompletenessPercentage(lead: Lead): number {
 
 /**
  * Whether a lead can have skip trace run on it.
- * Skip trace is gated: only run on leads that pass at least one carrier.
+ * Frank (Jun-2026, post-demo): enabled for ALL workable grades (A, B, C) so the team
+ * can enrich data and potentially upgrade a lead — not just carrier-qualified ones.
+ * Only Grade D (out of appetite) and already-traced leads are blocked.
  */
-export function canRunSkipTrace(lead: Lead, eligibility?: CarrierEligibilityResult): boolean {
+export function canRunSkipTrace(lead: Lead, _eligibility?: CarrierEligibilityResult): boolean {
   if ((lead as any).skipTraced) return false;
-  const result = eligibility ?? checkCarrierEligibility(lead);
-  return result.passesAnyCarrier;
+  const grade = (lead as any).manualGrade || (lead as any).grade;
+  return grade === 'A' || grade === 'B' || grade === 'C';
 }

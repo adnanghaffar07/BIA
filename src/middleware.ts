@@ -33,14 +33,22 @@ export async function middleware(request: NextRequest) {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
 
-    // Guard /admin routes to superadmin only
-    if (pathname.startsWith('/admin') || pathname.startsWith('/api/admin')) {
-      if (payload.role !== 'superadmin') {
-        if (pathname.startsWith('/api/')) {
-          return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
-        }
-        return NextResponse.redirect(new URL('/', request.url));
+    // Guard /admin routes:
+    //   • User management (/admin/users) → superadmin only (manages roles/admins).
+    //   • Other admin pages (Weekly Pull, Seed) → superadmin + admin.
+    //   • Regular users (BIA producers) → leads-only, no admin pages.
+    const isUserMgmt = pathname.startsWith('/admin/users') || pathname.startsWith('/api/admin/users');
+    const isAdminArea = pathname.startsWith('/admin') || pathname.startsWith('/api/admin');
+    const allowed = isUserMgmt
+      ? payload.role === 'superadmin'
+      : isAdminArea
+        ? (payload.role === 'superadmin' || payload.role === 'admin')
+        : true;
+    if (!allowed) {
+      if (pathname.startsWith('/api/')) {
+        return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
       }
+      return NextResponse.redirect(new URL('/', request.url));
     }
 
     return NextResponse.next();

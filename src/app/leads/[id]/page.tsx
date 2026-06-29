@@ -369,8 +369,9 @@ export default function LeadDetailPage() {
       kitchenCount: extra.kitchenCount !== '' && extra.kitchenCount != null ? parseInt(extra.kitchenCount, 10) : undefined,
       kitchenGrade: extra.kitchenGrade || undefined,
       _createdBy: lead?.producerEmail || undefined,
-      _activityNote: producerNote || `Status updated to ${statusLabel(status)}`,
-      _activityType: status === 'bound' ? 'bound' : status === 'lost' ? 'lost' : 'status_change',
+      // Only send an explicit note when the producer typed one; otherwise the server
+      // auto-logs the actual field-level changes (status, grade, edited fields).
+      ...(producerNote ? { _activityNote: producerNote, _activityType: 'note' } : {}),
     };
 
     const res = await fetch(`/api/leads/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -536,8 +537,8 @@ export default function LeadDetailPage() {
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <Breadcrumbs sx={{ mb: 1 }}>
-        <Link href="/queue" style={{ color: 'inherit', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>
-          <ArrowBackIcon fontSize="small" /> Leads
+        <Link href="/queue?tab=edited" style={{ color: 'inherit', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <ArrowBackIcon fontSize="small" /> Lead Queue
         </Link>
         <Typography color="text.primary" variant="body2">{lead.addressStreet}</Typography>
       </Breadcrumbs>
@@ -717,7 +718,7 @@ export default function LeadDetailPage() {
           {/* Insured Details (editable) */}
           <Grid size={{ xs: 12, md: 6 }}>
             <SubHead>Insured Details</SubHead>
-            {/* Skip trace (REAPI) — gated to carrier-qualified leads that haven't been traced yet */}
+            {/* Skip trace (REAPI) — enabled for Grade A/B/C leads not yet traced (Frank Jun-2026) */}
             {lead.skipTraced ? (
               <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', mt: 1, mb: 0.5 }}>
                 <Chip size="small" color="success" variant="outlined" icon={<PersonSearchIcon />}
@@ -728,7 +729,7 @@ export default function LeadDetailPage() {
                   </Button>
                 )}
               </Stack>
-            ) : (lead.travelersEligible === 'eligible' || lead.plymouthEligible === 'eligible') ? (
+            ) : (['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade))) ? (
               <Button
                 variant="outlined" size="small"
                 startIcon={skipTracing ? <CircularProgress size={14} color="inherit" /> : <PersonSearchIcon />}
@@ -740,7 +741,7 @@ export default function LeadDetailPage() {
               </Button>
             ) : (
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, mb: 0.5 }}>
-                Skip trace unlocks once the lead passes a carrier.
+                Skip trace is available on Grade A, B, or C leads.
               </Typography>
             )}
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1, mb: 1 }}>
@@ -757,9 +758,11 @@ export default function LeadDetailPage() {
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 1.5 }}>
               <TextField label="Owner 1 DOB" type="date" size="small" fullWidth value={extra.owner1Dob ?? ''}
-                onChange={(e) => setEx('owner1Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+                onChange={(e) => setEx('owner1Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }}
+                helperText={lead.skipTraced ? 'Skip-trace estimate (from age) — confirm' : 'To be confirmed'} />
               <TextField label="Owner 2 DOB" type="date" size="small" fullWidth value={extra.owner2Dob ?? ''}
-                onChange={(e) => setEx('owner2Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+                onChange={(e) => setEx('owner2Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }}
+                helperText={lead.skipTraced ? 'Skip-trace estimate (from age) — confirm' : 'To be confirmed'} />
             </Stack>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.7 }}>
               DOB + phone drive the Travelers insurance score (phone is a required portal field).
@@ -1346,17 +1349,40 @@ export default function LeadDetailPage() {
         {lead.activities?.length > 0 && (
           <Section title={`Activity Log (${lead.activities.length})`}>
             <Stack spacing={1} sx={{ mt: 0.5 }}>
-              {lead.activities.map((a: any) => (
-                <Box key={a.id} sx={{ borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, py: 0.25 }}>
-                  <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-                    <Typography variant="body2">{a.content}</Typography>
-                    <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 2 }}>
-                      {new Date(a.createdAt).toLocaleString()}
-                      {a.createdBy ? ` · ${a.createdBy}` : ''}
-                    </Typography>
-                  </Stack>
-                </Box>
-              ))}
+              {lead.activities.map((a: any) => {
+                const det = Array.isArray(a.metadata?.changes) ? a.metadata.changes : [];
+                return (
+                  <Box key={a.id} sx={{ borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, py: 0.25 }}>
+                    <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
+                      {det.length > 0 ? (
+                        <Tooltip
+                          arrow
+                          placement="top-start"
+                          title={
+                            <Box sx={{ py: 0.25 }}>
+                              {det.map((d: any, i: number) => (
+                                <Typography key={i} variant="caption" sx={{ display: 'block' }}>
+                                  <strong>{d.field}:</strong> {d.from} → {d.to}
+                                </Typography>
+                              ))}
+                            </Box>
+                          }
+                        >
+                          <Typography variant="body2" sx={{ borderBottom: '1px dotted', borderColor: 'text.disabled', cursor: 'help' }}>
+                            {a.content}
+                          </Typography>
+                        </Tooltip>
+                      ) : (
+                        <Typography variant="body2">{a.content}</Typography>
+                      )}
+                      <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 2 }}>
+                        {new Date(a.createdAt).toLocaleString()}
+                        {a.createdBy ? ` · ${a.createdBy}` : ''}
+                      </Typography>
+                    </Stack>
+                  </Box>
+                );
+              })}
             </Stack>
           </Section>
         )}

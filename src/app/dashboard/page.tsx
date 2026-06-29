@@ -238,15 +238,15 @@ export default function Dashboard() {
                   </Box>
                 </Grid>
 
-                {/* Stock / flow ratio */}
+                {/* Accounts Quoted */}
                 <Grid size={{ xs: 6, sm: 3 }}>
-                  <Box sx={{ textAlign: 'center', p: 1.5, borderRadius: 2, bgcolor: ratioStatus === 'success' ? '#e8f5e9' : '#fff3e0' }}>
-                    <TrendingUpIcon sx={{ color: ratioColor, mb: 0.5 }} />
-                    <Typography variant="h4" sx={{ fontWeight: 'bold', color: ratioColor }}>
-                      {ratioLabel}
+                  <Box sx={{ textAlign: 'center', p: 1.5, borderRadius: 2, bgcolor: '#e0f2f1' }}>
+                    <FactCheckIcon sx={{ color: '#00897b', mb: 0.5 }} />
+                    <Typography variant="h4" sx={{ fontWeight: 'bold', color: '#00897b' }}>
+                      {s.quotedPos.toLocaleString()}
                     </Typography>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Pipeline Coverage</Typography>
-                    <Typography variant="caption" color="text.secondary">in-progress ÷ monthly sales · target 0.5–0.75×</Typography>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Accounts Quoted</Typography>
+                    <Typography variant="caption" color="text.secondary">full carrier quote produced</Typography>
                   </Box>
                 </Grid>
 

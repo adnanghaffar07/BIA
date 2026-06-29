@@ -75,6 +75,13 @@ export default function QueuePage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Open a specific tab when arrived via ?tab= (e.g. "Back to Lead Queue" from a
+  // lead detail page lands on Recently Edited).
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t && ['quoteReady', 'needsInfo', 'closed', 'edited'].includes(t)) setActiveTab(t as QueueTab);
+  }, []);
+
   // Carrier filter (client-side): show only leads strictly eligible for the
   // selected carrier (status 'eligible').
   const carrierOk = (l: any) => {
@@ -222,9 +229,30 @@ export default function QueuePage() {
         </Grid>
       </Grid>
 
-      {/* ── Tabs ───────────────────────────────────────────────────────────── */}
-      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-        <Tabs value={activeTab} onChange={(_e, v) => setActiveTab(v)}>
+      {/* ── Tabs: dropdown on mobile, tabs on desktop (mirrors Leads page) ───── */}
+      <FormControl size="small" fullWidth sx={{ display: { xs: 'flex', md: 'none' }, mb: 2.5 }}>
+        <InputLabel id="queue-tab-label">View</InputLabel>
+        <Select
+          labelId="queue-tab-label"
+          label="View"
+          value={activeTab}
+          onChange={(e) => setActiveTab(e.target.value as QueueTab)}
+        >
+          <MenuItem value="quoteReady">Quote Ready ({quoteReady.length})</MenuItem>
+          <MenuItem value="needsInfo">Needs Information ({needsInfo.length})</MenuItem>
+          <MenuItem value="closed">Closed ({closedLeads.length})</MenuItem>
+          <MenuItem value="edited">Recently Edited ({edited.length})</MenuItem>
+        </Select>
+      </FormControl>
+
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3, display: { xs: 'none', md: 'block' } }}>
+        <Tabs
+          value={activeTab}
+          onChange={(_e, v) => setActiveTab(v)}
+          variant="scrollable"
+          scrollButtons="auto"
+          allowScrollButtonsMobile
+        >
           <Tab
             icon={<FactCheckIcon />}
             iconPosition="start"
@@ -307,7 +335,7 @@ export default function QueuePage() {
           <CircularProgress />
         </Box>
       ) : (
-        <LeadsTable leads={displayLeads} loading={loading} fetchSize={50} />
+        <LeadsTable leads={displayLeads} loading={loading} resetKey={activeTab} />
       )}
     </Container>
   );

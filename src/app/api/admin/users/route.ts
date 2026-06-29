@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const validRoles = ['admin', 'superadmin'];
+  const validRoles = ['user', 'admin', 'superadmin'];
   if (role && !validRoles.includes(role)) {
     return NextResponse.json({ success: false, error: 'Invalid role' }, { status: 400 });
   }
@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
       email,
       password,
       name,
-      role: role || 'admin',
+      role: role || 'user',
       createdBy: admin.id,
     });
     return NextResponse.json({ success: true, data: user }, { status: 201 });

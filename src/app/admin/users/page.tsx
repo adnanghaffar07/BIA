@@ -20,7 +20,7 @@ interface User {
   id: string;
   email: string;
   name: string;
-  role: 'superadmin' | 'admin';
+  role: 'superadmin' | 'admin' | 'user';
   isActive: boolean;
   createdAt: string;
   createdBy: string | null;
@@ -37,7 +37,7 @@ export default function UserManagementPage() {
 
   // Create user dialog
   const [createOpen, setCreateOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'admin' });
+  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'user' });
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -85,7 +85,7 @@ export default function UserManagementPage() {
       const data = await res.json();
       if (data.success) {
         setCreateOpen(false);
-        setForm({ name: '', email: '', password: '', role: 'admin' });
+        setForm({ name: '', email: '', password: '', role: 'user' });
         setSuccess('User created successfully');
         fetchUsers();
       } else {
@@ -183,11 +183,11 @@ export default function UserManagementPage() {
                 <TableCell>{u.email}</TableCell>
                 <TableCell>
                   <Chip
-                    label={u.role === 'superadmin' ? 'Super Admin' : 'Admin'}
+                    label={u.role === 'superadmin' ? 'Super Admin' : u.role === 'admin' ? 'Admin' : 'Regular User'}
                     size="small"
                     sx={{
-                      backgroundColor: u.role === 'superadmin' ? '#1a237e' : '#e3f2fd',
-                      color: u.role === 'superadmin' ? 'white' : '#1565c0',
+                      backgroundColor: u.role === 'superadmin' ? '#1a237e' : u.role === 'admin' ? '#e3f2fd' : '#e8f5e9',
+                      color: u.role === 'superadmin' ? 'white' : u.role === 'admin' ? '#1565c0' : '#1b5e20',
                       fontWeight: 'bold',
                     }}
                   />
@@ -267,8 +267,9 @@ export default function UserManagementPage() {
                 label="Role"
                 onChange={(e) => setForm({ ...form, role: e.target.value })}
               >
-                <MenuItem value="admin">Admin (Producer / Staff)</MenuItem>
-                <MenuItem value="superadmin">Super Admin</MenuItem>
+                <MenuItem value="user">Regular User (BIA Producer — leads only)</MenuItem>
+                <MenuItem value="admin">Admin (data ops + producer view)</MenuItem>
+                <MenuItem value="superadmin">Super Admin (full access)</MenuItem>
               </Select>
             </FormControl>
           </Stack>

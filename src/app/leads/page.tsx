@@ -25,11 +25,27 @@ export default function LeadsPage() {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
 
   const engineForTab = (t: TabValue): 1 | 2 | undefined => (t === 'engine1' ? 1 : t === 'engine2' ? 2 : undefined);
+  const [restoreKey, setRestoreKey] = useState(0);
 
+  // Restore the last-used filters so the Back button returns to the same filtered
+  // list (Frank Jun-2026), then keep them persisted across the detail-page round-trip.
   useEffect(() => {
-    fetchLeads('all', { size: 100 });
+    let saved: any = null;
+    try { saved = JSON.parse(sessionStorage.getItem('biaLeadsView') || 'null'); } catch { /* ignore */ }
+    if (saved?.filters) {
+      setFilters(saved.filters);
+      setActiveTab(saved.activeTab || 'all');
+      setRestoreKey(1); // remount SearchForm once so its dropdowns reflect the restored filters
+      fetchLeads(saved.activeTab || 'all', saved.filters);
+    } else {
+      fetchLeads('all', { size: 100 });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    try { sessionStorage.setItem('biaLeadsView', JSON.stringify({ filters, activeTab })); } catch { /* ignore */ }
+  }, [filters, activeTab]);
 
   const fetchLeads = async (tab: TabValue, f: { grade?: string; status?: string; size: number; effectiveDate?: string; carrier?: string }) => {
     try {
@@ -72,7 +88,9 @@ export default function LeadsPage() {
     const tab: TabValue =
       newFilters.engine === 1 ? 'engine1' :
       newFilters.engine === 2 ? 'engine2' : 'all';
-    const f = { grade: newFilters.grade, status: newFilters.status, size: newFilters.size || 100, effectiveDate: newFilters.effectiveDate, carrier: newFilters.carrier };
+    // Page size is no longer a form field — preserve the current size (100 default,
+    // or "all" if the user picked All in the pagination) across filter changes.
+    const f = { grade: newFilters.grade, status: newFilters.status, size: filters.size ?? 100, effectiveDate: newFilters.effectiveDate, carrier: newFilters.carrier };
     setActiveTab(tab);
     setFilters(f);
     fetchLeads(tab, f);
@@ -112,7 +130,12 @@ export default function LeadsPage() {
 
       {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
 
-      <SearchForm onSearch={handleSearch} loading={loading} />
+      <SearchForm
+        key={restoreKey}
+        onSearch={handleSearch}
+        loading={loading}
+        initial={restoreKey ? { ...filters, engine: engineForTab(activeTab) } : undefined}
+      />
 
       {/* Pipeline selector — dropdown on mobile (<md) */}
       <FormControl size="small" fullWidth sx={{ display: { xs: 'flex', md: 'none' }, mb: 3 }}>
@@ -203,9 +226,9 @@ export default function LeadsPage() {
           {activeTab === 'engine1' ? 'New Purchase' : activeTab === 'engine2' ? 'Renewal' : ''} leads in database
         </Typography>
         {displayLeads.length < viewTotal && (
-          <Button size="small" variant="outlined" onClick={loadAll} disabled={loading}>
-            Load all {viewTotal.toLocaleString()}
-          </Button>
+          <Typography variant="caption" color="text.secondary">
+            Set rows-per-page to <strong>All</strong> (table footer) to load all {viewTotal.toLocaleString()}.
+          </Typography>
         )}
       </Box>
 
@@ -217,7 +240,8 @@ export default function LeadsPage() {
         <LeadsTable
           leads={displayLeads}
           loading={loading}
-          fetchSize={filters.size ?? 100}
+          resetKey={activeTab}
+          onRowsPerPageChange={(rpp) => { if (rpp === -1) loadAll(); }}
         />
       )}
 

@@ -28,7 +28,7 @@ export async function POST(
           success: false,
           error: (lead as any).skipTraced
             ? 'This lead has already been skip traced.'
-            : 'Skip trace is only available on carrier-qualified leads.',
+            : 'Skip trace is available on Grade A, B, or C leads.',
         },
         { status: 400 },
       );
