@@ -39,6 +39,8 @@ const LEAD_COLS = [
   'competitorCarrier', 'competitorPremium',
   // Frank Jun-2026: dual insureds + DOB, confirm-on-call, home features
   'owner2FirstName', 'owner2LastName', 'maritalStatus', 'owner1Dob', 'owner2Dob',
+  // Skip-trace REAPI DOB (age-derived, name-matched to the insured)
+  'reapiDob', 'reapiAge',
   'dogBreed', 'insuranceHistory', 'heatingRenovatedYear', 'bathroomsFull', 'bathroomsHalf',
   'garageType', 'garageCount', 'sidingType', 'foundationType', 'heatSource', 'feetFromHydrant',
   'burglarAlarm', 'fireAlarm', 'sprinklerSystem', 'smokeDetector', 'waterSensor',
@@ -75,6 +77,7 @@ const CRM_ONLY_FIELDS = new Set([
   // Frank Jun-2026: producer/skip-trace-entered — never clobber on REAPI re-ingest
   'skipTraceData',
   'owner2FirstName', 'owner2LastName', 'maritalStatus', 'owner1Dob', 'owner2Dob',
+  'reapiDob', 'reapiAge',
   'dogBreed', 'insuranceHistory', 'heatingRenovatedYear', 'bathroomsFull', 'bathroomsHalf',
   'garageType', 'garageCount', 'sidingType', 'foundationType', 'heatSource', 'feetFromHydrant',
   'burglarAlarm', 'fireAlarm', 'sprinklerSystem', 'smokeDetector', 'waterSensor',
@@ -481,6 +484,7 @@ export async function updateLead(
     // Frank Jun-2026: dual insureds + DOB, confirm-on-call, home features
     owner2FirstName: string; owner2LastName: string; maritalStatus: string;
     owner1Dob: string; owner2Dob: string;
+    reapiDob: string; reapiAge: number;
     dogBreed: string; insuranceHistory: string; heatingRenovatedYear: number;
     bathroomsFull: number; bathroomsHalf: number;
     garageType: string; garageCount: number; sidingType: string; foundationType: string;

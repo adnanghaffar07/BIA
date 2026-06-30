@@ -47,26 +47,52 @@ function extractContacts(json: any): { phones: string[]; emails: string[] } {
 export function insuredPatchFromPersons(persons: any[], lead: any): Record<string, any> {
   const list = Array.isArray(persons) ? persons : [];
   if (!list.length) return {};
-  const o1First = String(lead.owner1FirstName ?? '').toLowerCase().trim();
-  const o1Last = String(lead.owner1LastName ?? '').toLowerCase().trim();
+  const norm = (s: any) => String(s ?? '').toLowerCase().trim();
+  const o1First = norm(lead.owner1FirstName);
+  const o1Last = norm(lead.owner1LastName);
 
-  const primary =
-    list.find((p) => String(p.firstName ?? '').toLowerCase() === o1First && String(p.lastName ?? '').toLowerCase() === o1Last)
-    ?? list[0];
+  // Frank Jun-2026: the REAPI DOB must come from the skip-traced person whose name
+  // matches the Insured Name — never a random person on the loan. Prefer an exact
+  // first+last match; the fallback only accepts a same-surname person whose first
+  // name is a prefix of the other (≥3 chars), so "Alla"↔"Allan" matches but a
+  // same-surname relative like "Al"↔"Albert" does not.
+  const firstNamesAgree = (a: string, b: string) => {
+    if (!a || !b) return false;
+    const [s, l] = a.length <= b.length ? [a, b] : [b, a];
+    return s.length >= 3 && l.startsWith(s);
+  };
+  const nameMatch =
+    (o1First && o1Last && list.find((p) => norm(p.firstName) === o1First && norm(p.lastName) === o1Last))
+    || (o1Last && o1First && list.find((p) => norm(p.lastName) === o1Last && firstNamesAgree(norm(p.firstName), o1First)))
+    || null;
+
+  const primary = nameMatch ?? list[0];
   const coInsured =
-    list.find((p) => p !== primary && String(p.lastName ?? '').toLowerCase() === o1Last && o1Last)
+    list.find((p) => p !== primary && o1Last && norm(p.lastName) === o1Last)
     ?? list.find((p) => p !== primary);
 
+  // REAPI returns `age`, not a birth date. Year is exact (this year − age); month
+  // and day are assumed (Jan 1) and flagged "(est.)" for the producer to confirm.
   const estDob = (age: any): string | undefined => {
     const a = parseInt(String(age), 10);
     return a > 0 && a < 120 ? `${new Date().getFullYear() - a}-01-01` : undefined;
   };
 
   const patch: Record<string, any> = {};
+
+  // REAPI DOB — strictly from the name-matched insured (read-only display field).
+  if (nameMatch?.age != null) {
+    const a = parseInt(String(nameMatch.age), 10);
+    const d = estDob(nameMatch.age);
+    if (d) { patch.reapiDob = d; patch.reapiAge = a; }
+  }
+
   if (coInsured) {
     if (!lead.owner2FirstName && coInsured.firstName) patch.owner2FirstName = coInsured.firstName;
     if (!lead.owner2LastName && coInsured.lastName) patch.owner2LastName = coInsured.lastName;
   }
+  // Pre-fill the editable DOB fields (empty slots only) so the producer has a
+  // starting point to confirm; reapiDob above stays the source-of-truth.
   if (!lead.owner1Dob && primary?.age) { const d = estDob(primary.age); if (d) patch.owner1Dob = d; }
   if (!lead.owner2Dob && coInsured?.age) { const d = estDob(coInsured.age); if (d) patch.owner2Dob = d; }
   return patch;

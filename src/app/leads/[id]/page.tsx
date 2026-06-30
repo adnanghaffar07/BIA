@@ -488,6 +488,7 @@ export default function LeadDetailPage() {
 
   const address = `${lead.addressStreet}, ${lead.addressCity}, ${lead.addressState} ${lead.addressZip}`;
   const ownerName = [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—';
+  const coInsuredName = [lead.owner2FirstName, lead.owner2LastName].filter(Boolean).join(' ');
 
   // Save gate (Frank Phase 5b): disable Save / Save & Next until required fields pass —
   // a grade override needs a reason; a LOST lead needs reason + stage + revisit election.
@@ -565,6 +566,16 @@ export default function LeadDetailPage() {
             <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
               <SubHead>Insured</SubHead>
               <Row label="Insured Named" value={ownerName} />
+              {(lead.reapiDob || lead.owner1Dob) && (
+                <Row
+                  label="REAPI DOB"
+                  value={`${String(lead.reapiDob || lead.owner1Dob).slice(0, 10)}${lead.reapiAge ? ` · age ${lead.reapiAge}` : ''} (est.)`}
+                />
+              )}
+              {coInsuredName && <Row label="Co-Insured" value={coInsuredName} />}
+              {lead.owner2Dob && (
+                <Row label="Co-Insured DOB" value={`${String(lead.owner2Dob).slice(0, 10)} (est.)`} />
+              )}
               <Row label="Owner Occupied" value={lead.ownerOccupied ? 'Yes' : 'No'} />
               <Row label="Absentee Owner" value={lead.absenteeOwner ? 'Yes' : 'No'} />
             </Grid>
@@ -756,16 +767,8 @@ export default function LeadDetailPage() {
               <TextField label="Phone" size="small" fullWidth value={extra.phone1 ?? ''} onChange={(e) => setEx('phone1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="skip-trace / call" />
               <TextField label="Email" size="small" fullWidth value={extra.email1 ?? ''} onChange={(e) => setEx('email1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
             </Stack>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 1.5 }}>
-              <TextField label="Owner 1 DOB" type="date" size="small" fullWidth value={extra.owner1Dob ?? ''}
-                onChange={(e) => setEx('owner1Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }}
-                helperText={lead.skipTraced ? 'Skip-trace estimate (from age) — confirm' : 'To be confirmed'} />
-              <TextField label="Owner 2 DOB" type="date" size="small" fullWidth value={extra.owner2Dob ?? ''}
-                onChange={(e) => setEx('owner2Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }}
-                helperText={lead.skipTraced ? 'Skip-trace estimate (from age) — confirm' : 'To be confirmed'} />
-            </Stack>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.7 }}>
-              DOB + phone drive the Travelers insurance score (phone is a required portal field).
+              DOB (skip-trace estimate) shows read-only under Account Data → Insured. Phone is a required Travelers portal field and drives the insurance score.
             </Typography>
             <Box sx={{ mb: 1 }}>
               <FeatureSelect label="Insurance History" value={extra.insuranceHistory ?? ''} onChange={(v) => setEx('insuranceHistory', v)}
