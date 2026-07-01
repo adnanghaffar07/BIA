@@ -61,6 +61,25 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
     );
   }
 
+  // Protected route but not authenticated — e.g. we just logged out or the session
+  // expired. Do NOT render the page content (it would linger un-shelled until the
+  // redirect completes). Show a loader while the effect above routes to /login.
+  if (!isPublicRoute && !isAuthenticated) {
+    return (
+      <Box
+        sx={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'background.default',
+        }}
+      >
+        <CircularProgress />
+      </Box>
+    );
+  }
+
   const shouldShowSidebar = !isPublicRoute && isAuthenticated;
   const sidebarW = shouldShowSidebar
     ? (collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED)

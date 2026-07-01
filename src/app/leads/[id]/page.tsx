@@ -22,12 +22,23 @@ import SkipNextIcon from '@mui/icons-material/SkipNext';
 import GavelIcon from '@mui/icons-material/Gavel';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import SkipTraceDialog from '@/components/SkipTraceDialog';
+import { useAuth } from '@/context/AuthContext';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function fmt(v: number | null | undefined, prefix = '') {
   if (v == null) return '—';
   return `${prefix}${Number(v).toLocaleString()}`;
+}
+
+/** Read-only DOB display — "1962-01-01 · age 64 (est.)". Age is derived from the
+ *  year so it stays correct whether the DOB is REAPI-estimated or admin-corrected. */
+function dobDisplay(v: unknown): string {
+  if (!v) return '';
+  const s = String(v).slice(0, 10);
+  const y = parseInt(s.slice(0, 4), 10);
+  const age = y ? new Date().getFullYear() - y : null;
+  return `${s}${age && age > 0 && age < 120 ? ` · age ${age}` : ''} (est.)`;
 }
 
 function fmtCurrency(v: number | null | undefined) {
@@ -133,6 +144,8 @@ const RESTRICTED_DOG_BREEDS = [
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
 
   const [lead, setLead] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -205,6 +218,7 @@ export default function LeadDetailPage() {
         maritalStatus: l.maritalStatus ?? '',
         owner1Dob: l.owner1Dob ? String(l.owner1Dob).slice(0, 10) : '',
         owner2Dob: l.owner2Dob ? String(l.owner2Dob).slice(0, 10) : '',
+        reapiDob: l.reapiDob ? String(l.reapiDob).slice(0, 10) : '',
         dogBreed: l.dogBreed ?? '',
         insuranceHistory: l.insuranceHistory ?? 'currently_insured', // assumed valid until call
         heatingRenovatedYear: l.heatingRenovatedYear != null ? String(l.heatingRenovatedYear) : '',
@@ -329,6 +343,8 @@ export default function LeadDetailPage() {
       maritalStatus: extra.maritalStatus || undefined,
       owner1Dob: extra.owner1Dob || undefined,
       owner2Dob: extra.owner2Dob || undefined,
+      // Admin-only DOB override (correct a wrong skip-trace estimate)
+      ...(isAdmin ? { reapiDob: extra.reapiDob || undefined } : {}),
       dogBreed: extra.dogBreed || undefined,
       insuranceHistory: extra.insuranceHistory || undefined,
       heatingRenovatedYear: extra.heatingRenovatedYear ? parseInt(extra.heatingRenovatedYear, 10) : undefined,
@@ -567,14 +583,11 @@ export default function LeadDetailPage() {
               <SubHead>Insured</SubHead>
               <Row label="Insured Named" value={ownerName} />
               {(lead.reapiDob || lead.owner1Dob) && (
-                <Row
-                  label="REAPI DOB"
-                  value={`${String(lead.reapiDob || lead.owner1Dob).slice(0, 10)}${lead.reapiAge ? ` · age ${lead.reapiAge}` : ''} (est.)`}
-                />
+                <Row label="REAPI DOB" value={dobDisplay(lead.reapiDob || lead.owner1Dob)} />
               )}
               {coInsuredName && <Row label="Co-Insured" value={coInsuredName} />}
               {lead.owner2Dob && (
-                <Row label="Co-Insured DOB" value={`${String(lead.owner2Dob).slice(0, 10)} (est.)`} />
+                <Row label="Co-Insured DOB" value={dobDisplay(lead.owner2Dob)} />
               )}
               <Row label="Owner Occupied" value={lead.ownerOccupied ? 'Yes' : 'No'} />
               <Row label="Absentee Owner" value={lead.absenteeOwner ? 'Yes' : 'No'} />
@@ -767,9 +780,22 @@ export default function LeadDetailPage() {
               <TextField label="Phone" size="small" fullWidth value={extra.phone1 ?? ''} onChange={(e) => setEx('phone1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="skip-trace / call" />
               <TextField label="Email" size="small" fullWidth value={extra.email1 ?? ''} onChange={(e) => setEx('email1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
             </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.7 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: isAdmin ? 1 : 1.7 }}>
               DOB (skip-trace estimate) shows read-only under Account Data → Insured. Phone is a required Travelers portal field and drives the insurance score.
             </Typography>
+            {isAdmin && (
+              <Box sx={{ mb: 1.7, p: 1.25, borderRadius: 1, border: '1px dashed', borderColor: 'divider', bgcolor: 'action.hover' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1, fontWeight: 600 }}>
+                  Admin override — correct a wrong skip-trace DOB (year drives the estimate)
+                </Typography>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                  <TextField label="Insured DOB (REAPI)" type="date" size="small" fullWidth value={extra.reapiDob ?? ''}
+                    onChange={(e) => setEx('reapiDob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+                  <TextField label="Co-Insured DOB" type="date" size="small" fullWidth value={extra.owner2Dob ?? ''}
+                    onChange={(e) => setEx('owner2Dob', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+                </Stack>
+              </Box>
+            )}
             <Box sx={{ mb: 1 }}>
               <FeatureSelect label="Insurance History" value={extra.insuranceHistory ?? ''} onChange={(v) => setEx('insuranceHistory', v)}
                 options={[['currently_insured', 'Currently insured (assumed)'], ['lapsed', 'Lapsed'], ['new', 'New / first-time']]} />

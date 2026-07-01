@@ -6,7 +6,7 @@ import {
   ListItemText, Divider, Typography, Tooltip, IconButton,
 } from '@mui/material';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import PeopleIcon from '@mui/icons-material/People';
 import QueueIcon from '@mui/icons-material/PlaylistAddCheck';
@@ -38,7 +38,6 @@ interface SidebarProps {
 
 export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
-  const router   = useRouter();
   const { logout, user } = useAuth();
 
   const isActive = (path: string) =>
@@ -47,8 +46,8 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
 
   const handleLogout = async () => {
     onMobileClose?.();
+    // logout() clears client state and hard-redirects to /login itself.
     await logout();
-    router.push('/login');
   };
 
   const navItems = [

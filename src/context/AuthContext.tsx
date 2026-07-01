@@ -53,9 +53,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
+    // Revoke the session + clear the cookie server-side.
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     setUser(null);
     setIsAuthenticated(false);
+    // Wipe any cached client state (lead filters/views, etc.) so nothing lingers
+    // or reappears on the next login.
+    try { sessionStorage.clear(); localStorage.clear(); } catch { /* ignore */ }
+    // Hard redirect (replace, not push): fully unmounts the app so no page content
+    // survives the logout, and removes the authenticated page from history so the
+    // Back button can't return to it — regardless of which page we logged out from.
+    if (typeof window !== 'undefined') {
+      window.location.replace('/login');
+    }
   };
 
   return (
