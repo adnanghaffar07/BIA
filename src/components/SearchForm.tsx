@@ -32,6 +32,7 @@ const STATUS_OPTIONS = [
   { value: '', label: 'All Statuses' },
   { value: 'new', label: 'New' },
   { value: 'rated', label: 'Rated' },
+  { value: 'referral', label: 'Referral' },
   { value: 'indicative_sent', label: 'Indicative Pricing Sent' },
   { value: 'pos_ran', label: 'POS Ran' },
   { value: 'quote_issued', label: 'Quote Issued' },

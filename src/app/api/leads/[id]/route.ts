@@ -61,7 +61,7 @@ export async function PUT(
     // Auto-increment: contactAttempts on each producer-stage transition
     if (
       updateData.status &&
-      ['rated', 'indicative_sent', 'pos_ran', 'quote_issued'].includes(updateData.status) &&
+      ['rated', 'indicative_sent', 'pos_ran', 'quote_issued', 'referral'].includes(updateData.status) &&
       updateData.status !== existing.status
     ) {
       updateData.contactAttempts = (existing.contactAttempts ?? 0) + 1;
@@ -135,6 +135,8 @@ export async function PUT(
       competitorCarrier: 'Competitor Carrier', competitorPremium: 'Competitor Premium',
       // Carrier pricing
       travelersPremium: 'Travelers Premium', plymouthPremium: 'Plymouth Premium', assignedCarrier: 'Assigned Carrier',
+      travelersEligible: 'Travelers Eligibility', plymouthEligible: 'Plymouth Eligibility',
+      travelersEligibilityReason: 'Travelers Eligibility Reason', plymouthEligibilityReason: 'Plymouth Eligibility Reason',
       // Insured info
       owner2FirstName: 'Co-Insured First', owner2LastName: 'Co-Insured Last', maritalStatus: 'Marital Status',
       owner1Dob: 'Owner 1 DOB', owner2Dob: 'Owner 2 DOB', reapiDob: 'REAPI DOB', phone1: 'Phone', email1: 'Email',

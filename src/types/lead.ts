@@ -40,6 +40,7 @@ export type LeadGradeValue = 'A' | 'B' | 'C' | 'D';
 export type LeadStatus =
   | 'new'
   | 'rated'
+  | 'referral'
   | 'indicative_sent'
   | 'pos_ran'
   | 'quote_issued'
@@ -54,6 +55,7 @@ export const LEAD_STATUS_OPTIONS: Array<{
 }> = [
   { value: 'new',             label: 'New',                     color: 'info' },
   { value: 'rated',           label: 'Rated',                   color: 'secondary' },
+  { value: 'referral',        label: 'Referral',                color: 'warning' },
   { value: 'indicative_sent', label: 'Indicative Pricing Sent', color: 'warning' },
   { value: 'pos_ran',         label: 'POS Ran',                 color: 'warning' },
   { value: 'quote_issued',    label: 'Quote Issued',            color: 'primary' },
@@ -66,7 +68,7 @@ export function leadStatusLabel(s: string | null | undefined): string {
 }
 
 /** Producer-engaged statuses (past 'new', not yet closed) — these belong in the queue. */
-export const ACTIVE_PRODUCER_STATUSES: LeadStatus[] = ['rated', 'indicative_sent', 'pos_ran', 'quote_issued'];
+export const ACTIVE_PRODUCER_STATUSES: LeadStatus[] = ['rated', 'indicative_sent', 'pos_ran', 'quote_issued', 'referral'];
 /** Closed / terminal statuses. */
 export const CLOSED_STATUSES: LeadStatus[] = ['bound', 'lost'];
 

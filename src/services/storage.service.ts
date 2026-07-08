@@ -21,6 +21,7 @@ const LEAD_COLS = [
   'recordingDate', 'lastUpdateDate', 'skipTraced', 'skipTracedAt',
   'phone1', 'phone2', 'email1', 'email2', 'engine', 'renewalTargetDate', 'grade',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
+  'travelersEligibilityReason', 'plymouthEligibilityReason',
   'lowPremium', 'expectedPremium', 'highPremium', 'pricingConfidence', 'status',
   'producerEmail', 'posQuoteNumber', 'posCarrier', 'boundPremium', 'boundDate',
   'authorizationDate', 'coastDistanceMiles', 'coastExposure',
@@ -61,6 +62,7 @@ const CRM_ONLY_FIELDS = new Set([
   'status', 'grade', 'skipTraced', 'skipTracedAt',
   'phone1', 'phone2', 'email1', 'email2',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
+  'travelersEligibilityReason', 'plymouthEligibilityReason',
   'lowPremium', 'expectedPremium', 'highPremium', 'pricingConfidence',
   'producerEmail', 'posQuoteNumber', 'posCarrier', 'boundPremium', 'boundDate', 'authorizationDate',
   'coastDistanceMiles', 'coastExposure', 'varianceNotes', 'varianceReason', 'varianceAmount',
@@ -460,6 +462,7 @@ export async function updateLead(
     status: LeadStatus; grade: string;
     travelersEligible: string; travelersNotes: any;
     plymouthEligible: string; plymouthNotes: any;
+    travelersEligibilityReason: string; plymouthEligibilityReason: string;
     lowPremium: number; expectedPremium: number; highPremium: number; pricingConfidence: number;
     skipTraced: boolean; skipTracedAt: Date; skipTraceData: any;
     phone1: string; phone2: string; email1: string; email2: string;
@@ -559,7 +562,7 @@ export async function getPipelineSummary() {
       -- Funnel 2 — Producer stages (cumulative from quote-ready)
       COUNT(*) FILTER (
         WHERE "grade" = 'A'
-          AND "status" IN ('rated','indicative_sent','pos_ran','quote_issued','bound')
+          AND "status" IN ('rated','indicative_sent','pos_ran','quote_issued','referral','bound')
       )                                                                          AS "rightPartyContact",
       COUNT(*) FILTER (
         WHERE "grade" = 'A'
@@ -583,7 +586,7 @@ export async function getPipelineSummary() {
       -- Working stock: leads actively in-flight (producer has touched them)
       COUNT(*) FILTER (
         WHERE "grade" = 'A'
-          AND "status" IN ('rated','indicative_sent','pos_ran','quote_issued')
+          AND "status" IN ('rated','indicative_sent','pos_ran','quote_issued','referral')
       )                                                                          AS "workingStock",
 
       -- Binds in the last 30 days — the flow denominator for stock/flow ratio

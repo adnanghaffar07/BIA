@@ -243,6 +243,10 @@ export default function LeadDetailPage() {
         floodZoneManual: !!l.floodZoneManual,
         travelersPremium: l.travelersPremium != null ? String(l.travelersPremium) : '',
         plymouthPremium: l.plymouthPremium != null ? String(l.plymouthPremium) : '',
+        travelersEligible: l.travelersEligible ?? '',
+        plymouthEligible: l.plymouthEligible ?? '',
+        travelersEligibilityReason: l.travelersEligibilityReason ?? '',
+        plymouthEligibilityReason: l.plymouthEligibilityReason ?? '',
         doNotRevisit: !!l.doNotRevisit,
         phone1: l.phone1 ?? '',
         email1: l.email1 ?? '',
@@ -369,6 +373,11 @@ export default function LeadDetailPage() {
       // re-enrichment won't overwrite it with the FEMA lookup.
       floodZoneManual: !!extra.floodZoneManual,
       floodZoneType: extra.floodZoneManual ? (extra.floodZoneType || undefined) : undefined,
+      // Carrier eligibility override (producer-editable) + reason for the change
+      travelersEligible: extra.travelersEligible || undefined,
+      plymouthEligible: extra.plymouthEligible || undefined,
+      travelersEligibilityReason: extra.travelersEligibilityReason || undefined,
+      plymouthEligibilityReason: extra.plymouthEligibilityReason || undefined,
       // Phase 5: carrier pricing + auto-assigned (cheaper) carrier
       travelersPremium: extra.travelersPremium !== '' && extra.travelersPremium != null ? parseFloat(extra.travelersPremium) : undefined,
       plymouthPremium: extra.plymouthPremium !== '' && extra.plymouthPremium != null ? parseFloat(extra.plymouthPremium) : undefined,
@@ -549,6 +558,54 @@ export default function LeadDetailPage() {
     ]))
     : [];
 
+  // Producer-editable carrier eligibility (Frank Jun-2026). Three states; the token
+  // 'review' is shown as "Referral". Changing it from the system value reveals a
+  // required reason box that is saved + captured in the activity log.
+  const ELIG_OPTS: [string, string][] = [
+    ['eligible', 'Eligible'],
+    ['review', 'Referral'],
+    ['ineligible', 'Non-eligible'],
+  ];
+  const renderCarrierEligibility = (carrier: 'travelers' | 'plymouth', label: string, notes: string[]) => {
+    const valKey = carrier === 'travelers' ? 'travelersEligible' : 'plymouthEligible';
+    const reasonKey = carrier === 'travelers' ? 'travelersEligibilityReason' : 'plymouthEligibilityReason';
+    const cur = extra[valKey] ?? '';
+    const changed = cur !== ((lead as any)[valKey] ?? '');
+    const needsReason = changed && !((extra[reasonKey] ?? '').trim());
+    const showReason = changed || !!(extra[reasonKey] ?? '').trim();
+    return (
+      <>
+        <Stack direction="row" sx={{ alignItems: 'center', mb: 0.75, flexWrap: 'wrap' }} spacing={1}>
+          {eligibilityIcon(cur)}
+          <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 92 }}>{label}</Typography>
+          <FormControl size="small" sx={{ minWidth: 140 }}>
+            <Select value={cur} displayEmpty onChange={(e) => setEx(valKey, e.target.value)}>
+              {ELIG_OPTS.map(([v, l]) => <MenuItem key={v} value={v}>{l}</MenuItem>)}
+            </Select>
+          </FormControl>
+        </Stack>
+        {notes.length > 0 && (
+          <Box sx={{ pl: 3.5, mb: showReason ? 1 : 1.5 }}>
+            {notes.map((n, i) => (
+              <Typography key={i} variant="caption" color="text.secondary" sx={{ display: 'block' }}>• {n}</Typography>
+            ))}
+          </Box>
+        )}
+        {showReason && (
+          <Box sx={{ pl: 3.5, mb: 1.5 }}>
+            <TextField
+              label="Reason for change" size="small" fullWidth multiline minRows={1}
+              value={extra[reasonKey] ?? ''} onChange={(e) => setEx(reasonKey, e.target.value)}
+              placeholder="Why was eligibility changed?"
+              error={needsReason}
+              helperText={needsReason ? 'Please note why you changed this' : ' '}
+            />
+          </Box>
+        )}
+      </>
+    );
+  };
+
   return (
     <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1200, mx: 'auto' }}>
 
@@ -629,39 +686,9 @@ export default function LeadDetailPage() {
             {/* Carrier Eligibility */}
             <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
               <SubHead>Carrier Eligibility</SubHead>
-              {/* Travelers */}
-              <Stack direction="row" sx={{ alignItems: 'center', mb: 0.5 }} spacing={1}>
-                {eligibilityIcon(lead.travelersEligible)}
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>Travelers</Typography>
-                <Chip label={lead.travelersEligible ?? 'unknown'} size="small" variant="outlined"
-                  color={lead.travelersEligible === 'eligible' ? 'success' : lead.travelersEligible === 'ineligible' ? 'error' : 'warning'}
-                />
-              </Stack>
-              {travelersNotes.length > 0 && (
-                <Box sx={{ pl: 3.5, mb: 1.5 }}>
-                  {travelersNotes.map((n, i) => (
-                    <Typography key={i} variant="caption" color="text.secondary" sx={{ display: 'block' }}>• {n}</Typography>
-                  ))}
-                </Box>
-              )}
-
+              {renderCarrierEligibility('travelers', 'Travelers', travelersNotes)}
               <Divider sx={{ my: 1 }} />
-
-              {/* Plymouth Rock */}
-              <Stack direction="row" sx={{ alignItems: 'center', mb: 0.5 }} spacing={1}>
-                {eligibilityIcon(lead.plymouthEligible)}
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>Plymouth Rock</Typography>
-                <Chip label={lead.plymouthEligible ?? 'unknown'} size="small" variant="outlined"
-                  color={lead.plymouthEligible === 'eligible' ? 'success' : lead.plymouthEligible === 'ineligible' ? 'error' : 'warning'}
-                />
-              </Stack>
-              {plymouthNotes.length > 0 && (
-                <Box sx={{ pl: 3.5 }}>
-                  {plymouthNotes.map((n, i) => (
-                    <Typography key={i} variant="caption" color="text.secondary" sx={{ display: 'block' }}>• {n}</Typography>
-                  ))}
-                </Box>
-              )}
+              {renderCarrierEligibility('plymouth', 'Plymouth Rock', plymouthNotes)}
             </Grid>
 
             {/* Flood & Coastal Risk */}

@@ -18,6 +18,7 @@ export const PAGINATION = {
 export const LEAD_STATUS = {
   NEW: 'new',
   RATED: 'rated',
+  REFERRAL: 'referral',
   INDICATIVE_SENT: 'indicative_sent',
   POS_RAN: 'pos_ran',
   QUOTE_ISSUED: 'quote_issued',
@@ -28,6 +29,7 @@ export const LEAD_STATUS = {
 export const LEAD_STATUS_OPTIONS = [
   { value: LEAD_STATUS.NEW, label: 'New', color: 'info' },
   { value: LEAD_STATUS.RATED, label: 'Rated', color: 'secondary' },
+  { value: LEAD_STATUS.REFERRAL, label: 'Referral', color: 'warning' },
   { value: LEAD_STATUS.INDICATIVE_SENT, label: 'Indicative Pricing Sent', color: 'warning' },
   { value: LEAD_STATUS.POS_RAN, label: 'POS Ran', color: 'warning' },
   { value: LEAD_STATUS.QUOTE_ISSUED, label: 'Quote Issued', color: 'primary' },

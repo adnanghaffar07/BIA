@@ -47,6 +47,7 @@ const EXPANDED_ROW_HEADER_BG = '#d4e4f5';
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; rowBg: string }> = {
   new:             { label: 'New',             color: '#1565c0', bg: '#e3f2fd', rowBg: 'transparent' },
   rated:           { label: 'Rated',           color: '#4a148c', bg: '#f3e5f5', rowBg: '#faf4fc' },
+  referral:        { label: 'Referral',        color: '#8a5a00', bg: '#fff3d6', rowBg: '#fffcf2' },
   indicative_sent: { label: 'Indicative Sent', color: '#e65100', bg: '#fff3e0', rowBg: '#fffde7' },
   pos_ran:         { label: 'POS Ran',         color: '#00695c', bg: '#e0f2f1', rowBg: '#eff8f7' },
   quote_issued:    { label: 'Quote Issued',    color: '#1b5e20', bg: '#e8f5e9', rowBg: '#f1f8e9' },
@@ -443,6 +444,7 @@ export default function LeadsTable({
               <MenuItem value="">All Statuses</MenuItem>
               <MenuItem value="new">New</MenuItem>
               <MenuItem value="rated">Rated</MenuItem>
+              <MenuItem value="referral">Referral</MenuItem>
               <MenuItem value="indicative_sent">Indicative Sent</MenuItem>
               <MenuItem value="pos_ran">POS Ran</MenuItem>
               <MenuItem value="quote_issued">Quote Issued</MenuItem>
