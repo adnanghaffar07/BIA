@@ -150,7 +150,7 @@ export async function PUT(
       burglarAlarm: 'Burglar Alarm', fireAlarm: 'Fire Alarm', sprinklerSystem: 'Sprinkler System',
       smokeDetector: 'Smoke Detector', waterSensor: 'Water Sensor', autoWaterShutoff: 'Auto Water Shutoff',
       lowTempSensor: 'Low-Temp Sensor', leedCertified: 'LEED Certified',
-      basementFinishedPct: 'Basement Finished %', bathroomGrade: 'Bathroom Grade',
+      basementFinishedPct: 'Basement Finished %', bathroomGrade: 'Bathroom Grade', propertyTypeMismatch: 'Property Type Mismatch',
       kitchenCount: 'Kitchen Count', kitchenGrade: 'Kitchen Grade',
       floodZoneManual: 'Flood Zone (manual)', floodZoneType: 'Flood Zone Type',
     };

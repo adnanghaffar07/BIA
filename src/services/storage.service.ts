@@ -49,7 +49,7 @@ const LEAD_COLS = [
   // Phase 5: editable carrier pricing + close-out
   'travelersPremium', 'plymouthPremium', 'assignedCarrier', 'doNotRevisit',
   // Phase 5b: Home Upgrades + basement finish
-  'basementFinishedPct', 'bathroomGrade', 'kitchenCount', 'kitchenGrade',
+  'basementFinishedPct', 'bathroomGrade', 'kitchenCount', 'kitchenGrade', 'propertyTypeMismatch',
   // Producer-edit tracking (Recently Edited tab)
   'lastEditedAt', 'lastEditedBy',
   'createdAt', 'updatedAt',
@@ -87,7 +87,7 @@ const CRM_ONLY_FIELDS = new Set([
   // Phase 5: producer-entered — never clobber on REAPI re-ingest
   'travelersPremium', 'plymouthPremium', 'assignedCarrier', 'doNotRevisit',
   // Phase 5b
-  'basementFinishedPct', 'bathroomGrade', 'kitchenCount', 'kitchenGrade',
+  'basementFinishedPct', 'bathroomGrade', 'kitchenCount', 'kitchenGrade', 'propertyTypeMismatch',
   // Producer-edit tracking — never set by bulk pulls
   'lastEditedAt', 'lastEditedBy',
 ]);
@@ -502,6 +502,7 @@ export async function updateLead(
     travelersPremium: number; plymouthPremium: number; assignedCarrier: string; doNotRevisit: boolean;
     // Phase 5b: Home Upgrades + basement finish
     basementFinishedPct: string; bathroomGrade: string; kitchenCount: number; kitchenGrade: string;
+    propertyTypeMismatch: boolean;
     // Producer-edit tracking (Recently Edited tab)
     lastEditedAt: Date | string; lastEditedBy: string;
   }>,

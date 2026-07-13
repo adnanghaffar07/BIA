@@ -147,6 +147,14 @@ export default function LeadDetailPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
 
+  // Return to wherever the producer came from — the actual previous page (filtered
+  // Leads, a specific Queue tab, QC Reports, …) — instead of a hardcoded route.
+  // Falls back to the leads list only when there's no in-app history (direct open).
+  const goBack = () => {
+    if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+    else router.push('/leads');
+  };
+
   const [lead, setLead] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -184,6 +192,7 @@ export default function LeadDetailPage() {
   // Frank Jun-2026: dual insureds / DOB / confirm-on-call / home features (single bag)
   const [extra, setExtra] = useState<Record<string, any>>({});
   const setEx = (k: string, v: any) => setExtra((p) => ({ ...p, [k]: v }));
+  const [showCondoFields, setShowCondoFields] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -251,6 +260,7 @@ export default function LeadDetailPage() {
         phone1: l.phone1 ?? '',
         email1: l.email1 ?? '',
         basementFinishedPct: l.basementFinishedPct ?? '',
+        propertyTypeMismatch: !!l.propertyTypeMismatch,
         bathroomGrade: l.bathroomGrade ?? '',
         kitchenCount: l.kitchenCount != null ? String(l.kitchenCount) : '',
         kitchenGrade: l.kitchenGrade ?? '',
@@ -390,6 +400,7 @@ export default function LeadDetailPage() {
       phone1: extra.phone1 || undefined,
       email1: extra.email1 || undefined,
       basementFinishedPct: extra.basementFinishedPct || undefined,
+      propertyTypeMismatch: !!extra.propertyTypeMismatch,
       bathroomGrade: extra.bathroomGrade || undefined,
       kitchenCount: extra.kitchenCount !== '' && extra.kitchenCount != null ? parseInt(extra.kitchenCount, 10) : undefined,
       kitchenGrade: extra.kitchenGrade || undefined,
@@ -506,7 +517,7 @@ export default function LeadDetailPage() {
     return (
       <Box sx={{ p: 4 }}>
         <Alert severity="error">Lead not found.</Alert>
-        <Button startIcon={<ArrowBackIcon />} onClick={() => router.push('/leads')} sx={{ mt: 2 }}>Back to Leads</Button>
+        <Button startIcon={<ArrowBackIcon />} onClick={goBack} sx={{ mt: 2 }}>Back</Button>
       </Box>
     );
   }
@@ -514,6 +525,7 @@ export default function LeadDetailPage() {
   const address = `${lead.addressStreet}, ${lead.addressCity}, ${lead.addressState} ${lead.addressZip}`;
   const ownerName = [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—';
   const coInsuredName = [lead.owner2FirstName, lead.owner2LastName].filter(Boolean).join(' ');
+  const isCondoLead = String(lead.propertyType ?? '').toUpperCase() === 'CONDO' || /condo/i.test(lead.landUse ?? '');
 
   // Save gate (Frank Phase 5b): disable Save / Save & Next until required fields pass —
   // a grade override needs a reason; a LOST lead needs reason + stage + revisit election.
@@ -611,9 +623,10 @@ export default function LeadDetailPage() {
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <Breadcrumbs sx={{ mb: 1 }}>
-        <Link href="/queue?tab=edited" style={{ color: 'inherit', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>
-          <ArrowBackIcon fontSize="small" /> Lead Queue
-        </Link>
+        <Box component="button" type="button" onClick={goBack}
+          sx={{ background: 'none', border: 'none', p: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 0.5, '&:hover': { textDecoration: 'underline' } }}>
+          <ArrowBackIcon fontSize="small" /> Back
+        </Box>
         <Typography color="text.primary" variant="body2">{lead.addressStreet}</Typography>
       </Breadcrumbs>
 
@@ -983,10 +996,28 @@ export default function LeadDetailPage() {
               All editable for QC — flag REAPI inaccuracies or record info confirmed on the call.
               Source from a listing (Zillow / Realtor.com). Heat defaults to gas for NJ.
             </Typography>
+            <Box sx={{ mb: 1.5, p: 1, borderRadius: 1, bgcolor: extra.propertyTypeMismatch ? '#fff3d6' : 'transparent', border: extra.propertyTypeMismatch ? '1px solid #eac36a' : '1px solid transparent' }}>
+              <FormControlLabel
+                control={<Checkbox size="small" checked={!!extra.propertyTypeMismatch} onChange={(e) => setEx('propertyTypeMismatch', e.target.checked)} />}
+                label={<Typography variant="body2">Property type looks wrong (CRM says <strong>{lead.propertyType ?? '—'}</strong>, but it's actually a different type — verify on Zillow/Redfin)</Typography>}
+              />
+            </Box>
+            {isCondoLead && !showCondoFields ? (
+              <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: '#eef7f0', border: '1px solid #cfe6d5' }}>
+                <Typography variant="body2" sx={{ color: '#2e5540' }}>
+                  <strong>Condo</strong> — carriers don&apos;t rate condos on roof, garage, bath/kitchen, foundation, or other home characteristics, so these fields are hidden to keep entry quick. Contact info, eligibility, and the type-mismatch flag above still apply.
+                </Typography>
+                <Button size="small" onClick={() => setShowCondoFields(true)} sx={{ mt: 0.5, textTransform: 'none' }}>Show all fields anyway</Button>
+              </Box>
+            ) : (
+              <>
+                {isCondoLead && (
+                  <Button size="small" onClick={() => setShowCondoFields(false)} sx={{ mb: 1, textTransform: 'none' }}>Hide condo-N/A fields</Button>
+                )}
             <Grid container spacing={1.5}>
               <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                 <FeatureSelect label="Garage Type" value={extra.garageType ?? ''} onChange={(v) => setEx('garageType', v)}
-                  options={[['attached', 'Attached'], ['detached', 'Detached'], ['none', 'None']]} />
+                  options={[['attached', 'Attached'], ['built_in', 'Built-in (living space above)'], ['detached', 'Detached'], ['carport', 'Carport'], ['none', 'None']]} />
               </Grid>
               <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                 <TextField label="# Garages" type="number" size="small" fullWidth value={extra.garageCount ?? ''}
@@ -1118,6 +1149,8 @@ export default function LeadDetailPage() {
               <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>
                 High-risk roof type — both carriers ineligible (grade D).
               </Alert>
+            )}
+              </>
             )}
           </Grid>
 

@@ -69,9 +69,28 @@ function getValue(lead: any, path: string, altPath?: string): any {
   return null;
 }
 
-/** Critical fields that currently apply to this lead (honors per-field appliesWhen). */
+/**
+ * Condo detection (Frank Jul-2026). Travelers & Plymouth Rock do NOT rate condos on
+ * home-characteristic fields — roof age, year built, square footage, bedroom count.
+ * A condo within carrier appetite is quote-ready on its identity fields alone, so we
+ * drop those characteristics from a condo's pertinent-field set → in-appetite condos
+ * grade A. Zip / carrier-appetite / flood logic is unchanged.
+ */
+export function isCondo(lead: any): boolean {
+  const pt = String(lead.propertyType ?? '').toUpperCase();
+  const lu = String(lead.landUse ?? '').toLowerCase();
+  return pt === 'CONDO' || lu.includes('condo');
+}
+const CONDO_EXEMPT_FIELDS = new Set(['yearBuilt', 'squareFeet', 'roofYear', 'bedrooms']);
+
+/** Critical fields that currently apply to this lead (honors per-field appliesWhen + condo exemptions). */
 function activeFields(lead: any) {
-  return CRITICAL_FIELDS.filter((f) => !f.appliesWhen || f.appliesWhen(lead));
+  const condo = isCondo(lead);
+  return CRITICAL_FIELDS.filter((f) => {
+    if (f.appliesWhen && !f.appliesWhen(lead)) return false;
+    if (condo && CONDO_EXEMPT_FIELDS.has(f.path)) return false;
+    return true;
+  });
 }
 
 /**
@@ -119,6 +138,12 @@ export function calculateLeadGrade(
 
   // D — no carrier will write this property
   if (!carrierResult.passesAnyCarrier) return 'D';
+
+  // Contactability (Frank Jul-2026): once a lead has been skip-traced, if we STILL
+  // have no phone AND no email, it's unworkable → D. Only applies post-skip-trace
+  // (contact info comes FROM the trace); DOB is an estimate and is not required.
+  const l = lead as any;
+  if (l.skipTraced && !l.phone1 && !l.phone2 && !l.email1 && !l.email2) return 'D';
 
   // Count missing pertinent fields (only those that apply to this lead)
   const missingCount = activeFields(lead).filter(

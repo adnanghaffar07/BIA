@@ -14,65 +14,95 @@ export interface SkipTraceResult {
   raw?: unknown;
 }
 
-/**
- * Pull phone/email arrays out of REAPI's v2 SkipTrace response.
- * Matches sit under `persons[]`, each with `phones[{phone,…}]` and `emails[string]`.
- */
-function extractContacts(json: any): { phones: string[]; emails: string[] } {
-  const persons: any[] = Array.isArray(json?.persons) ? json.persons : [];
-  const phones: string[] = [];
-  const emails: string[] = [];
-
-  for (const person of persons) {
-    for (const ph of Array.isArray(person?.phones) ? person.phones : []) {
-      const n = typeof ph === 'string' ? ph : ph?.phone;
-      if (n) phones.push(String(n));
-    }
-    for (const em of Array.isArray(person?.emails) ? person.emails : []) {
-      const e = typeof em === 'string' ? em : em?.email;
-      if (e) emails.push(String(e));
-    }
-  }
-
-  return { phones: [...new Set(phones)], emails: [...new Set(emails)] };
-}
+const norm = (s: any) => String(s ?? '').toLowerCase().trim();
 
 /**
- * Map skip-trace persons ("people on loan") onto the lead's Insured Info, filling
- * EMPTY slots only (never clobber producer entries). Picks the co-insured as the
- * matched person sharing the owner's surname (spouse / co-borrower), else the next
- * distinct person. REAPI returns `age`, not a date of birth, so DOB is an estimated
- * birth year (Jan 1) the producer can refine.
+ * The skip-trace person whose name matches the INSURED (owner1). Exact first+last,
+ * else same-surname with a first-name prefix agreement (≥3 chars) so "Alla"↔"Allan"
+ * matches but a same-surname relative like "Al"↔"Albert" does not. Never guesses.
  */
-export function insuredPatchFromPersons(persons: any[], lead: any): Record<string, any> {
+export function matchInsuredPerson(persons: any[], lead: any): any | null {
   const list = Array.isArray(persons) ? persons : [];
-  if (!list.length) return {};
-  const norm = (s: any) => String(s ?? '').toLowerCase().trim();
   const o1First = norm(lead.owner1FirstName);
   const o1Last = norm(lead.owner1LastName);
-
-  // Frank Jun-2026: the REAPI DOB must come from the skip-traced person whose name
-  // matches the Insured Name — never a random person on the loan. Prefer an exact
-  // first+last match; the fallback only accepts a same-surname person whose first
-  // name is a prefix of the other (≥3 chars), so "Alla"↔"Allan" matches but a
-  // same-surname relative like "Al"↔"Albert" does not.
   const firstNamesAgree = (a: string, b: string) => {
     if (!a || !b) return false;
     const [s, l] = a.length <= b.length ? [a, b] : [b, a];
     return s.length >= 3 && l.startsWith(s);
   };
-  const nameMatch =
-    (o1First && o1Last && list.find((p) => norm(p.firstName) === o1First && norm(p.lastName) === o1Last))
+  return (o1First && o1Last && list.find((p) => norm(p.firstName) === o1First && norm(p.lastName) === o1Last))
     || (o1Last && o1First && list.find((p) => norm(p.lastName) === o1Last && firstNamesAgree(norm(p.firstName), o1First)))
     || null;
+}
 
+const personStreet = (p: any) => norm(p?.address?.streetAddress || p?.address?.address);
+
+/**
+ * Co-insured = the spouse / co-owner — NOT an adult child or a stranger on the loan
+ * (Frank/Ruben Jul-2026). Preference order:
+ *   1. same property address as the insured AND age within 15 yrs  (spouse, co-resident)
+ *   2. same property address (any age)
+ *   3. same surname AND age within 15 yrs                          (joint owner who moved)
+ *   4. same surname (relative — weaker, still surfaced for the producer to confirm)
+ * If none plausibly qualify, returns null — we never attach a random person.
+ */
+function pickCoInsured(persons: any[], primary: any, lead: any): any | null {
+  const others = persons.filter((p) => p !== primary);
+  if (!others.length) return null;
+  const o1Last = norm(lead.owner1LastName);
+  const propStreet = norm(lead.addressStreet);
+  const primaryAge = Number(primary?.age) || null;
+  const ageOk = (p: any) => { const a = Number(p?.age); return primaryAge && a ? Math.abs(a - primaryAge) <= 15 : false; };
+  const sameAddr = (p: any) => !!propStreet && personStreet(p) === propStreet;
+
+  return others.find((p) => sameAddr(p) && ageOk(p))
+    ?? others.find((p) => sameAddr(p))
+    ?? others.find((p) => o1Last && norm(p.lastName) === o1Last && ageOk(p))
+    ?? others.find((p) => o1Last && norm(p.lastName) === o1Last)
+    ?? null;
+}
+
+/** Phones / emails on a single REAPI person, normalized to string arrays. */
+function personContacts(p: any): { phones: string[]; emails: string[] } {
+  const phones = (Array.isArray(p?.phones) ? p.phones : [])
+    .map((ph: any) => (typeof ph === 'string' ? ph : ph?.phone)).filter(Boolean).map(String);
+  const emails = (Array.isArray(p?.emails) ? p.emails : [])
+    .map((em: any) => (typeof em === 'string' ? em : em?.email)).filter(Boolean).map(String);
+  return { phones, emails };
+}
+
+/**
+ * Pull phone/email arrays out of REAPI's v2 SkipTrace response, INSURED FIRST.
+ * The insured's own contacts lead the list so phone1/email1 belong to the named
+ * insured — not the co-insured or another person on the loan (Frank Jul-2026).
+ */
+function extractContacts(json: any, insured: any | null): { phones: string[]; emails: string[] } {
+  const persons: any[] = Array.isArray(json?.persons) ? json.persons : [];
+  const ordered = insured ? [insured, ...persons.filter((p) => p !== insured)] : persons;
+  const phones: string[] = [];
+  const emails: string[] = [];
+  for (const p of ordered) {
+    const c = personContacts(p);
+    phones.push(...c.phones);
+    emails.push(...c.emails);
+  }
+  return { phones: [...new Set(phones)], emails: [...new Set(emails)] };
+}
+
+/**
+ * Map skip-trace persons onto the lead's Insured Info, filling EMPTY slots only
+ * (never clobber producer entries). REAPI DOB comes strictly from the name-matched
+ * insured; the co-insured is the plausible spouse/co-owner (see pickCoInsured). REAPI
+ * returns `age`, not a birth date, so DOB is an estimated birth year the producer confirms.
+ */
+export function insuredPatchFromPersons(persons: any[], lead: any): Record<string, any> {
+  const list = Array.isArray(persons) ? persons : [];
+  if (!list.length) return {};
+
+  const nameMatch = matchInsuredPerson(list, lead);
   const primary = nameMatch ?? list[0];
-  const coInsured =
-    list.find((p) => p !== primary && o1Last && norm(p.lastName) === o1Last)
-    ?? list.find((p) => p !== primary);
+  const coInsured = pickCoInsured(list, primary, lead);
 
-  // REAPI returns `age`, not a birth date. Year is exact (this year − age); month
-  // and day are assumed (Jan 1) and flagged "(est.)" for the producer to confirm.
   const estDob = (age: any): string | undefined => {
     const a = parseInt(String(age), 10);
     return a > 0 && a < 120 ? `${new Date().getFullYear() - a}-01-01` : undefined;
@@ -91,8 +121,7 @@ export function insuredPatchFromPersons(persons: any[], lead: any): Record<strin
     if (!lead.owner2FirstName && coInsured.firstName) patch.owner2FirstName = coInsured.firstName;
     if (!lead.owner2LastName && coInsured.lastName) patch.owner2LastName = coInsured.lastName;
   }
-  // Pre-fill the editable DOB fields (empty slots only) so the producer has a
-  // starting point to confirm; reapiDob above stays the source-of-truth.
+  // Pre-fill the editable DOB fields (empty slots only); reapiDob above stays source-of-truth.
   if (!lead.owner1Dob && primary?.age) { const d = estDob(primary.age); if (d) patch.owner1Dob = d; }
   if (!lead.owner2Dob && coInsured?.age) { const d = estDob(coInsured.age); if (d) patch.owner2Dob = d; }
   return patch;
@@ -100,7 +129,7 @@ export function insuredPatchFromPersons(persons: any[], lead: any): Record<strin
 
 /**
  * Run a skip trace for a single lead against the owner name + property address.
- * Returns de-duplicated phones/emails; throws on transport / auth errors.
+ * Returns de-duplicated phones/emails (insured first); throws on transport / auth errors.
  */
 export async function runSkipTrace(lead: Lead): Promise<SkipTraceResult> {
   if (!API_CONFIG.API_KEY) {
@@ -144,7 +173,9 @@ export async function runSkipTrace(lead: Lead): Promise<SkipTraceResult> {
   }
 
   const json = await res.json();
-  const { phones, emails } = extractContacts(json);
+  // Insured-first contact ordering: phone1/email1 belong to the named insured.
+  const insured = matchInsuredPerson(Array.isArray(json?.persons) ? json.persons : [], lead);
+  const { phones, emails } = extractContacts(json, insured);
   const matched = json?.match === true || (json?.resultCount ?? 0) > 0
     || (Array.isArray(json?.persons) && json.persons.length > 0)
     || phones.length > 0 || emails.length > 0;
