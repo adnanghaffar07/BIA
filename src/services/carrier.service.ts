@@ -116,6 +116,27 @@ function roofOlderThan20(lead: Lead): boolean {
 
 const money = (n: number) => `$${n.toLocaleString()}`;
 
+// The owner's mail goes somewhere other than the property → they don't live there.
+// This is the real signal behind REAPI's investorBuyer flag (Frank Jul-2026): it
+// reflects OCCUPANCY, not corporate/LLC ownership.
+function mailsElsewhere(lead: any): boolean {
+  const norm = (s: any) => String(s ?? '').trim().toLowerCase();
+  const mail = norm(lead.mailStreet);
+  const prop = norm(lead.addressStreet);
+  return !!mail && !!prop && mail !== prop;
+}
+
+/**
+ * Genuinely not owner-occupied. REAPI sometimes contradicts itself — flagging a lead
+ * investorBuyer/absenteeOwner while ALSO reporting owner-occupied with the mailing
+ * address AT the property (e.g. Anurag Chadha, 562 Clubhouse Dr). Those are data
+ * noise, not investors, so we require corroboration before referring the risk.
+ */
+function notOwnerOccupied(lead: any): boolean {
+  if (lead.ownerOccupied === false) return true;
+  return mailsElsewhere(lead);
+}
+
 // ─── Appetite rules (rules-as-data) ─────────────────────────────────────────────
 //
 // Each rule carries a structured reason code + severity. The engine evaluates every
@@ -239,15 +260,22 @@ export const APPETITE_RULES: AppetiteRule[] = [
     message: (l) => `Year built ${l.yearBuilt} — pre-1940 construction requires Functional Replacement Cost endorsement`,
   },
   {
+    // Only fires when the data corroborates non-owner-occupancy — never on REAPI's
+    // flag alone (which produced false positives on owner-occupied homes).
     code: 'INVESTOR', carrier: 'both', severity: 'REFER',
-    applies: (l) => !!l.investorBuyer,
-    message: (_l, c) => c === 'travelers'
-      ? 'Investor-owned — Travelers prefers owner-occupied; referral required'
-      : 'Investor-owned — review required',
+    applies: (l) => !!l.investorBuyer && notOwnerOccupied(l),
+    message: (l, c) => {
+      const where = (l as any).mailCity ? ` — owner's mail goes to ${(l as any).mailCity}` : '';
+      return c === 'travelers'
+        ? `Investor / non-owner-occupied${where}; Travelers prefers owner-occupied — referral required`
+        : `Investor / non-owner-occupied${where} — review required`;
+    },
   },
   {
+    // Same underlying signal as INVESTOR — only fires when INVESTOR hasn't already,
+    // so a lead never carries two referrals for one occupancy issue.
     code: 'ABSENTEE', carrier: 'both', severity: 'REFER',
-    applies: (l) => !!l.absenteeOwner && !l.ownerOccupied,
+    applies: (l) => !!l.absenteeOwner && !l.ownerOccupied && !(!!l.investorBuyer && notOwnerOccupied(l)),
     message: (_l, c) => c === 'travelers'
       ? 'Absentee owner — confirm owner-occupancy status before binding'
       : 'Absentee owner — confirm occupancy status',

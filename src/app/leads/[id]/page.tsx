@@ -526,6 +526,11 @@ export default function LeadDetailPage() {
   const ownerName = [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—';
   const coInsuredName = [lead.owner2FirstName, lead.owner2LastName].filter(Boolean).join(' ');
   const isCondoLead = String(lead.propertyType ?? '').toUpperCase() === 'CONDO' || /condo/i.test(lead.landUse ?? '');
+  // Mailing address — the actual signal behind "investor / absentee" (Frank Jul-2026).
+  // When it differs from the property, the owner doesn't live there.
+  const mailAddress = [lead.mailStreet, lead.mailCity, lead.mailState].filter(Boolean).join(', ');
+  const mailDiffers = !!lead.mailStreet && !!lead.addressStreet
+    && String(lead.mailStreet).trim().toLowerCase() !== String(lead.addressStreet).trim().toLowerCase();
 
   // Save gate (Frank Phase 5b): disable Save / Save & Next until required fields pass —
   // a grade override needs a reason; a LOST lead needs reason + stage + revisit election.
@@ -661,6 +666,21 @@ export default function LeadDetailPage() {
               )}
               <Row label="Owner Occupied" value={lead.ownerOccupied ? 'Yes' : 'No'} />
               <Row label="Absentee Owner" value={lead.absenteeOwner ? 'Yes' : 'No'} />
+              {mailAddress && (
+                <Row
+                  label="Mailing Address"
+                  value={
+                    <Box component="span" sx={{ color: mailDiffers ? '#8a5a00' : 'inherit' }}>
+                      {mailAddress}
+                      {mailDiffers && (
+                        <Box component="span" sx={{ display: 'block', fontSize: 11, fontWeight: 400, color: '#8a5a00' }}>
+                          ≠ property address — owner does not live here
+                        </Box>
+                      )}
+                    </Box>
+                  }
+                />
+              )}
             </Grid>
 
             {/* Property Details */}
