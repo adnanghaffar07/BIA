@@ -122,53 +122,9 @@ export async function enrichLeadBatch(leads: any[]): Promise<{
   return { enriched, failed };
 }
 
-/**
- * Re-run enrichment on a single lead fetched from DB.
- * Useful when manually triggering a re-check from the UI.
- */
-export async function reEnrichLead(dbLead: any): Promise<any> {
-  // Map DB record back to Lead shape for the services
-  const lead: Lead = {
-    id: dbLead.id,
-    propertyId: dbLead.propertyId,
-    address: {
-      address: dbLead.addressFull || dbLead.addressStreet,
-      street: dbLead.addressStreet,
-      city: dbLead.addressCity,
-      state: dbLead.addressState,
-      zip: dbLead.addressZip,
-      county: dbLead.addressCounty || undefined,
-    },
-    propertyType: dbLead.propertyType || '',
-    propertyUse: dbLead.propertyUse || '',
-    landUse: dbLead.landUse || '',
-    yearBuilt: dbLead.yearBuilt || undefined,
-    roofYear: dbLead.roofYear || undefined,
-    manualGrade: dbLead.manualGrade || undefined,
-    squareFeet: dbLead.squareFeet || undefined,
-    estimatedValue: dbLead.estimatedValue || undefined,
-    lastSaleDate: dbLead.lastSaleDate || undefined,
-    recordingDate: dbLead.recordingDate || undefined,
-    owner1LastName: dbLead.owner1LastName || undefined,
-    owner1FirstName: dbLead.owner1FirstName || undefined,
-    corporateOwned: dbLead.corporateOwned ?? undefined,
-    ownerOccupied: dbLead.ownerOccupied ?? undefined,
-    absenteeOwner: dbLead.absenteeOwner ?? undefined,
-    investorBuyer: dbLead.investorBuyer ?? undefined,
-    vacant: dbLead.vacant ?? undefined,
-    preForeclosure: dbLead.preForeclosure ?? undefined,
-    foreclosure: dbLead.foreclosure ?? undefined,
-    reo: dbLead.reo ?? undefined,
-    floodZone: dbLead.floodZone ?? undefined,
-    floodZoneType: dbLead.floodZoneType || undefined,
-    floodZoneSubtype: dbLead.floodZoneSubtype || undefined,
-    floodSfha: dbLead.floodSfha ?? undefined,
-    floodZoneManual: dbLead.floodZoneManual ?? undefined,
-    pool: dbLead.pool ?? undefined,
-    latitude: dbLead.latitude ? parseFloat(dbLead.latitude) : undefined,
-    longitude: dbLead.longitude ? parseFloat(dbLead.longitude) : undefined,
-  };
-
-  await enrichLead(lead);
-  return lead;
-}
+// NOTE: a `reEnrichLead(dbLead)` helper used to live here for a "re-check from the UI"
+// feature that was never built. It hand-mapped a DB row into a nested-only Lead and
+// dropped mailStreet/mailCity entirely, which would have silently blinded the
+// investor / non-owner-occupancy and ZIP-appetite rules. Removed rather than fixed:
+// enrichLead() already accepts a DB row directly (it spreads the record, so both the
+// flat and nested shapes survive). To re-enrich one lead, call enrichLead(dbRow).
