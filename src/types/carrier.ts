@@ -28,3 +28,35 @@ export interface CarrierEligibilityResult {
 export function statusFromVerdict(verdict: Verdict): EligibilityStatus {
   return verdict === 'FAIL' ? 'ineligible' : verdict === 'REFER' ? 'review' : 'eligible';
 }
+
+/**
+ * Producer-selected reason when they change a carrier's eligibility (Frank Jul-2026).
+ * Structured so QC can REPORT on trends — "dropdowns for things we can report on,
+ * text boxes for nuance". The free-text Detail beside it captures the one-offs.
+ *
+ * "Prior loss" and "Underwriting capacity" are the two reasons Frank/Ruben actually
+ * see in the Travelers portal that our own data can never predict — capturing them
+ * here is the only way they become visible.
+ */
+export interface EligibilityReasonOption {
+  value: string;
+  label: string;
+  /** Pre-fills Detail with the property ZIP — these are territory-driven trends. */
+  autoZip?: boolean;
+}
+
+export const ELIGIBILITY_REASONS: EligibilityReasonOption[] = [
+  { value: 'investor_non_owner_occupied', label: 'Investor / non-owner-occupied' },
+  { value: 'prior_loss', label: 'Prior loss' },
+  { value: 'underwriting_capacity', label: 'Underwriting capacity', autoZip: true },
+  { value: 'fema_flood_adjacent', label: 'FEMA flood-adjacent', autoZip: true },
+  { value: 'coastal_ineligible', label: 'Coastal ineligible' },
+  { value: 'cov_a_over_appetite', label: 'Dwelling Cov A over appetite' },
+  { value: 'roof_age', label: 'Roof age' },
+  { value: 'other', label: 'Other' },
+];
+
+export function eligibilityReasonLabel(v: string | null | undefined): string {
+  if (!v) return '';
+  return ELIGIBILITY_REASONS.find((o) => o.value === v)?.label ?? v;
+}

@@ -137,6 +137,8 @@ export async function PUT(
       travelersPremium: 'Travelers Premium', plymouthPremium: 'Plymouth Premium', assignedCarrier: 'Assigned Carrier',
       travelersEligible: 'Travelers Eligibility', plymouthEligible: 'Plymouth Eligibility',
       travelersEligibilityReason: 'Travelers Eligibility Reason', plymouthEligibilityReason: 'Plymouth Eligibility Reason',
+      travelersEligibilityDetail: 'Travelers Eligibility Detail', plymouthEligibilityDetail: 'Plymouth Eligibility Detail',
+      indicativeBandLow: 'Indicative Band Low', indicativeBandHigh: 'Indicative Band High',
       // Insured info
       owner2FirstName: 'Co-Insured First', owner2LastName: 'Co-Insured Last', maritalStatus: 'Marital Status',
       owner1Dob: 'Owner 1 DOB', owner2Dob: 'Owner 2 DOB', reapiDob: 'REAPI DOB', phone1: 'Phone', email1: 'Email',

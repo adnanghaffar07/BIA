@@ -22,6 +22,8 @@ const LEAD_COLS = [
   'phone1', 'phone2', 'email1', 'email2', 'engine', 'renewalTargetDate', 'grade',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'travelersEligibilityReason', 'plymouthEligibilityReason',
+  'travelersEligibilityDetail', 'plymouthEligibilityDetail',
+  'indicativeBandLow', 'indicativeBandHigh',
   'lowPremium', 'expectedPremium', 'highPremium', 'pricingConfidence', 'status',
   'producerEmail', 'posQuoteNumber', 'posCarrier', 'boundPremium', 'boundDate',
   'authorizationDate', 'coastDistanceMiles', 'coastExposure',
@@ -63,6 +65,8 @@ const CRM_ONLY_FIELDS = new Set([
   'phone1', 'phone2', 'email1', 'email2',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'travelersEligibilityReason', 'plymouthEligibilityReason',
+  'travelersEligibilityDetail', 'plymouthEligibilityDetail',
+  'indicativeBandLow', 'indicativeBandHigh',
   'lowPremium', 'expectedPremium', 'highPremium', 'pricingConfidence',
   'producerEmail', 'posQuoteNumber', 'posCarrier', 'boundPremium', 'boundDate', 'authorizationDate',
   'coastDistanceMiles', 'coastExposure', 'varianceNotes', 'varianceReason', 'varianceAmount',
@@ -463,6 +467,8 @@ export async function updateLead(
     travelersEligible: string; travelersNotes: any;
     plymouthEligible: string; plymouthNotes: any;
     travelersEligibilityReason: string; plymouthEligibilityReason: string;
+    travelersEligibilityDetail: string; plymouthEligibilityDetail: string;
+    indicativeBandLow: number; indicativeBandHigh: number;
     lowPremium: number; expectedPremium: number; highPremium: number; pricingConfidence: number;
     skipTraced: boolean; skipTracedAt: Date; skipTraceData: any;
     phone1: string; phone2: string; email1: string; email2: string;

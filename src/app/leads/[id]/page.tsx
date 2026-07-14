@@ -5,12 +5,13 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   Box, Breadcrumbs, Button, Chip, CircularProgress, Divider, Grid,
   MenuItem, Paper, Select, Stack, TextField, Tooltip, Typography,
-  Alert, Snackbar, FormControl, InputLabel, Checkbox, FormControlLabel,
+  Alert, Snackbar, FormControl, InputLabel, Checkbox, FormControlLabel, FormHelperText,
 } from '@mui/material';
 import Link from 'next/link';
 import { getMissingFields } from '@/services/grade.service';
 import { GRADE_INFO, LeadGrade } from '@/types/grade';
 import { LEAD_STATUS_OPTIONS, leadStatusLabel, CLOSED_STATUSES, LeadStatus } from '@/types/lead';
+import { ELIGIBILITY_REASONS } from '@/types/carrier';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import HomeIcon from '@mui/icons-material/Home';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -29,6 +30,27 @@ import { useAuth } from '@/context/AuthContext';
 function fmt(v: number | null | undefined, prefix = '') {
   if (v == null) return '—';
   return `${prefix}${Number(v).toLocaleString()}`;
+}
+
+/**
+ * Suggested Indicative Band Price from the rated premiums (Frank, Jul-2026 sync).
+ * This is the outreach hook — "we have you rated at $725–$900" — so it must be
+ * credible, not a wide guess.
+ *
+ * Both carriers rated → the spread between them, rounded outward to $25. Matches
+ * Frank's worked examples exactly: $750 & $899 → $725–$900; $760 & $900 → $750–$900.
+ * (Low nudges to the next $25 BELOW — strictly below when it lands on a boundary.)
+ * Only one carrier rated → ±$250 around it, his fallback for a single data point.
+ * Producers override whenever their judgement differs.
+ */
+export function suggestBand(travelers?: number, plymouth?: number): { low: number; high: number } | null {
+  const vals = [travelers, plymouth].filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  if (!vals.length) return null;
+  const strictFloor25 = (n: number) => { const f = Math.floor(n / 25) * 25; return f === n ? n - 25 : f; };
+  const ceil25 = (n: number) => Math.ceil(n / 25) * 25;
+  if (vals.length === 2) return { low: strictFloor25(Math.min(...vals)), high: ceil25(Math.max(...vals)) };
+  const p = vals[0];
+  return { low: strictFloor25(p - 250), high: ceil25(p + 250) };
 }
 
 /** Read-only DOB display — "1962-01-01 · age 64 (est.)". Age is derived from the
@@ -256,6 +278,10 @@ export default function LeadDetailPage() {
         plymouthEligible: l.plymouthEligible ?? '',
         travelersEligibilityReason: l.travelersEligibilityReason ?? '',
         plymouthEligibilityReason: l.plymouthEligibilityReason ?? '',
+        travelersEligibilityDetail: l.travelersEligibilityDetail ?? '',
+        plymouthEligibilityDetail: l.plymouthEligibilityDetail ?? '',
+        indicativeBandLow: l.indicativeBandLow != null ? String(l.indicativeBandLow) : '',
+        indicativeBandHigh: l.indicativeBandHigh != null ? String(l.indicativeBandHigh) : '',
         doNotRevisit: !!l.doNotRevisit,
         phone1: l.phone1 ?? '',
         email1: l.email1 ?? '',
@@ -388,6 +414,11 @@ export default function LeadDetailPage() {
       plymouthEligible: extra.plymouthEligible || undefined,
       travelersEligibilityReason: extra.travelersEligibilityReason || undefined,
       plymouthEligibilityReason: extra.plymouthEligibilityReason || undefined,
+      travelersEligibilityDetail: extra.travelersEligibilityDetail || undefined,
+      plymouthEligibilityDetail: extra.plymouthEligibilityDetail || undefined,
+      // Indicative band price for outreach merge (auto-suggested, producer-overridable)
+      indicativeBandLow: extra.indicativeBandLow !== '' && extra.indicativeBandLow != null ? parseFloat(extra.indicativeBandLow) : undefined,
+      indicativeBandHigh: extra.indicativeBandHigh !== '' && extra.indicativeBandHigh != null ? parseFloat(extra.indicativeBandHigh) : undefined,
       // Phase 5: carrier pricing + auto-assigned (cheaper) carrier
       travelersPremium: extra.travelersPremium !== '' && extra.travelersPremium != null ? parseFloat(extra.travelersPremium) : undefined,
       plymouthPremium: extra.plymouthPremium !== '' && extra.plymouthPremium != null ? parseFloat(extra.plymouthPremium) : undefined,
@@ -586,10 +617,20 @@ export default function LeadDetailPage() {
   const renderCarrierEligibility = (carrier: 'travelers' | 'plymouth', label: string, notes: string[]) => {
     const valKey = carrier === 'travelers' ? 'travelersEligible' : 'plymouthEligible';
     const reasonKey = carrier === 'travelers' ? 'travelersEligibilityReason' : 'plymouthEligibilityReason';
+    const detailKey = carrier === 'travelers' ? 'travelersEligibilityDetail' : 'plymouthEligibilityDetail';
     const cur = extra[valKey] ?? '';
     const changed = cur !== ((lead as any)[valKey] ?? '');
-    const needsReason = changed && !((extra[reasonKey] ?? '').trim());
-    const showReason = changed || !!(extra[reasonKey] ?? '').trim();
+    const needsReason = changed && !(extra[reasonKey] ?? '');
+    const showReason = changed || !!(extra[reasonKey] ?? '') || !!(extra[detailKey] ?? '').trim();
+    // Territory-driven reasons pre-fill Detail with the ZIP so trends are reportable
+    // straight from the keyword search (Frank: "insert zip if FEMA related").
+    const pickReason = (v: string) => {
+      setEx(reasonKey, v);
+      const opt = ELIGIBILITY_REASONS.find((o) => o.value === v);
+      if (opt?.autoZip && !(extra[detailKey] ?? '').trim() && lead.addressZip) {
+        setEx(detailKey, `ZIP ${lead.addressZip}`);
+      }
+    };
     return (
       <>
         <Stack direction="row" sx={{ alignItems: 'center', mb: 0.75, flexWrap: 'wrap' }} spacing={1}>
@@ -610,12 +651,24 @@ export default function LeadDetailPage() {
         )}
         {showReason && (
           <Box sx={{ pl: 3.5, mb: 1.5 }}>
+            <FormControl size="small" fullWidth error={needsReason} sx={{ mb: 1 }}>
+              <InputLabel>Reason for change</InputLabel>
+              <Select
+                label="Reason for change"
+                value={extra[reasonKey] ?? ''}
+                onChange={(e) => pickReason(e.target.value)}
+              >
+                {ELIGIBILITY_REASONS.map((o) => (
+                  <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+                ))}
+              </Select>
+              <FormHelperText>{needsReason ? 'Pick a reason — this is what QC reports on' : ' '}</FormHelperText>
+            </FormControl>
             <TextField
-              label="Reason for change" size="small" fullWidth multiline minRows={1}
-              value={extra[reasonKey] ?? ''} onChange={(e) => setEx(reasonKey, e.target.value)}
-              placeholder="Why was eligibility changed?"
-              error={needsReason}
-              helperText={needsReason ? 'Please note why you changed this' : ' '}
+              label="Detail (optional)" size="small" fullWidth multiline minRows={1}
+              value={extra[detailKey] ?? ''} onChange={(e) => setEx(detailKey, e.target.value)}
+              placeholder="Nuance for this specific account — e.g. the exact carrier wording"
+              helperText="Free text for one-offs. The dropdown above drives trend reporting."
             />
           </Box>
         )}
@@ -674,7 +727,10 @@ export default function LeadDetailPage() {
                       {mailAddress}
                       {mailDiffers && (
                         <Box component="span" sx={{ display: 'block', fontSize: 11, fontWeight: 400, color: '#8a5a00' }}>
-                          ≠ property address — owner does not live here
+                          ≠ property address — confirm occupancy on the call
+                          {/* Evidence, not proof: a trust/LLC often mails to a trustee or
+                              attorney while the family lives in the home, and PO boxes,
+                              snowbirds and forwarded mail all look the same here. */}
                         </Box>
                       )}
                     </Box>
@@ -977,6 +1033,47 @@ export default function LeadDetailPage() {
                       {tOk && pOk && t !== p && ` — cheaper by ${fmtCurrency(Math.abs(t - p))}`}
                     </Alert>
                   )}
+
+                  {/* Indicative Band Price — merged into the outreach email. */}
+                  {(() => {
+                    const s = suggestBand(tOk ? t : undefined, pOk ? p : undefined);
+                    const applySuggestion = () => {
+                      if (!s) return;
+                      setEx('indicativeBandLow', String(s.low));
+                      setEx('indicativeBandHigh', String(s.high));
+                    };
+                    const lowSet = (extra.indicativeBandLow ?? '') !== '';
+                    const highSet = (extra.indicativeBandHigh ?? '') !== '';
+                    return (
+                      <Box sx={{ p: 1, borderRadius: 1, border: '1px dashed', borderColor: 'divider' }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75, fontWeight: 600 }}>
+                          Indicative Band Price — merged into the outreach email
+                        </Typography>
+                        <Stack direction="row" spacing={1}>
+                          <TextField label="Band Low $" type="number" size="small" fullWidth
+                            value={extra.indicativeBandLow ?? ''} onChange={(e) => setEx('indicativeBandLow', e.target.value)}
+                            slotProps={{ inputLabel: { shrink: true } }} placeholder="725" />
+                          <TextField label="Band High $" type="number" size="small" fullWidth
+                            value={extra.indicativeBandHigh ?? ''} onChange={(e) => setEx('indicativeBandHigh', e.target.value)}
+                            slotProps={{ inputLabel: { shrink: true } }} placeholder="900" />
+                        </Stack>
+                        {s ? (
+                          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 0.75, flexWrap: 'wrap' }}>
+                            <Typography variant="caption" color="text.secondary">
+                              Suggested from rated pricing: <strong>${s.low.toLocaleString()} – ${s.high.toLocaleString()}</strong>
+                            </Typography>
+                            <Button size="small" onClick={applySuggestion} sx={{ textTransform: 'none', py: 0 }}>
+                              {lowSet || highSet ? 'Reset to suggestion' : 'Use suggestion'}
+                            </Button>
+                          </Stack>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                            Enter Travelers / Plymouth indicative pricing above and a band will be suggested.
+                          </Typography>
+                        )}
+                      </Box>
+                    );
+                  })()}
                 </Stack>
               );
             })()}

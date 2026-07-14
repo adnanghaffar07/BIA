@@ -116,13 +116,21 @@ function roofOlderThan20(lead: Lead): boolean {
 
 const money = (n: number) => `$${n.toLocaleString()}`;
 
+// Leads reach this engine in TWO shapes and rules must fire for both:
+//   • flat DB rows      (addressZip, addressStreet, mailStreet)  — re-enrichment
+//   • raw REAPI records (address.zip, address.street, mailAddress.street) — fresh pulls
+// Reading only one shape makes a rule silently dead on the other path.
+const propZip = (l: any) => String(l.addressZip ?? l.address?.zip ?? '').trim();
+const propStreetOf = (l: any) => String(l.addressStreet ?? l.address?.street ?? '').trim().toLowerCase();
+const mailStreetOf = (l: any) => String(l.mailStreet ?? l.mailAddress?.street ?? '').trim().toLowerCase();
+const mailCityOf = (l: any) => String(l.mailCity ?? l.mailAddress?.city ?? '').trim();
+
 // The owner's mail goes somewhere other than the property → they don't live there.
 // This is the real signal behind REAPI's investorBuyer flag (Frank Jul-2026): it
 // reflects OCCUPANCY, not corporate/LLC ownership.
 function mailsElsewhere(lead: any): boolean {
-  const norm = (s: any) => String(s ?? '').trim().toLowerCase();
-  const mail = norm(lead.mailStreet);
-  const prop = norm(lead.addressStreet);
+  const mail = mailStreetOf(lead);
+  const prop = propStreetOf(lead);
   return !!mail && !!prop && mail !== prop;
 }
 
@@ -157,6 +165,48 @@ interface AppetiteRule {
   applies: (lead: Lead) => boolean;
   message: (lead: Lead, carrier: 'travelers' | 'plymouth') => string;
 }
+
+// ─── Carrier appetite by ZIP (observed, not derived) ─────────────────────────
+//
+// Some carrier behaviour cannot be derived from ANY dataset. The clearest example
+// is Travelers throttling Howell 07731 for underwriting CAPACITY — an internal
+// aggregation limit inside their book. It is not public data.
+//
+// We tested the standing theory that it was "adjacent flood zone exposure" against
+// the FEMA NFHL layer (Jul-2026) and it does not hold: ~90% of the whole book sits
+// within 1 km of an A/AE zone (Howell 75%, Middletown 100%, Marlboro 100%), so
+// proximity cannot discriminate anything. The only reliable source is Frank/Ruben's
+// observed portal behaviour, recorded here.
+//
+// TO ADD A ZIP: one line below. No engine changes.
+//   severity 'REFER' → underwriting referral   |   'FAIL' → decline / non-eligible
+export interface ZipAppetiteEntry {
+  zip: string;
+  carrier: 'travelers' | 'plymouth';
+  severity: 'FAIL' | 'REFER';
+  /** Shown on the lead + in QC reports — say WHY, in the carrier's own terms. */
+  reason: string;
+  /** When Frank/Ruben confirmed this from the portal. */
+  observedOn?: string;
+}
+
+export const ZIP_APPETITE: ZipAppetiteEntry[] = [
+  // Awaiting Frank's confirmed list. Candidates he has flagged verbally but NOT yet
+  // confirmed (left inactive on purpose — activating on a hunch would mis-grade the
+  // book, and he explicitly asked to review appetite before we hard-code it):
+  //
+  // { zip: '07731', carrier: 'travelers', severity: 'REFER', reason: 'Underwriting capacity — Travelers throttling this territory', observedOn: '2026-07-10' },
+  // { zip: '07724', carrier: 'travelers', severity: 'FAIL',  reason: 'Out of appetite for this ZIP', observedOn: '2026-07-10' },
+];
+
+/** ZIP appetite entries compiled into engine rules. */
+const zipAppetiteRules: AppetiteRule[] = ZIP_APPETITE.map((e) => ({
+  code: `ZIP-${e.carrier.toUpperCase()}-${e.zip}-${e.severity}`,
+  carrier: e.carrier,
+  severity: e.severity,
+  applies: (l: any) => propZip(l) === e.zip,
+  message: () => `${e.reason} (ZIP ${e.zip})`,
+}));
 
 export const APPETITE_RULES: AppetiteRule[] = [
   // ── Shared hard disqualifiers (FAIL) ──────────────────────────────────────
@@ -264,11 +314,16 @@ export const APPETITE_RULES: AppetiteRule[] = [
     // flag alone (which produced false positives on owner-occupied homes).
     code: 'INVESTOR', carrier: 'both', severity: 'REFER',
     applies: (l) => !!l.investorBuyer && notOwnerOccupied(l),
+    // Wording states the EVIDENCE, not a conclusion. A different mailing address is a
+    // strong hint but not proof — trusts/LLCs mail to a trustee or attorney while the
+    // family lives in the home, and PO boxes / forwarded mail look identical. This is a
+    // REFER precisely so a producer confirms occupancy rather than us asserting it.
     message: (l, c) => {
-      const where = (l as any).mailCity ? ` — owner's mail goes to ${(l as any).mailCity}` : '';
+      const city = mailCityOf(l);
+      const where = city ? ` — owner's mail goes to ${city}` : '';
       return c === 'travelers'
-        ? `Investor / non-owner-occupied${where}; Travelers prefers owner-occupied — referral required`
-        : `Investor / non-owner-occupied${where} — review required`;
+        ? `Possible non-owner-occupied${where}; Travelers prefers owner-occupied — confirm occupancy (referral)`
+        : `Possible non-owner-occupied${where} — confirm occupancy (review)`;
     },
   },
   {
@@ -280,6 +335,9 @@ export const APPETITE_RULES: AppetiteRule[] = [
       ? 'Absentee owner — confirm owner-occupancy status before binding'
       : 'Absentee owner — confirm occupancy status',
   },
+
+  // ── Observed carrier appetite by ZIP (see ZIP_APPETITE above) ─────────────
+  ...zipAppetiteRules,
 ];
 
 // Informational notes that do NOT affect the verdict (e.g. mandatory hurricane deductible).

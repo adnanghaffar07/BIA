@@ -1,4 +1,5 @@
 import { sql } from '@/lib/neon';
+import { eligibilityReasonLabel } from '@/types/carrier';
 
 /**
  * QC / data-validation reports (Frank Jul-2026). The CRM captures producer notes,
@@ -19,7 +20,9 @@ export interface QcRow {
   propertyType: string | null;
   travelersEligible: string | null;
   plymouthEligible: string | null;
-  context: string;        // the matching comment / reason / grade transition
+  /** Structured producer-selected reason (dropdown) — this is what trends are counted on. */
+  reason: string | null;
+  context: string;        // the matching comment / detail / grade transition
   by: string | null;
   at: string | null;
 }
@@ -61,10 +64,28 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     return rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => {
-        const bits: string[] = [];
-        if (r.travelersEligible === value) bits.push(`Travelers: ${eligLabel(value)}${r.travelersEligibilityReason ? ` — ${r.travelersEligibilityReason}` : ''}`);
-        if (r.plymouthEligible === value) bits.push(`Plymouth: ${eligLabel(value)}${r.plymouthEligibilityReason ? ` — ${r.plymouthEligibilityReason}` : ''}`);
-        return rowOf(r, bits.join('  |  '));
+        // Structured reason (dropdown) is reported on; Detail carries the nuance.
+        const reasons: string[] = [];
+        const details: string[] = [];
+        if (r.travelersEligible === value) {
+          if (r.travelersEligibilityReason) reasons.push(`Travelers: ${eligibilityReasonLabel(r.travelersEligibilityReason)}`);
+          if (r.travelersEligibilityDetail) details.push(`Travelers — ${r.travelersEligibilityDetail}`);
+        }
+        if (r.plymouthEligible === value) {
+          if (r.plymouthEligibilityReason) reasons.push(`Plymouth: ${eligibilityReasonLabel(r.plymouthEligibilityReason)}`);
+          if (r.plymouthEligibilityDetail) details.push(`Plymouth — ${r.plymouthEligibilityDetail}`);
+        }
+        // Fall back to the system's own carrier note when a producer hasn't set a reason.
+        if (!details.length) {
+          const sys = (() => {
+            try {
+              const n = typeof r.travelersNotes === 'string' ? JSON.parse(r.travelersNotes || '[]') : (r.travelersNotes ?? []);
+              return (n as string[]).find((x) => !/Meets all/i.test(x)) ?? '';
+            } catch { return ''; }
+          })();
+          if (sys) details.push(sys);
+        }
+        return rowOf(r, details.join('  |  '), null, null, reasons.join('  |  ') || null);
       });
   }
 
@@ -139,8 +160,9 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
   return [];
 }
 
-function rowOf(r: any, context: string, by: string | null = null, at: string | null = null): QcRow {
+function rowOf(r: any, context: string, by: string | null = null, at: string | null = null, reason: string | null = null): QcRow {
   return {
+    reason,
     propertyId: r.propertyId,
     owner: nm(r) || '—',
     city: r.addressCity ?? null,

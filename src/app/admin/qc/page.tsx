@@ -20,7 +20,7 @@ interface QcRow {
   propertyId: string; owner: string; city: string | null; zip: string | null;
   effectiveDate: string | null; grade: string | null; manualGrade: string | null;
   propertyType: string | null; travelersEligible: string | null; plymouthEligible: string | null;
-  context: string; by: string | null; at: string | null;
+  reason: string | null; context: string; by: string | null; at: string | null;
 }
 
 const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: string }[] = [
@@ -77,10 +77,10 @@ export default function QcReportsPage() {
   }, [report]);
 
   const exportCsv = () => {
-    const cols = ['Owner', 'City', 'ZIP', 'Eff Date', 'Grade', 'Manual', 'Type', 'Travelers', 'Plymouth', 'Context', 'By', 'At'];
+    const cols = ['Owner', 'City', 'ZIP', 'Eff Date', 'Grade', 'Manual', 'Type', 'Travelers', 'Plymouth', 'Reason', 'Detail', 'By', 'At'];
     const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const lines = [cols.join(',')];
-    for (const r of rows) lines.push([r.owner, r.city, r.zip, r.effectiveDate, r.grade, r.manualGrade, r.propertyType, eligLabel(r.travelersEligible), eligLabel(r.plymouthEligible), r.context, r.by, r.at].map(esc).join(','));
+    for (const r of rows) lines.push([r.owner, r.city, r.zip, r.effectiveDate, r.grade, r.manualGrade, r.propertyType, eligLabel(r.travelersEligible), eligLabel(r.plymouthEligible), r.reason, r.context, r.by, r.at].map(esc).join(','));
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -158,7 +158,7 @@ export default function QcReportsPage() {
         <Table size="small" stickyHeader>
           <TableHead>
             <TableRow>
-              {['Owner', 'City / ZIP', 'Eff Date', 'Grade', 'Type', 'Travelers', 'Plymouth', 'Detail', 'By'].map((h) => (
+              {['Owner', 'City / ZIP', 'Eff Date', 'Grade', 'Type', 'Travelers', 'Plymouth', 'Reason', 'Detail', 'By'].map((h) => (
                 <TableCell key={h} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</TableCell>
               ))}
             </TableRow>
@@ -178,7 +178,12 @@ export default function QcReportsPage() {
                 <TableCell>{r.propertyType ?? '—'}</TableCell>
                 <TableCell>{eligLabel(r.travelersEligible)}</TableCell>
                 <TableCell>{eligLabel(r.plymouthEligible)}</TableCell>
-                <TableCell sx={{ maxWidth: 420, fontSize: 12.5, color: '#3d4658' }}>{r.context}</TableCell>
+                <TableCell sx={{ fontSize: 12.5 }}>
+                  {r.reason
+                    ? <Chip label={r.reason} size="small" sx={{ height: 20, fontSize: 11, bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 }} />
+                    : <span style={{ color: '#b0b6c0' }}>—</span>}
+                </TableCell>
+                <TableCell sx={{ maxWidth: 380, fontSize: 12.5, color: '#3d4658' }}>{r.context}</TableCell>
                 <TableCell sx={{ whiteSpace: 'nowrap', fontSize: 12, color: '#616b7d' }}>{r.by ?? '—'}</TableCell>
               </TableRow>
             ))}
