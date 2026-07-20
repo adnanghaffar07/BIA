@@ -26,8 +26,10 @@ export async function POST(
 
     const l = lead as any;
     const zip = String(l.addressZip ?? '').trim();
-    const muni = WIPP_BY_ZIP[zip];
-    if (!muni) {
+    const munis = WIPP_BY_ZIP[zip];
+    // A ZIP can span several municipalities (e.g. 07726 = Manalapan + Englishtown).
+    const townLabel = munis?.map((m) => m.town).join(' / ') ?? '';
+    if (!munis?.length) {
       return NextResponse.json({
         success: false,
         error: `No tax-roll lookup configured for ZIP ${zip || '—'}. Supported: ${Object.keys(WIPP_BY_ZIP).join(', ') || 'none yet'}.`,
@@ -55,7 +57,7 @@ export async function POST(
       // rather than storing a misleading "mismatch".
       return NextResponse.json({
         success: false,
-        error: `No matching property found on the ${muni.town} tax roll for "${l.addressStreet}".`,
+        error: `No matching property found on the ${townLabel} tax roll for "${l.addressStreet}".`,
       }, { status: 404 });
     }
 
@@ -70,7 +72,7 @@ export async function POST(
     await addActivity(
       l.id,
       'owner_verify',
-      `Owner name ${result.status} vs ${muni.town} tax roll`
+      `Owner name ${result.status} vs ${result.source.replace(/_tax_roll$/, "").replace(/_/g, " ")} tax roll`
         + `${result.recordName ? ` — record shows "${result.recordName}"` : ''}`,
       { status: result.status, recordName: result.recordName, source: result.source },
       payload?._createdBy,

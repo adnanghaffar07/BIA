@@ -782,7 +782,7 @@ export default function LeadDetailPage() {
               {lead.ownerVerifyStatus && lead.ownerVerifyStatus !== 'match' && lead.ownerVerifyName && (
                 <Row label="Tax Record Shows" value={<Box component="span" sx={{ color: '#8a5a00' }}>{lead.ownerVerifyName}</Box>} />
               )}
-              {WIPP_BY_ZIP[String(lead.addressZip ?? '').trim()] && (
+              {!!WIPP_BY_ZIP[String(lead.addressZip ?? '').trim()]?.length && (
                 <Button
                   size="small" variant="outlined" sx={{ mt: 0.5, mb: 0.5, textTransform: 'none' }}
                   startIcon={verifyingOwner ? <CircularProgress size={13} color="inherit" /> : <VerifiedIcon sx={{ fontSize: 15 }} />}

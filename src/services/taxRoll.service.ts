@@ -41,10 +41,30 @@ const SEARCH_ENDPOINTS = [
   { kind: 'utility', path: '/wippUtil/search', extra: '' },
 ] as const;
 
-/** Municipality → WIPP id. Add a town by adding one line (find its wippId in the portal URL). */
-export const WIPP_BY_ZIP: Record<string, { wippId: string; town: string }> = {
-  '07731': { wippId: '1321', town: 'Howell' },
-  '07746': { wippId: '1330', town: 'Marlboro' },
+/**
+ * ZIP → the municipalities that share it. Add a town by adding one entry (the wippId
+ * is in the portal URL; note it is not always numeric — Manalapan's is "WMON").
+ *
+ * A ZIP is NOT a municipality, so this is a LIST. 07726 posts as "Englishtown" but
+ * covers both the tiny Borough of Englishtown and the much larger Manalapan Township,
+ * which keep separate tax rolls — and most "Englishtown" addresses are physically in
+ * Manalapan (verified: 83 Sunnymede St is on Manalapan's roll, not Englishtown's).
+ * Each town is tried in turn, most-likely first; a property that is on none of them
+ * is simply left unverified rather than wrongly flagged.
+ */
+export interface Municipality { wippId: string; town: string }
+
+export const WIPP_BY_ZIP: Record<string, Municipality[]> = {
+  '07731': [{ wippId: '1321', town: 'Howell' }],
+  '07746': [{ wippId: '1330', town: 'Marlboro' }],
+  '07726': [
+    { wippId: 'WMON', town: 'Manalapan' },    // ~213 of our 241 leads in this ZIP
+    { wippId: '1313', town: 'Englishtown' },  // the borough proper
+  ],
+  // 07728 covers Freehold Township and Freehold Borough (separate municipalities).
+  // Only the Township id is known so far; borough properties fall through unverified.
+  '07728': [{ wippId: '1317', town: 'Freehold Township' }],
+  '07730': [{ wippId: '1318', town: 'Hazlet' }],
 };
 
 export interface TaxRollRecord {
@@ -116,44 +136,50 @@ export function normalizeStreet(s: unknown): string {
 const clean = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim();
 
 /**
- * Look up a property on the municipal tax roll by street address.
- * Returns every record whose address matches; [] when the town isn't wired up.
+ * Look up a property by street address, trying each municipality that shares the ZIP
+ * and each roll (property tax, then utility) until one has it.
+ * Returns the matching records plus which town they came from; null if nowhere.
  */
-export async function lookupTaxRoll(street: string, zip: string): Promise<TaxRollRecord[]> {
-  const muni = WIPP_BY_ZIP[String(zip ?? '').trim()];
-  if (!muni || !String(street ?? '').trim()) return [];
+export async function lookupTaxRoll(
+  street: string,
+  zip: string,
+): Promise<{ records: TaxRollRecord[]; municipality: Municipality } | null> {
+  const munis = WIPP_BY_ZIP[String(zip ?? '').trim()];
+  if (!munis?.length || !String(street ?? '').trim()) return null;
   const want = normalizeStreet(street);
 
-  for (const endpoint of SEARCH_ENDPOINTS) {
-    const url = `${API_ROOT}${endpoint.path}?propertyLoc=${encodeURIComponent(street.trim())}${endpoint.extra}&size=50`;
-    assertSafeUrl(url);
+  for (const muni of munis) {
+    for (const endpoint of SEARCH_ENDPOINTS) {
+      const url = `${API_ROOT}${endpoint.path}?propertyLoc=${encodeURIComponent(street.trim())}${endpoint.extra}&size=50`;
+      assertSafeUrl(url);
 
-    let json: any;
-    try {
-      json = await throttled(async () => {
-        const res = await fetch(url, {
-          method: 'GET',
-          headers: { Accept: 'application/json, text/plain, */*', 'X-Wipp-Id': muni.wippId },
-          signal: AbortSignal.timeout(15000),
+      let json: any;
+      try {
+        json = await throttled(async () => {
+          const res = await fetch(url, {
+            method: 'GET',
+            headers: { Accept: 'application/json, text/plain, */*', 'X-Wipp-Id': muni.wippId },
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!res.ok) throw new Error(`Tax roll lookup failed (${res.status})`);
+          return res.json();
         });
-        if (!res.ok) throw new Error(`Tax roll lookup failed (${res.status})`);
-        return res.json();
-      });
-    } catch {
-      continue; // try the other roll rather than failing the whole lookup
+      } catch {
+        continue; // try the next roll / town rather than failing the whole lookup
+      }
+
+      const rows: any[] = Array.isArray(json) ? json : (json?.content ?? []);
+      const hits = rows
+        .map((r) => ({ ownerName: clean(r?.ownerName), propertyLoc: clean(r?.propertyLoc), accountId: clean(r?.accountId) }))
+        .filter((r) => r.ownerName)
+        // The search is fuzzy — only trust records whose address actually matches ours,
+        // otherwise we could verify against a neighbouring property.
+        .filter((r) => normalizeStreet(r.propertyLoc) === want);
+
+      if (hits.length) return { records: hits, municipality: muni };
     }
-
-    const rows: any[] = Array.isArray(json) ? json : (json?.content ?? []);
-    const hits = rows
-      .map((r) => ({ ownerName: clean(r?.ownerName), propertyLoc: clean(r?.propertyLoc), accountId: clean(r?.accountId) }))
-      .filter((r) => r.ownerName)
-      // The search is fuzzy — only trust records whose address actually matches ours,
-      // otherwise we could verify against a neighbouring property.
-      .filter((r) => normalizeStreet(r.propertyLoc) === want);
-
-    if (hits.length) return hits;
   }
-  return [];
+  return null;
 }
 
 /**
@@ -168,11 +194,11 @@ export async function verifyOwnerName(lead: {
   owner1LastName?: string | null;
 }): Promise<OwnerVerification | null> {
   const zip = String(lead.addressZip ?? '').trim();
-  const muni = WIPP_BY_ZIP[zip];
-  if (!muni) return null;
+  if (!WIPP_BY_ZIP[zip]?.length) return null;
 
-  const records = await lookupTaxRoll(String(lead.addressStreet ?? ''), zip);
-  if (!records.length) return null;
+  const found = await lookupTaxRoll(String(lead.addressStreet ?? ''), zip);
+  if (!found) return null;
+  const { records, municipality: muni } = found;
 
   // Compare against every party on the roll and keep the strongest outcome —
   // a property can legitimately be listed under a spouse or co-owner.
