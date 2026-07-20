@@ -12,6 +12,7 @@ import { getMissingFields } from '@/services/grade.service';
 import { GRADE_INFO, LeadGrade } from '@/types/grade';
 import { LEAD_STATUS_OPTIONS, leadStatusLabel, CLOSED_STATUSES, LeadStatus } from '@/types/lead';
 import { ELIGIBILITY_REASONS } from '@/types/carrier';
+import { WIPP_BY_ZIP } from '@/services/taxRoll.service';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import HomeIcon from '@mui/icons-material/Home';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -22,6 +23,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
 import GavelIcon from '@mui/icons-material/Gavel';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
+import VerifiedIcon from '@mui/icons-material/Verified';
 import SkipTraceDialog from '@/components/SkipTraceDialog';
 import { useAuth } from '@/context/AuthContext';
 
@@ -195,6 +197,7 @@ export default function LeadDetailPage() {
   const [authorizationDate, setAuthorizationDate] = useState<string | null>(null);
   const [stampingAuth, setStampingAuth] = useState(false);
   const [skipTracing, setSkipTracing] = useState(false);
+  const [verifyingOwner, setVerifyingOwner] = useState(false);
   const [floodChecking, setFloodChecking] = useState(false);
   const [skipDialogOpen, setSkipDialogOpen] = useState(false);
   const [lostReason, setLostReason] = useState('');
@@ -484,6 +487,37 @@ export default function LeadDetailPage() {
   };
 
   /** Run a REAPI skip trace for this lead (gated: carrier-qualified + not yet traced). */
+  /** Confirm the insured name against the municipal tax roll (free, on demand). */
+  const runOwnerVerifyAction = async () => {
+    setVerifyingOwner(true);
+    try {
+      const res = await fetch(`/api/leads/${id}/verify-owner?force=1`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ _createdBy: lead?.producerEmail || undefined }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        const st = json.result?.status ?? lead?.ownerVerifyStatus;
+        setSnackbar({
+          open: true,
+          msg: st === 'match' ? 'Insured name confirmed against the tax roll'
+            : st === 'partial' ? `Surname matches — tax roll shows "${json.result?.recordName}"`
+            : st === 'mismatch' ? `Name mismatch — tax roll shows "${json.result?.recordName}"`
+            : 'Could not confirm the insured name',
+          severity: st === 'match' ? 'success' : 'error',
+        });
+        await load();
+      } else {
+        setSnackbar({ open: true, msg: json.error || 'Owner verification failed', severity: 'error' });
+      }
+    } catch {
+      setSnackbar({ open: true, msg: 'Owner verification failed', severity: 'error' });
+    } finally {
+      setVerifyingOwner(false);
+    }
+  };
+
   const runSkipTraceAction = async () => {
     setSkipTracing(true);
     try {
@@ -556,6 +590,33 @@ export default function LeadDetailPage() {
   const address = `${lead.addressStreet}, ${lead.addressCity}, ${lead.addressState} ${lead.addressZip}`;
   const ownerName = [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—';
   const coInsuredName = [lead.owner2FirstName, lead.owner2LastName].filter(Boolean).join(' ');
+
+  // Owner-name verification badge (Frank Jul-2026). Shows the outcome of checking the
+  // insured name against the municipal tax roll. Deliberately graded, not a plain tick:
+  // a surname-only match usually means the roll lists a spouse or co-owner, which is
+  // legitimate but worth a producer's glance rather than a silent pass.
+  const ownerVerify = (() => {
+    const st = lead.ownerVerifyStatus as 'match' | 'partial' | 'mismatch' | 'unknown' | null;
+    if (!st) return null;
+    const when = lead.ownerVerifyAt ? String(lead.ownerVerifyAt).slice(0, 10) : '';
+    const src = lead.ownerVerifySource ? ` · ${String(lead.ownerVerifySource).replace(/_/g, ' ')}` : '';
+    const tip = `${lead.ownerVerifyDetail || ''}${lead.ownerVerifyName ? `\nTax record: ${lead.ownerVerifyName}` : ''}${when ? `\nChecked ${when}${src}` : ''}`;
+    const cfg = {
+      match: { icon: <VerifiedIcon sx={{ fontSize: 16 }} />, color: '#1565c0', label: 'Verified' },
+      partial: { icon: <HelpOutlineIcon sx={{ fontSize: 16 }} />, color: '#8a5a00', label: 'Partial' },
+      mismatch: { icon: <CancelIcon sx={{ fontSize: 16 }} />, color: '#b3261e', label: 'Name mismatch' },
+      unknown: { icon: <HelpOutlineIcon sx={{ fontSize: 16 }} />, color: '#6b7280', label: 'Unverified' },
+    }[st];
+    if (!cfg) return null;
+    return (
+      <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tip}</span>}>
+        <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25, color: cfg.color, cursor: 'help' }}>
+          {cfg.icon}
+          <Box component="span" sx={{ fontSize: 11, fontWeight: 600 }}>{cfg.label}</Box>
+        </Box>
+      </Tooltip>
+    );
+  })();
   const isCondoLead = String(lead.propertyType ?? '').toUpperCase() === 'CONDO' || /condo/i.test(lead.landUse ?? '');
   // Mailing address — the actual signal behind "investor / absentee" (Frank Jul-2026).
   // When it differs from the property, the owner doesn't live there.
@@ -709,7 +770,28 @@ export default function LeadDetailPage() {
             {/* Insured */}
             <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
               <SubHead>Insured</SubHead>
-              <Row label="Insured Named" value={ownerName} />
+              <Row
+                label="Insured Named"
+                value={
+                  <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                    {ownerName}
+                    {ownerVerify}
+                  </Box>
+                }
+              />
+              {lead.ownerVerifyStatus && lead.ownerVerifyStatus !== 'match' && lead.ownerVerifyName && (
+                <Row label="Tax Record Shows" value={<Box component="span" sx={{ color: '#8a5a00' }}>{lead.ownerVerifyName}</Box>} />
+              )}
+              {WIPP_BY_ZIP[String(lead.addressZip ?? '').trim()] && (
+                <Button
+                  size="small" variant="outlined" sx={{ mt: 0.5, mb: 0.5, textTransform: 'none' }}
+                  startIcon={verifyingOwner ? <CircularProgress size={13} color="inherit" /> : <VerifiedIcon sx={{ fontSize: 15 }} />}
+                  onClick={runOwnerVerifyAction}
+                  disabled={verifyingOwner}
+                >
+                  {verifyingOwner ? 'Checking…' : lead.ownerVerifyStatus ? 'Re-check owner name' : 'Verify owner name'}
+                </Button>
+              )}
               {(lead.reapiDob || lead.owner1Dob) && (
                 <Row label="REAPI DOB" value={dobDisplay(lead.reapiDob || lead.owner1Dob)} />
               )}
