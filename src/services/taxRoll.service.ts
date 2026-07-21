@@ -74,6 +74,9 @@ export const WIPP_BY_ZIP: Record<string, Municipality[]> = {
     { wippId: '1349', town: 'Tinton Falls' },
     { wippId: '1312', town: 'Eatontown' },
   ],
+  '07733': [{ wippId: '1320', town: 'Holmdel' }],
+  '07722': [{ wippId: '1310', town: 'Colts Neck' }],   // property tax only
+  '08701': [{ wippId: '1515', town: 'Lakewood' }],     // Ocean County, property tax only
 };
 
 export interface TaxRollRecord {
