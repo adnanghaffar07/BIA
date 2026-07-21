@@ -3,7 +3,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   Container, Box, Typography, Tabs, Tab, Chip,
   CircularProgress, Alert, Card, CardContent, Stack, Grid, Tooltip,
-  FormControl, InputLabel, Select, MenuItem,
+  FormControl, InputLabel, Select, MenuItem, TextField, Button,
 } from '@mui/material';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
 import PendingActionsIcon from '@mui/icons-material/PendingActions';
@@ -34,6 +34,8 @@ export default function QueuePage() {
   const [error,       setError]         = useState<string | null>(null);
   const [activeTab,   setActiveTab]     = useState<QueueTab>('quoteReady');
   const [carrier,     setCarrier]       = useState('');
+  const [effFrom,     setEffFrom]       = useState('');
+  const [effTo,       setEffTo]         = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -41,10 +43,17 @@ export default function QueuePage() {
     try {
       // size is uncapped so the queue counts/cards reflect the full working set
       // (a 200-row cap previously under-counted Quote-Ready vs the dashboard).
+      // Effective-date range (Frank Jul-2026): a pull covers a 7-day window, so the
+      // queue needs From/To, not a single day. Blank "to" = that one day only.
+      const eff = new URLSearchParams();
+      if (effFrom) eff.set('effectiveDate', effFrom);
+      if (effTo) eff.set('effectiveTo', effTo);
+      const effQs = eff.toString() ? `&${eff.toString()}` : '';
+
       const [activeRes, closedRes, editedRes, dashRes] = await Promise.all([
-        fetch('/api/leads?source=db&size=100000&active=true&orderBy=xdate'),
-        fetch('/api/leads?source=db&size=100000&closed=true&orderBy=updated'),
-        fetch('/api/leads?source=db&size=200&editedOnly=true&orderBy=edited'),
+        fetch(`/api/leads?source=db&size=100000&active=true&orderBy=xdate${effQs}`),
+        fetch(`/api/leads?source=db&size=100000&closed=true&orderBy=updated${effQs}`),
+        fetch(`/api/leads?source=db&size=200&editedOnly=true&orderBy=edited${effQs}`),
         fetch('/api/dashboard'),
       ]);
       const [activeJson, closedJson, editedJson, dashJson] = await Promise.all([
@@ -71,7 +80,7 @@ export default function QueuePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [effFrom, effTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -114,15 +123,34 @@ export default function QueuePage() {
           Active leads sorted by soonest renewal date · bound/lost leads moved to Closed
         </Typography>
         </Box>
-        {/* Carrier filter — leads writable by a carrier (eligible/review) */}
-        <FormControl size="small" sx={{ minWidth: 180 }}>
-          <InputLabel>Carrier</InputLabel>
-          <Select value={carrier} label="Carrier" onChange={(e) => setCarrier(e.target.value)}>
-            <MenuItem value="">All Carriers</MenuItem>
-            <MenuItem value="travelers">Travelers</MenuItem>
-            <MenuItem value="plymouth">Plymouth Rock</MenuItem>
-          </Select>
-        </FormControl>
+        <Stack direction="row" spacing={1.5} sx={{ flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          {/* Effective-date range — work a whole pull window, not just one day */}
+          <TextField
+            label="Effective From" type="date" size="small" sx={{ width: 165 }}
+            value={effFrom} onChange={(e) => setEffFrom(e.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
+          />
+          <TextField
+            label="Effective To" type="date" size="small" sx={{ width: 165 }}
+            value={effTo} onChange={(e) => setEffTo(e.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
+            helperText={effFrom && !effTo ? 'blank = that day only' : ' '}
+          />
+          {(effFrom || effTo) && (
+            <Button size="small" onClick={() => { setEffFrom(''); setEffTo(''); }} sx={{ textTransform: 'none', mt: 0.5 }}>
+              Clear dates
+            </Button>
+          )}
+          {/* Carrier filter — leads writable by a carrier (eligible/review) */}
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <InputLabel>Carrier</InputLabel>
+            <Select value={carrier} label="Carrier" onChange={(e) => setCarrier(e.target.value)}>
+              <MenuItem value="">All Carriers</MenuItem>
+              <MenuItem value="travelers">Travelers</MenuItem>
+              <MenuItem value="plymouth">Plymouth Rock</MenuItem>
+            </Select>
+          </FormControl>
+        </Stack>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}

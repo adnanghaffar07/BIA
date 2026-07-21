@@ -88,16 +88,49 @@ async function fetchFullByIds(ids: string[]): Promise<any[]> {
  */
 async function applyWindowDates(ids: string[], w: PullWindow): Promise<number> {
   if (!ids.length) return 0;
-  const effective = w.effectiveMin; // window start (earliest anniversary in the slice)
-  const xDate =
-    w.kind === 'renewal'
-      ? new Date(new Date(effective).getTime() - RENEWAL_PULL_LEAD_DAYS * 86400000).toISOString()
-      : null;
+
+  // Each lead's effective date is ITS OWN sale-date anniversary — the same month/day
+  // as lastSaleDate, in the window's year (Frank Jun-2026: sale date is the single
+  // anchor; the date we filter on is the one we store, display and work from).
+  //
+  // This previously stamped every lead in the window with `w.effectiveMin`, which
+  // collapsed a whole 7-day pull onto its first day — the Sept 13-19 batch landed
+  // 411 leads on 09-13, so filtering 09-14…09-19 showed nothing and producers could
+  // not work a daily slate. Derived per-lead in SQL so it stays correct on every pull.
+  const year = new Date(w.effectiveMin).getUTCFullYear();
+  const isRenewal = w.kind === 'renewal';
+
+  // lastSaleDate / effectiveDate are stored as TEXT (YYYY-MM-DD), so the cast is
+  // explicit and pattern-guarded — a malformed or missing value falls back to the
+  // window start rather than aborting the whole pull. Feb-29 sales clamp to Feb-28 so
+  // make_date() can't throw in a non-leap year.
   const res = await pool.query(
-    `UPDATE "Lead"
-       SET "engine" = $1, "effectiveDate" = $2, "renewalTargetDate" = $3, "updatedAt" = NOW()
-     WHERE "propertyId" = ANY($4)`,
-    [w.kind === 'renewal' ? 2 : 1, effective, xDate, ids],
+    `WITH calc AS (
+       SELECT "propertyId",
+              COALESCE(
+                CASE WHEN "lastSaleDate" ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN
+                  make_date(
+                    $2::int,
+                    EXTRACT(MONTH FROM "lastSaleDate"::date)::int,
+                    CASE WHEN EXTRACT(MONTH FROM "lastSaleDate"::date)::int = 2
+                          AND EXTRACT(DAY   FROM "lastSaleDate"::date)::int > 28
+                         THEN 28
+                         ELSE EXTRACT(DAY FROM "lastSaleDate"::date)::int END
+                  )
+                END,
+                $3::date
+              ) AS eff
+         FROM "Lead"
+        WHERE "propertyId" = ANY($6)
+     )
+     UPDATE "Lead" l
+        SET "engine" = $1,
+            "effectiveDate" = to_char(c.eff, 'YYYY-MM-DD'),
+            "renewalTargetDate" = CASE WHEN $4::boolean THEN c.eff - ($5::int) ELSE NULL END,
+            "updatedAt" = NOW()
+       FROM calc c
+      WHERE l."propertyId" = c."propertyId"`,
+    [isRenewal ? 2 : 1, year, w.effectiveMin, isRenewal, RENEWAL_PULL_LEAD_DAYS, ids],
   );
   return res.rowCount ?? 0;
 }

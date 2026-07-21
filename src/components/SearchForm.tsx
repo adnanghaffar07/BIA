@@ -17,7 +17,7 @@ interface SearchFormProps {
   onSearch: (filters: LeadFilters) => void;
   loading?: boolean;
   /** Seed the controls (used to restore filters when returning from a lead). */
-  initial?: { size?: number; engine?: number; grade?: string; status?: string; carrier?: string; effectiveDate?: string };
+  initial?: { size?: number; engine?: number; grade?: string; status?: string; carrier?: string; effectiveDate?: string; effectiveTo?: string };
 }
 
 const GRADE_OPTIONS = [
@@ -46,6 +46,7 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
   const [status, setStatus] = useState(initial?.status ?? '');
   const [carrier, setCarrier] = useState(initial?.carrier ?? '');
   const [effDate, setEffDate] = useState(initial?.effectiveDate ?? '');
+  const [effTo, setEffTo] = useState(initial?.effectiveTo ?? '');
 
   // The renewal slate worked "today" is 60 days out (eff = today + 60).
   const todaysSlate = () => {
@@ -54,14 +55,16 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
     return d.toISOString().slice(0, 10);
   };
 
-  const submit = (over?: { effDate?: string }) => {
+  const submit = (over?: { effDate?: string; effTo?: string }) => {
     const eff = over?.effDate ?? effDate;
+    const effEnd = over?.effTo !== undefined ? over.effTo : effTo;
     onSearch({
       engine: engine === 'all' ? undefined : (parseInt(engine) as 1 | 2),
       grade: (grade || undefined) as LeadGradeValue | undefined,
       status: (status || undefined) as LeadStatus | undefined,
       carrier: carrier || undefined,
       effectiveDate: eff || undefined,
+      effectiveTo: effEnd || undefined,
     });
   };
 
@@ -76,10 +79,11 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
     setStatus('');
     setCarrier('');
     setEffDate('');
+    setEffTo('');
     onSearch({});
   };
 
-  const hasActiveFilters = engine !== 'all' || grade !== '' || status !== '' || carrier !== '' || effDate !== '';
+  const hasActiveFilters = engine !== 'all' || grade !== '' || status !== '' || carrier !== '' || effDate !== '' || effTo !== '';
 
   return (
     <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
@@ -169,24 +173,37 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
             </Select>
           </FormControl>
 
-          {/* Effective-date filter — daily triage slate (Frank Jun-2026) */}
+          {/* Effective-date RANGE (Frank Jul-2026): a pull covers a 7-day window, so a
+              single date only ever showed the first day of it. Leaving "to" empty works
+              as a single-day filter, so the daily-slate habit is unchanged. */}
           <TextField
-            label="Effective Date"
+            label="Effective From"
             type="date"
             value={effDate}
             onChange={(e) => setEffDate(e.target.value)}
             variant="outlined"
             size="small"
-            sx={{ width: 170 }}
+            sx={{ width: 165 }}
             slotProps={{ inputLabel: { shrink: true } }}
-            helperText="work this day's slate"
+            helperText="start of range"
+          />
+          <TextField
+            label="Effective To"
+            type="date"
+            value={effTo}
+            onChange={(e) => setEffTo(e.target.value)}
+            variant="outlined"
+            size="small"
+            sx={{ width: 165 }}
+            slotProps={{ inputLabel: { shrink: true } }}
+            helperText="blank = single day"
           />
           <Tooltip title="Jump to today's slate — leads renewing 60 days out">
             <Button
               type="button"
               variant="outlined"
               size="small"
-              onClick={() => { const d = todaysSlate(); setEffDate(d); submit({ effDate: d }); }}
+              onClick={() => { const d = todaysSlate(); setEffDate(d); setEffTo(''); submit({ effDate: d, effTo: '' }); }}
               disabled={loading}
               sx={{ height: 40, alignSelf: 'flex-start' }}
             >
@@ -219,7 +236,7 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
         </Box>
 
         {/* Active filter hint */}
-        {(engine !== 'all' || grade || status || carrier || effDate) && (
+        {(engine !== 'all' || grade || status || carrier || effDate || effTo) && (
           <Box sx={{ mt: 1.5, p: 1, backgroundColor: '#f0f4ff', borderRadius: 1, border: '1px solid #c5cae9' }}>
             <Typography variant="caption" color="primary">
               Filters active:
@@ -227,7 +244,7 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
               {grade && <strong> · Grade {grade}</strong>}
               {status && <strong> · Status: {STATUS_OPTIONS.find(o => o.value === status)?.label}</strong>}
               {carrier && <strong> · Carrier: {carrier === 'travelers' ? 'Travelers' : 'Plymouth Rock'}</strong>}
-              {effDate && <strong> · Effective {effDate}</strong>}
+              {effDate && <strong> · Effective {effDate}{effTo ? ` → ${effTo}` : ''}</strong>}
             </Typography>
           </Box>
         )}
