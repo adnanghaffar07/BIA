@@ -34,6 +34,12 @@ interface LeadsTableProps {
   resetKey?: string | number;
   onPageChange?: (page: number) => void;
   onRowsPerPageChange?: (rowsPerPage: number) => void;
+  /**
+   * Page-specific controls rendered inside this filter bar, before Search/ZIP/Status,
+   * so a page never grows a second row of filters somewhere else (Frank Jul-2026 —
+   * the Queue's date/carrier controls belong here, not in the page header).
+   */
+  extraFilters?: React.ReactNode;
 }
 
 function getLeadRowKey(lead: any, index: number): string {
@@ -326,6 +332,7 @@ export default function LeadsTable({
   resetKey,
   onPageChange,
   onRowsPerPageChange,
+  extraFilters,
 }: LeadsTableProps) {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState<number>(25);
@@ -405,20 +412,17 @@ export default function LeadsTable({
     return <Paper sx={{ p: 4, display: 'flex', justifyContent: 'center' }}><CircularProgress /></Paper>;
   }
 
-  if (leads.length === 0) {
-    return (
-      <Paper sx={{ p: 4, textAlign: 'center' }}>
-        <Typography color="textSecondary" sx={{ mb: 1 }}>No leads found</Typography>
-        <Typography variant="body2" color="textSecondary">Try adjusting your filters or fetching more records</Typography>
-      </Paper>
-    );
-  }
+  // NB: the empty state is rendered BELOW the filter bar, not instead of it. The
+  // page-level filters (e.g. the Queue's effective-date range) are server-side, so
+  // returning early here would hide the very controls needed to undo an empty result.
+  const isEmpty = leads.length === 0;
 
   return (
     <Box>
       {/* ── Filter bar ──────────────────────────────────────────────────────── */}
       <Paper variant="outlined" sx={{ p: 1.5, mb: 2, borderRadius: 2 }}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: 'center' }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1.5 }}>
+          {extraFilters}
           <TextField
             size="small"
             placeholder="Search address or owner…"
@@ -464,6 +468,15 @@ export default function LeadsTable({
         </Stack>
       </Paper>
 
+      {isEmpty ? (
+        <Paper sx={{ p: 4, textAlign: 'center' }}>
+          <Typography color="textSecondary" sx={{ mb: 1 }}>No leads found</Typography>
+          <Typography variant="body2" color="textSecondary">
+            Try widening the filters above — or clear the effective-date range.
+          </Typography>
+        </Paper>
+      ) : (
+      <>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
         <Typography variant="h6">
           {hasFilters
@@ -505,6 +518,8 @@ export default function LeadsTable({
       </TableContainer>
 
       {renderPager('bottom')}
+      </>
+      )}
     </Box>
   );
 }

@@ -123,34 +123,6 @@ export default function QueuePage() {
           Active leads sorted by soonest renewal date · bound/lost leads moved to Closed
         </Typography>
         </Box>
-        <Stack direction="row" spacing={1.5} sx={{ flexWrap: 'wrap', alignItems: 'flex-start' }}>
-          {/* Effective-date range — work a whole pull window, not just one day */}
-          <TextField
-            label="Effective From" type="date" size="small" sx={{ width: 165 }}
-            value={effFrom} onChange={(e) => setEffFrom(e.target.value)}
-            slotProps={{ inputLabel: { shrink: true } }}
-          />
-          <TextField
-            label="Effective To" type="date" size="small" sx={{ width: 165 }}
-            value={effTo} onChange={(e) => setEffTo(e.target.value)}
-            slotProps={{ inputLabel: { shrink: true } }}
-            helperText={effFrom && !effTo ? 'blank = that day only' : ' '}
-          />
-          {(effFrom || effTo) && (
-            <Button size="small" onClick={() => { setEffFrom(''); setEffTo(''); }} sx={{ textTransform: 'none', mt: 0.5 }}>
-              Clear dates
-            </Button>
-          )}
-          {/* Carrier filter — leads writable by a carrier (eligible/review) */}
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel>Carrier</InputLabel>
-            <Select value={carrier} label="Carrier" onChange={(e) => setCarrier(e.target.value)}>
-              <MenuItem value="">All Carriers</MenuItem>
-              <MenuItem value="travelers">Travelers</MenuItem>
-              <MenuItem value="plymouth">Plymouth Rock</MenuItem>
-            </Select>
-          </FormControl>
-        </Stack>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
@@ -363,7 +335,42 @@ export default function QueuePage() {
           <CircularProgress />
         </Box>
       ) : (
-        <LeadsTable leads={displayLeads} loading={loading} resetKey={activeTab} />
+        <LeadsTable
+          leads={displayLeads}
+          loading={loading}
+          resetKey={activeTab}
+          extraFilters={
+            <>
+              {/* Effective-date range — work a whole pull window, or a single day */}
+              <TextField
+                label="Effective From" type="date" size="small" sx={{ width: 160 }}
+                value={effFrom} onChange={(e) => setEffFrom(e.target.value)}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+              <TextField
+                label="Effective To" type="date" size="small" sx={{ width: 160 }}
+                value={effTo} onChange={(e) => setEffTo(e.target.value)}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+              <FormControl size="small" sx={{ minWidth: 160 }}>
+                <InputLabel>Carrier</InputLabel>
+                <Select value={carrier} label="Carrier" onChange={(e) => setCarrier(e.target.value)}>
+                  <MenuItem value="">All Carriers</MenuItem>
+                  <MenuItem value="travelers">Travelers</MenuItem>
+                  <MenuItem value="plymouth">Plymouth Rock</MenuItem>
+                </Select>
+              </FormControl>
+              {(effFrom || effTo || carrier) && (
+                <Button
+                  size="small" color="inherit"
+                  onClick={() => { setEffFrom(''); setEffTo(''); setCarrier(''); }}
+                >
+                  Clear
+                </Button>
+              )}
+            </>
+          }
+        />
       )}
     </Container>
   );
