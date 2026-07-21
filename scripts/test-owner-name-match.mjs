@@ -51,9 +51,16 @@ t('compound surname, other direction (VanDusen / VAN DUSEN)', { first: 'Ann', la
 
 console.log('\nGrey zone — must be "partial", never a false tick:');
 t('spouse listed on the tax roll instead', { first: 'Theresa', last: 'Brummer' }, 'BRUMMER, JOHN', 'partial');
+// Real case from Middletown: same first name, surname one character off.
+t('surname one char off, same first name (Labolt/ABOLT)', { first: 'Michelle', last: 'Labolt' }, 'ABOLT, MICHELLE LEIGH', 'partial');
 
 console.log('\nMust never falsely match:');
 t('same first name, different surname', { first: 'Theresa', last: 'Smith' }, 'BRUMMER, THERESA', 'mismatch');
+// The near-miss rule must never upgrade to a tick, and must not fire on a genuinely
+// different surname that happens to be short, or on a different first name.
+t('near-miss surname is never a full match', { first: 'Michelle', last: 'Labolt' }, 'ABOLT, MICHELLE LEIGH', 'partial');
+t('surname 2+ chars off stays a mismatch', { first: 'John', last: 'Smith' }, 'SMYTHE, JOHN', 'mismatch');
+t('near-miss surname but different first name', { first: 'Robert', last: 'Labolt' }, 'ABOLT, MICHELLE LEIGH', 'mismatch');
 t('unrelated entity', { first: '', last: 'Kasmon Llc' }, 'SPARTAN REAL ESTATE HOLDINGS INC', 'mismatch');
 t('no record name', { first: 'Theresa', last: 'Brummer' }, '', 'unknown');
 t('no insured name', { first: '', last: '' }, 'BRUMMER, THERESA', 'unknown');

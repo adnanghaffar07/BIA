@@ -115,6 +115,32 @@ function surnamesAgree(a: string, b: string): boolean {
   return squash(a) === squash(b);
 }
 
+/** Edit distance, capped — we only ever care whether it is 0, 1, or "more than 1". */
+function withinOneEdit(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0; let j = 0; let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (b.length > a.length) j++;
+    else { i++; j++; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+/**
+ * Surname is one character off — a transcription variance rather than a different
+ * family (real case: our "Labolt" vs the roll's "ABOLT", same first name MICHELLE).
+ * Only ever used to soften a 'mismatch' to 'partial'; it never produces a match, so
+ * genuinely different families (SMITH/SMYTH) still get a human's eyes rather than a tick.
+ */
+function surnamesNearMiss(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const squash = (s: string) => s.replace(/\s+/g, '');
+  return withinOneEdit(squash(a), squash(b));
+}
+
 /**
  * Compare the insured name we hold against the authoritative record name.
  * `theirs` is the raw record string, e.g. "BRUMMER, THERESA".
@@ -161,6 +187,15 @@ export function compareOwnerNames(
         detail: p.first
           ? `Surname matches, but the record shows "${p.first}" — could be a spouse or co-owner`
           : 'Surname matches the tax record',
+        ours: oursDisplay, theirs: theirsDisplay,
+      };
+    }
+    // Same first name but the surname is a single character off — treat as a spelling
+    // variance needing a look, not as a different person.
+    if (!lastOk && firstOk && surnamesNearMiss(ourSide.last, p.last) && best.result !== 'partial') {
+      best = {
+        result: 'partial',
+        detail: `Spelling differs — we have "${ourSide.last}", the record shows "${p.last}". Confirm on the call.`,
         ours: oursDisplay, theirs: theirsDisplay,
       };
     }

@@ -65,6 +65,15 @@ export const WIPP_BY_ZIP: Record<string, Municipality[]> = {
   // Only the Township id is known so far; borough properties fall through unverified.
   '07728': [{ wippId: '1317', town: 'Freehold Township' }],
   '07730': [{ wippId: '1318', town: 'Hazlet' }],
+  // Middletown publishes property tax only — no utility roll (the fallback handles it).
+  '07748': [{ wippId: '1332', town: 'Middletown' }],
+  // 07724 splits roughly evenly between Tinton Falls (30) and Eatontown (28).
+  // (Eatontown's public link is on the legacy edmundsassoc.com domain, but the same id
+  //  works against the modern API — no second integration needed.)
+  '07724': [
+    { wippId: '1349', town: 'Tinton Falls' },
+    { wippId: '1312', town: 'Eatontown' },
+  ],
 };
 
 export interface TaxRollRecord {
