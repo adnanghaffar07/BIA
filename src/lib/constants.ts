@@ -121,3 +121,37 @@ export const SUCCESS_MESSAGES = {
   LEAD_UPDATED: 'Property record updated successfully',
   LEAD_DELETED: 'Property record deleted successfully',
 };
+
+// ─── REAPI PropertySearch — permanent sourcing filters ───────────────────────
+//
+// ONE definition, imported by every caller (weekly pull, manual pull, seed). These
+// were previously copy-pasted in four places, which is how a filter silently applies
+// on one pull path and not another.
+//
+// Verified free against PropertySearch with `count:true` / `ids_only:true` on a
+// representative week (96 candidates) — REAPI honours each of these:
+//   absentee_owner:false  −11%   corporate_owned:false −16%
+//   investor_buyer:false  −11%   owner_occupied:true   −25%   year_built_min −7%
+//
+// We exclude absentee/corporate-owned at SOURCE so we stop paying to pull leads we
+// then quarantine (Frank, Jul-2026: "we're spending money on these"). We deliberately
+// do NOT send owner_occupied:true — it is the blunt one, and REAPI's occupancy flag is
+// sometimes wrong (it wrongly flagged owner-occupied homes as investor, e.g. Anurag
+// Chadha). Filtering on it at source means such leads never arrive and the error can
+// never be caught. absentee_owner is the narrower, safer cut.
+export const REAPI_TARGET_ZIPS = [
+  '07722', '07724', '07726', '07728', '07730',
+  '07731', '07733', '07746', '07748', '08701',
+];
+
+export const REAPI_BASE_FILTERS = {
+  state: 'NJ',
+  flood_zone: false,
+  vacant: false,
+  pre_foreclosure: false,
+  foreclosure: false,
+  reo: false,
+  // Sourcing-level appetite exclusions — save credits on leads we would quarantine.
+  absentee_owner: false,
+  corporate_owned: false,
+} as const;

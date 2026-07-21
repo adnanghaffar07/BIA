@@ -1,4 +1,4 @@
-import { API_CONFIG } from '@/lib/constants';
+import { API_CONFIG, REAPI_BASE_FILTERS, REAPI_TARGET_ZIPS } from '@/lib/constants';
 import { pool } from '@/lib/neon';
 import {
   computePullWindows,
@@ -23,17 +23,9 @@ import { enrichLeadBatch } from './enrichment.service';
  * dryRun stops after Phase A so we can report exact credit cost before spending.
  */
 
-// BIA target ZIPs + permanent appetite filters (mirrors api/leads + seed)
-const TARGET_ZIPS = ['07722','07724','07726','07728','07730','07731','07733','07746','07748','08701'];
-const BASE_FILTERS = {
-  state: 'NJ',
-  zip: TARGET_ZIPS,
-  flood_zone: false,
-  vacant: false,
-  pre_foreclosure: false,
-  foreclosure: false,
-  reo: false,
-} as const;
+// BIA target ZIPs + permanent appetite filters — single definition in lib/constants
+// so every pull path (weekly, manual, seed) sources identically.
+const BASE_FILTERS = { ...REAPI_BASE_FILTERS, zip: REAPI_TARGET_ZIPS } as const;
 
 const FULL_PULL_BATCH = 100; // PropertySearch full-data page size
 

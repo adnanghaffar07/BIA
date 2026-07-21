@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ERROR_MESSAGES, API_CONFIG } from '@/lib/constants';
+import { ERROR_MESSAGES, API_CONFIG, REAPI_BASE_FILTERS, REAPI_TARGET_ZIPS } from '@/lib/constants';
 import { upsertLeads, getLeadsFromDb, getLeadCounts } from '@/services/storage.service';
 import { enrichLeadBatch } from '@/services/enrichment.service';
 import sql from '@/lib/neon';
@@ -123,14 +123,9 @@ export async function GET(request: NextRequest) {
       obfuscate: false,
       summary: false,
       size,
-      // ── Permanent filters for BIA insurance leads ──────────────────────────
-      state: 'NJ',
-      zip: ['07722','07724','07726','07728','07730','07731','07733','07746','07748','08701'],
-      flood_zone: false,
-      vacant: false,
-      pre_foreclosure: false,
-      foreclosure: false,
-      reo: false,
+      // ── Permanent filters for BIA insurance leads (shared definition) ──────
+      ...REAPI_BASE_FILTERS,
+      zip: REAPI_TARGET_ZIPS,
       // ───────────────────────────────────────────────────────────────────────
       ...dateFilters,
     };
@@ -214,13 +209,8 @@ export async function POST(request: NextRequest) {
       obfuscate: body.obfuscate || false,
       summary: body.summary || false,
       size: body.size || 100,
-      // ── Permanent filters — always enforced ───────────────────────────────
-      state: 'NJ',
-      flood_zone: false,
-      vacant: false,
-      pre_foreclosure: false,
-      foreclosure: false,
-      reo: false,
+      // ── Permanent filters — always enforced (shared definition) ───────────
+      ...REAPI_BASE_FILTERS,
       // ─────────────────────────────────────────────────────────────────────
       ...body.filters,
     };

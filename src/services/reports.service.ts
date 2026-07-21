@@ -30,6 +30,13 @@ export interface QcRow {
 export interface QcReportParams {
   carrier?: 'travelers' | 'plymouth' | 'any';
   value?: 'review' | 'ineligible' | 'eligible'; // 'review' == Referral
+  /**
+   * Who put the lead in this state (Frank, Jul-2026 — "when I filter on referral I want
+   * the ones WE did"). The appetite rules flag far more leads than producers actually
+   * review, so the two get mixed in one list. A producer-set eligibility always carries
+   * a reason code; a system flag never does — that is the distinction, no extra column.
+   */
+  setBy?: 'any' | 'producer' | 'system';
   q?: string;
   effFrom?: string;
   effTo?: string;
@@ -48,7 +55,7 @@ function inRange(effDate: string | null, from?: string, to?: string): boolean {
 }
 
 export async function getQcReport(type: QcReportType, params: QcReportParams = {}): Promise<QcRow[]> {
-  const { carrier = 'any', value = 'review', q = '', effFrom, effTo } = params;
+  const { carrier = 'any', value = 'review', setBy = 'any', q = '', effFrom, effTo } = params;
 
   let rows: any = [];
 
@@ -61,7 +68,14 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     } else {
       rows = await sql`SELECT * FROM "Lead" WHERE "travelersEligible" = ${value} OR "plymouthEligible" = ${value}`;
     }
+    // A reason code is only ever written when a producer changes eligibility, so its
+    // presence is what separates "we reviewed this" from "the appetite rules flagged it".
+    // Only count the reason on the carrier(s) actually in the requested state.
+    const producerTouched = (r: any) =>
+      (carrier !== 'plymouth' && r.travelersEligible === value && !!r.travelersEligibilityReason)
+      || (carrier !== 'travelers' && r.plymouthEligible === value && !!r.plymouthEligibilityReason);
     return rows
+      .filter((r: any) => (setBy === 'any' ? true : setBy === 'producer' ? producerTouched(r) : !producerTouched(r)))
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => {
         // Structured reason (dropdown) is reported on; Detail carries the nuance.

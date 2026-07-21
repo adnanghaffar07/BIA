@@ -20,6 +20,7 @@ export async function GET(request: NextRequest) {
     const rows = await getQcReport(report, {
       carrier: (p.get('carrier') as any) || 'any',
       value: (p.get('value') as any) || 'review',
+      setBy: (p.get('setBy') as any) || 'any',
       q: p.get('q') || '',
       effFrom: p.get('effFrom') || undefined,
       effTo: p.get('effTo') || undefined,

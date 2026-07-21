@@ -39,6 +39,7 @@ export default function QcReportsPage() {
   const [report, setReport] = useState<ReportType>('referral');
   const [carrier, setCarrier] = useState<'any' | 'travelers' | 'plymouth'>('any');
   const [value, setValue] = useState<'review' | 'ineligible' | 'eligible'>('review');
+  const [setBy, setSetBy] = useState<'any' | 'producer' | 'system'>('any');
   const [q, setQ] = useState('');
   const [effFrom, setEffFrom] = useState('');
   const [effTo, setEffTo] = useState('');
@@ -52,7 +53,7 @@ export default function QcReportsPage() {
     try {
       const url = new URL('/api/admin/reports', window.location.origin);
       url.searchParams.set('report', report);
-      if (report === 'referral') { url.searchParams.set('carrier', carrier); url.searchParams.set('value', value); }
+      if (report === 'referral') { url.searchParams.set('carrier', carrier); url.searchParams.set('value', value); url.searchParams.set('setBy', setBy); }
       if (report === 'keyword') url.searchParams.set('q', q.trim());
       if (effFrom) url.searchParams.set('effFrom', effFrom);
       if (effTo) url.searchParams.set('effTo', effTo);
@@ -67,7 +68,7 @@ export default function QcReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [report, carrier, value, q, effFrom, effTo]);
+  }, [report, carrier, value, setBy, q, effFrom, effTo]);
 
   // Auto-run on report switch (except keyword, which waits for a term).
   useEffect(() => {
@@ -129,6 +130,14 @@ export default function QcReportsPage() {
                   <MenuItem value="review">Referral</MenuItem>
                   <MenuItem value="ineligible">Non-eligible</MenuItem>
                   <MenuItem value="eligible">Eligible</MenuItem>
+                </Select>
+              </FormControl>
+              <FormControl size="small" sx={{ minWidth: 190 }}>
+                <InputLabel>Set by</InputLabel>
+                <Select label="Set by" value={setBy} onChange={(e) => setSetBy(e.target.value as any)}>
+                  <MenuItem value="any">Anyone</MenuItem>
+                  <MenuItem value="producer">Producer-reviewed</MenuItem>
+                  <MenuItem value="system">System-flagged</MenuItem>
                 </Select>
               </FormControl>
             </>

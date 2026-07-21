@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { API_CONFIG } from '@/lib/constants';
+import { API_CONFIG, REAPI_BASE_FILTERS, REAPI_TARGET_ZIPS } from '@/lib/constants';
 import { upsertLeads, getLeadsFromDb } from '@/services/storage.service';
 import { enrichLeadBatch } from '@/services/enrichment.service';
 import sql, { pool } from '@/lib/neon';
@@ -58,20 +58,12 @@ export async function POST() {
     await sql`DELETE FROM "Lead"`;
 
     // ── 4. Call REAPI — Engine 1 (New Purchase, last 90 days) ────────────────
-    // BIA target ZIP codes — only leads from these 10 NJ ZIPs are fetched
-    const TARGET_ZIPS = ['07722','07724','07726','07728','07730','07731','07733','07746','07748','08701'];
-
     const baseFilters = {
       ids_only: false,
       obfuscate: false,
       summary: false,
-      state: 'NJ',
-      zip: TARGET_ZIPS,
-      flood_zone: false,
-      vacant: false,
-      pre_foreclosure: false,
-      foreclosure: false,
-      reo: false,
+      ...REAPI_BASE_FILTERS,
+      zip: REAPI_TARGET_ZIPS,
     };
 
     console.log('📤 Calling REAPI — Engine 1 (New Purchase)...');
