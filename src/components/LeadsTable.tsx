@@ -59,6 +59,8 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; 
   quote_issued:    { label: 'Quote Issued',    color: '#1b5e20', bg: '#e8f5e9', rowBg: '#f1f8e9' },
   bound:           { label: 'Bound',           color: '#fff',    bg: '#2e7d32', rowBg: '#e8f5e9' },
   lost:            { label: 'Lost',            color: '#fff',    bg: '#c62828', rowBg: '#ffebee' },
+  // Parked by the appetite rules — greyed out so it reads as "not workable", not "failed".
+  quarantine:      { label: 'Quarantine',      color: '#455a64', bg: '#eceff1', rowBg: '#f7f9fa' },
 };
 
 function StatusChip({ status }: { status?: string }) {
@@ -454,6 +456,7 @@ export default function LeadsTable({
               <MenuItem value="quote_issued">Quote Issued</MenuItem>
               <MenuItem value="bound">Bound</MenuItem>
               <MenuItem value="lost">Lost</MenuItem>
+              <MenuItem value="quarantine">Quarantine</MenuItem>
             </Select>
           </FormControl>
           {hasFilters && (

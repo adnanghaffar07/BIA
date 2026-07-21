@@ -145,6 +145,46 @@ function notOwnerOccupied(lead: any): boolean {
   return mailsElsewhere(lead);
 }
 
+/**
+ * Auto-quarantine (Frank Jul-2026): park leads the appetite rules have already ruled
+ * out so they stop crowding the working queue — and so the Referral status stays a
+ * purely human signal.
+ *
+ * Only ever applied to leads a producer has never touched (status still 'new'), and
+ * never to a lead already worked.
+ *
+ * Two of the criteria Frank floated are OFF pending his decision, because switching
+ * them on removes workable leads (8 Grade A + 56 Grade B on the current book):
+ *   • investor / non-owner-occupied — his absentee call is still open ("my gut… I will decide")
+ *   • built pre-1940 — he was explicitly unsure ("maybe that's not that bad to have")
+ * Flip either flag to true once he confirms; no other change needed.
+ */
+export const QUARANTINE_RULES = {
+  /** Neither carrier will write it — definitively unworkable. */
+  bothCarriersIneligible: true,
+  investorNonOwnerOccupied: false,
+  builtBefore1940: false,
+} as const;
+
+export interface QuarantineVerdict { quarantine: boolean; reason: string | null }
+
+export function shouldQuarantine(
+  lead: any,
+  eligibility?: CarrierEligibilityResult,
+): QuarantineVerdict {
+  const e = eligibility ?? checkCarrierEligibility(lead);
+  if (QUARANTINE_RULES.bothCarriersIneligible && !e.passesAnyCarrier) {
+    return { quarantine: true, reason: 'Out of appetite — neither carrier will write it' };
+  }
+  if (QUARANTINE_RULES.investorNonOwnerOccupied && !!lead.investorBuyer && notOwnerOccupied(lead)) {
+    return { quarantine: true, reason: 'Investor / non-owner-occupied' };
+  }
+  if (QUARANTINE_RULES.builtBefore1940 && !!lead.yearBuilt && Number(lead.yearBuilt) < 1940) {
+    return { quarantine: true, reason: `Built ${lead.yearBuilt} — pre-1940` };
+  }
+  return { quarantine: false, reason: null };
+}
+
 // ─── Appetite rules (rules-as-data) ─────────────────────────────────────────────
 //
 // Each rule carries a structured reason code + severity. The engine evaluates every

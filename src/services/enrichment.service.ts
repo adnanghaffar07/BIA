@@ -1,5 +1,5 @@
 import { Lead } from '@/types/lead';
-import { checkCarrierEligibility } from './carrier.service';
+import { checkCarrierEligibility, shouldQuarantine } from './carrier.service';
 import { calculateCoastDistance } from './coastDistance.service';
 import { calculateLeadGrade } from './grade.service';
 import { calculateIndicativePremium } from './pricing.service';
@@ -78,6 +78,18 @@ export async function enrichLead(lead: any): Promise<void> {
       if (eff) effPatch.effectiveDate = eff.toISOString().slice(0, 10);
     }
 
+    // Auto-quarantine: park leads the appetite rules ruled out, but ONLY while the lead
+    // is still untouched. A producer-set status (rated, referral, bound…) always wins —
+    // re-enrichment must never overwrite someone's work.
+    const quarantinePatch: Record<string, any> = {};
+    if (!lead.status || lead.status === 'new') {
+      const q = shouldQuarantine(mappedLead, eligibility);
+      if (q.quarantine) {
+        quarantinePatch.status = 'quarantine';
+        quarantinePatch.varianceNotes = lead.varianceNotes || `Auto-quarantined: ${q.reason}`;
+      }
+    }
+
     await updateLead(propertyId, {
       grade,
       travelersEligible: eligibility.travelers.status,
@@ -94,6 +106,7 @@ export async function enrichLead(lead: any): Promise<void> {
       }),
       ...floodPatch,
       ...effPatch,
+      ...quarantinePatch,
     });
   } catch (err) {
     console.error(`[enrichment] Failed to enrich lead ${lead.propertyId}:`, err);

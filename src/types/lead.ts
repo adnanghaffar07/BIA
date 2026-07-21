@@ -45,7 +45,8 @@ export type LeadStatus =
   | 'pos_ran'
   | 'quote_issued'
   | 'bound'
-  | 'lost';
+  | 'lost'
+  | 'quarantine';
 
 /** Single source of truth for status display + workflow grouping (Frank Phase 5). */
 export const LEAD_STATUS_OPTIONS: Array<{
@@ -61,6 +62,7 @@ export const LEAD_STATUS_OPTIONS: Array<{
   { value: 'quote_issued',    label: 'Quote Issued',            color: 'primary' },
   { value: 'bound',           label: 'Bound',                   color: 'success' },
   { value: 'lost',            label: 'Lost',                    color: 'error' },
+  { value: 'quarantine',      label: 'Quarantine',              color: 'secondary' },
 ];
 
 export function leadStatusLabel(s: string | null | undefined): string {
@@ -71,6 +73,12 @@ export function leadStatusLabel(s: string | null | undefined): string {
 export const ACTIVE_PRODUCER_STATUSES: LeadStatus[] = ['rated', 'indicative_sent', 'pos_ran', 'quote_issued', 'referral'];
 /** Closed / terminal statuses. */
 export const CLOSED_STATUSES: LeadStatus[] = ['bound', 'lost'];
+/**
+ * Statuses kept OUT of the active working queue (Frank Jul-2026). Quarantine holds
+ * leads the appetite rules parked automatically, so the Referral status stays a purely
+ * human signal — "when I filter on referral it's just showing the ones we manually did".
+ */
+export const PARKED_STATUSES: LeadStatus[] = ['bound', 'lost', 'quarantine'];
 
 export type LostReason =
   | 'price'

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ERROR_MESSAGES, API_CONFIG, REAPI_BASE_FILTERS, REAPI_TARGET_ZIPS } from '@/lib/constants';
+import { PARKED_STATUSES } from '@/types/lead';
 import { upsertLeads, getLeadsFromDb, getLeadCounts } from '@/services/storage.service';
 import { enrichLeadBatch } from '@/services/enrichment.service';
 import sql from '@/lib/neon';
@@ -56,7 +57,8 @@ export async function GET(request: NextRequest) {
     const effectiveTo   = searchParams.get('effectiveTo') || undefined;   // optional range end
     const carrier       = searchParams.get('carrier') || undefined;       // 'travelers' | 'plymouth'
 
-    const excludeStatuses = active ? ['bound', 'lost'] : undefined;
+    // Quarantined leads are parked by the appetite rules — never in the working queue.
+    const excludeStatuses = active ? [...PARKED_STATUSES] : undefined;
     const onlyStatuses    = closed ? 'bound' : undefined; // simplified: show bound in closed tab
 
     // If source=db, return stored leads without calling external API

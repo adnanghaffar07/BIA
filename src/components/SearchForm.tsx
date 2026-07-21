@@ -38,6 +38,7 @@ const STATUS_OPTIONS = [
   { value: 'quote_issued', label: 'Quote Issued' },
   { value: 'bound', label: 'Bound' },
   { value: 'lost', label: 'Lost' },
+  { value: 'quarantine', label: 'Quarantine' },
 ];
 
 export default function SearchForm({ onSearch, loading = false, initial }: SearchFormProps) {
