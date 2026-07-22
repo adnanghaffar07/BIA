@@ -588,8 +588,15 @@ export default function LeadDetailPage() {
   }
 
   const address = `${lead.addressStreet}, ${lead.addressCity}, ${lead.addressState} ${lead.addressZip}`;
+  const hasRealName = !!(lead.owner1FirstName || lead.owner1LastName);
   const ownerName = [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—';
   const coInsuredName = [lead.owner2FirstName, lead.owner2LastName].filter(Boolean).join(' ');
+
+  // No insured name on file, but the tax roll gave us one. Show it as a SUGGESTION —
+  // greyed/italic, no verified tick — because it is the roll's word alone (nothing of
+  // ours agreed with it). A producer confirms it on the call, which promotes it to the
+  // real insured name. Never render this as a tick: that would be self-referential.
+  const rollSuggestedName = !hasRealName && lead.ownerVerifyName ? String(lead.ownerVerifyName) : null;
 
   // Owner-name verification badge (Frank Jul-2026). Shows the outcome of checking the
   // insured name against the municipal tax roll. Deliberately graded, not a plain tick:
@@ -774,12 +781,24 @@ export default function LeadDetailPage() {
                 label="Insured Named"
                 value={
                   <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                    {ownerName}
-                    {ownerVerify}
+                    {rollSuggestedName ? (
+                      <Tooltip title="Pulled from the municipal tax roll — no name was on file. Confirm with the insured on the call, then save it as the insured name.">
+                        <Box component="span" sx={{ fontStyle: 'italic', color: '#6b7280', cursor: 'help' }}>
+                          {rollSuggestedName}
+                          <Box component="span" sx={{ fontStyle: 'normal', fontSize: 10, fontWeight: 600, color: '#8a5a00', ml: 0.75 }}>
+                            from tax roll · confirm on call
+                          </Box>
+                        </Box>
+                      </Tooltip>
+                    ) : (
+                      <>{ownerName}{ownerVerify}</>
+                    )}
                   </Box>
                 }
               />
-              {lead.ownerVerifyStatus && lead.ownerVerifyStatus !== 'match' && lead.ownerVerifyName && (
+              {/* Comparison row — only when we HAD a name to compare against (partial/mismatch/
+                  unknown-with-name). Suppressed for roll-suggested names, which already show above. */}
+              {hasRealName && lead.ownerVerifyStatus && lead.ownerVerifyStatus !== 'match' && lead.ownerVerifyName && (
                 <Row label="Tax Record Shows" value={<Box component="span" sx={{ color: '#8a5a00' }}>{lead.ownerVerifyName}</Box>} />
               )}
               {!!WIPP_BY_ZIP[String(lead.addressZip ?? '').trim()]?.length && (

@@ -61,9 +61,13 @@ export const WIPP_BY_ZIP: Record<string, Municipality[]> = {
     { wippId: 'WMON', town: 'Manalapan' },    // ~213 of our 241 leads in this ZIP
     { wippId: '1313', town: 'Englishtown' },  // the borough proper
   ],
-  // 07728 covers Freehold Township and Freehold Borough (separate municipalities).
-  // Only the Township id is known so far; borough properties fall through unverified.
-  '07728': [{ wippId: '1317', town: 'Freehold Township' }],
+  // 07728 covers Freehold Township AND Freehold Borough — separate municipalities,
+  // separate rolls (Township 1317, Borough 1316; verified live Jul-2026: "MAIN STREET"
+  // returns Borough rows on 1316 and nothing on 1317, since Main St is Borough territory).
+  '07728': [
+    { wippId: '1317', town: 'Freehold Township' },
+    { wippId: '1316', town: 'Freehold Borough' },
+  ],
   '07730': [{ wippId: '1318', town: 'Hazlet' }],
   // Middletown publishes property tax only — no utility roll (the fallback handles it).
   '07748': [{ wippId: '1332', town: 'Middletown' }],
