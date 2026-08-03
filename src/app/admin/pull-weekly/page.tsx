@@ -4,6 +4,7 @@ import { useState } from 'react';
 import {
   Box, Button, Typography, Paper, Alert, CircularProgress,
   Stack, Divider, Chip, Table, TableHead, TableBody, TableRow, TableCell,
+  TextField,
 } from '@mui/material';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
@@ -33,6 +34,12 @@ export default function WeeklyPullPage() {
   const [preview, setPreview] = useState<PullResult | null>(null);
   const [runResult, setRunResult] = useState<PullResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Renewal effective week to pull. Empty = today's auto-rolling window. The 60-day
+  // lead offset is handled server-side (runDate = effDate − 60), so this is the
+  // effective date the producer actually wants to work.
+  const [effDate, setEffDate] = useState('');
+
+  const pullQuery = effDate ? `?effDate=${effDate}` : '';
 
   // would-spend = brand-new candidates not already stored
   const wouldSpend = preview
@@ -42,7 +49,7 @@ export default function WeeklyPullPage() {
   const runPreview = async () => {
     setPreviewing(true); setError(null); setRunResult(null); setPreview(null);
     try {
-      const res = await fetch('/api/admin/pull-weekly', { method: 'GET' });
+      const res = await fetch(`/api/admin/pull-weekly${pullQuery}`, { method: 'GET' });
       const json = await res.json();
       if (json.success) setPreview(json as PullResult);
       else setError(json.error || 'Preview failed');
@@ -57,7 +64,7 @@ export default function WeeklyPullPage() {
     )) return;
     setRunning(true); setError(null);
     try {
-      const res = await fetch('/api/admin/pull-weekly', { method: 'POST' });
+      const res = await fetch(`/api/admin/pull-weekly${pullQuery}`, { method: 'POST' });
       const json = await res.json();
       if (json.success) { setRunResult(json as PullResult); setPreview(null); }
       else setError(json.error || 'Pull failed');
@@ -70,6 +77,7 @@ export default function WeeklyPullPage() {
       <TableHead>
         <TableRow>
           <TableCell sx={{ fontWeight: 700 }}>Window</TableCell>
+          <TableCell sx={{ fontWeight: 700 }}>Effective</TableCell>
           <TableCell sx={{ fontWeight: 700 }}>Origination</TableCell>
           <TableCell align="right" sx={{ fontWeight: 700 }}>Matched</TableCell>
           <TableCell align="right" sx={{ fontWeight: 700 }}>Have</TableCell>
@@ -82,6 +90,7 @@ export default function WeeklyPullPage() {
             <TableCell>
               <Chip label={w.label} size="small" color={w.kind === 'renewal' ? 'info' : 'success'} variant="outlined" />
             </TableCell>
+            <TableCell>{w.effectiveMin} → {w.effectiveMax}</TableCell>
             <TableCell>{w.originationMin} → {w.originationMax}</TableCell>
             <TableCell align="right">{w.matched}</TableCell>
             <TableCell align="right">{w.alreadyHave}</TableCell>
@@ -97,11 +106,35 @@ export default function WeeklyPullPage() {
   return (
     <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 820, mx: 'auto' }}>
       <Typography variant="h5" gutterBottom sx={{ fontWeight: 700 }}>Weekly Lead Pull</Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Pulls this week&apos;s 7-day slice — new business (90-day lead) + renewals (60-day lead,
-        origination years 2022–2025). Windows auto-roll from today, so there&apos;s nothing to
-        configure. <strong>Preview is free</strong>; only brand-new properties cost credits when you run it.
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Pulls a 7-day slice — new business (90-day lead) + renewals (60-day lead,
+        origination years 2022–2025). <strong>Preview is free</strong>; only brand-new properties
+        cost credits when you run it.
       </Typography>
+
+      <Paper variant="outlined" sx={{ p: 2, mb: 3, borderRadius: 2 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: { sm: 'center' } }}>
+          <TextField
+            label="Renewal effective week starting"
+            type="date"
+            size="small"
+            value={effDate}
+            onChange={(e) => { setEffDate(e.target.value); setPreview(null); setRunResult(null); }}
+            slotProps={{ inputLabel: { shrink: true } }}
+            sx={{ minWidth: 240 }}
+          />
+          <Typography variant="caption" color="text.secondary">
+            {effDate
+              ? `Renewals effective the week of ${effDate}. Leave blank to pull today’s auto-rolling window.`
+              : 'Leave blank to pull today’s auto-rolling window, or pick the renewal effective week you want to work.'}
+          </Typography>
+          {effDate && (
+            <Button size="small" onClick={() => { setEffDate(''); setPreview(null); setRunResult(null); }}>
+              Reset to today
+            </Button>
+          )}
+        </Stack>
+      </Paper>
 
       <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
         <Button
