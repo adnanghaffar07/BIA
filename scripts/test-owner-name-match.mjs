@@ -22,7 +22,7 @@ execSync(
   `npx tsc src/services/ownerNameMatch.service.ts --outDir "${out}" --module es2020 --target es2020 --moduleResolution node`,
   { stdio: 'pipe' },
 );
-const { compareOwnerNames } = await import(pathToFileURL(join(out, 'ownerNameMatch.service.js')).href);
+const { compareOwnerNames, parseRollOwners } = await import(pathToFileURL(join(out, 'ownerNameMatch.service.js')).href);
 
 let pass = 0; const failures = [];
 const t = (label, ours, theirs, expect) => {
@@ -64,6 +64,28 @@ t('near-miss surname but different first name', { first: 'Robert', last: 'Labolt
 t('unrelated entity', { first: '', last: 'Kasmon Llc' }, 'SPARTAN REAL ESTATE HOLDINGS INC', 'mismatch');
 t('no record name', { first: 'Theresa', last: 'Brummer' }, '', 'unknown');
 t('no insured name', { first: '', last: '' }, 'BRUMMER, THERESA', 'unknown');
+
+// ── parseRollOwners — capturing BOTH insureds (Frank Jul-2026, verified vs live rolls)
+console.log('\nTwo-insured extraction from the tax roll (parseRollOwners):');
+const p = (label, raw, expect) => {
+  const r = parseRollOwners(raw);
+  const got = { p1: r.person1?.display ?? null, p2: r.person2?.display ?? null, entity: r.isEntity };
+  const ok = got.p1 === expect.p1 && got.p2 === expect.p2 && got.entity === !!expect.entity;
+  if (ok) { pass++; console.log(`  ok   ${label}`); }
+  else { failures.push(`${label} → got ${JSON.stringify(got)}, expected ${JSON.stringify(expect)}`); console.log(`  FAIL ${label} → ${JSON.stringify(got)}`); }
+};
+p('spouse, shared surname (Scheidt)', 'SCHEIDT, WOODROW W & MARY ANN', { p1: 'Woodrow Scheidt', p2: 'Mary Scheidt' });
+p('spouse, shared surname (Perez)', 'PEREZ, ELIOT & MARISOL', { p1: 'Eliot Perez', p2: 'Marisol Perez' });
+p('spouse with middle initials (Mescal)', 'MESCAL,DAMION V. & JANICE V.', { p1: 'Damion Mescal', p2: 'Janice Mescal' });
+p('stray comma before ampersand (Montanaro)', 'MONTANARO, MICHAEL,& GINA', { p1: 'Michael Montanaro', p2: 'Gina Montanaro' });
+p('second party repeats the surname (Tarantul)', 'TARANTUL, MICHAEL & TATYANA TARANTUL', { p1: 'Michael Tarantul', p2: 'Tatyana Tarantul' });
+p('second party with own LAST, FIRST', 'SMITH, JOHN & DOE, JANE', { p1: 'John Smith', p2: 'Jane Doe' });
+p('single owner → no second person', 'DEVINCENS, CHRISTINE', { p1: 'Christine Devincens', p2: null });
+p('plain First Last, single owner', 'LEE LESSNER', { p1: 'Lee Lessner', p2: null });
+p('LLC is an entity, not people', '525 REALTY HOLDING, INC', { p1: null, p2: null, entity: true });
+p('trust is an entity, not people', '123 SOUTH MAIN STREET TRUST', { p1: null, p2: null, entity: true });
+p('municipality is an entity', 'TOWNSHIP OF HOWELL', { p1: null, p2: null, entity: true });
+p('empty string', '', { p1: null, p2: null });
 
 rmSync(out, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${failures.length} failed`);

@@ -141,6 +141,66 @@ function surnamesNearMiss(a: string, b: string): boolean {
   return withinOneEdit(squash(a), squash(b));
 }
 
+export interface RollPerson { first: string; last: string; display: string }
+export interface RollOwners { person1: RollPerson | null; person2: RollPerson | null; isEntity: boolean }
+
+const titleCase = (s: string) =>
+  s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()).trim();
+
+function toRollPerson(p: { first: string; last: string } | null): RollPerson | null {
+  if (!p) return null;
+  const first = titleCase(p.first);
+  const last = titleCase(p.last);
+  const display = [first, last].filter(Boolean).join(' ').trim();
+  return display ? { first, last, display } : null;
+}
+
+/**
+ * Split a tax-roll owner string into its (up to two) named people — for capturing
+ * BOTH insureds (typically husband + wife) so we can reach both (Frank Jul-2026).
+ *
+ * The roll writes two owners in one field joined by "&", and — when they share a
+ * surname, which per title they almost always do — it lists the surname once:
+ *   "SCHEIDT, WOODROW W & MARY ANN"  → Woodrow Scheidt + Mary Scheidt
+ *   "PEREZ, ELIOT & MARISOL"          → Eliot Perez  + Marisol Perez
+ *   "MESCAL,DAMION V. & JANICE V."    → Damion Mescal + Janice Mescal
+ *   "MONTANARO, MICHAEL,& GINA"       → Michael Montanaro + Gina Montanaro (stray comma)
+ * When the second party carries its own surname it is used as-is:
+ *   "TARANTUL, MICHAEL & TATYANA TARANTUL" → Michael + Tatyana Tarantul
+ *   "SMITH, JOHN & DOE, JANE"              → John Smith + Jane Doe
+ *
+ * Entities (LLC / trust / municipality) are never split into people — person1/2 null,
+ * isEntity true. A single owner returns person1 only. The second person inherits the
+ * shared surname unless it appears explicitly with its own comma, matching how spouses
+ * on title are recorded; a rare unmarried different-surname co-owner listed as bare
+ * "Jane Doe" would inherit the primary surname — an accepted edge, not the common case.
+ */
+export function parseRollOwners(raw: string): RollOwners {
+  const display = String(raw ?? '').trim();
+  if (!display) return { person1: null, person2: null, isEntity: false };
+  if (isEntity(display)) return { person1: null, person2: null, isEntity: true };
+
+  const parties = splitParties(display);
+  const person1 = toRollPerson(splitPerson(parties[0] ?? ''));
+  if (!person1) return { person1: null, person2: null, isEntity: false };
+
+  let person2: RollPerson | null = null;
+  if (parties.length >= 2) {
+    const rawP2 = parties[1];
+    if (rawP2.includes(',')) {
+      // Second party carries its own "LAST, FIRST" — use it verbatim.
+      person2 = toRollPerson(splitPerson(rawP2));
+    } else {
+      // Bare given name(s): the shared surname is listed once on party 1, so inherit it.
+      const toks = coreTokens(rawP2);
+      if (toks.length) {
+        person2 = toRollPerson({ first: toks[0], last: person1.last.toUpperCase() });
+      }
+    }
+  }
+  return { person1, person2, isEntity: false };
+}
+
 /**
  * Compare the insured name we hold against the authoritative record name.
  * `theirs` is the raw record string, e.g. "BRUMMER, THERESA".

@@ -13,6 +13,7 @@ import { GRADE_INFO, LeadGrade } from '@/types/grade';
 import { LEAD_STATUS_OPTIONS, leadStatusLabel, CLOSED_STATUSES, LeadStatus } from '@/types/lead';
 import { ELIGIBILITY_REASONS } from '@/types/carrier';
 import { WIPP_BY_ZIP } from '@/services/taxRoll.service';
+import { parseRollOwners } from '@/services/ownerNameMatch.service';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import HomeIcon from '@mui/icons-material/Home';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -598,6 +599,15 @@ export default function LeadDetailPage() {
   // real insured name. Never render this as a tick: that would be self-referential.
   const rollSuggestedName = !hasRealName && lead.ownerVerifyName ? String(lead.ownerVerifyName) : null;
 
+  // Second insured from the tax roll (Frank Jul-2026): the roll lists both owners —
+  // typically husband + wife on title — in one field ("SCHEIDT, WOODROW W & MARY ANN").
+  // Surface the spouse as a confirm-on-call suggestion whenever we don't already have a
+  // co-insured on file, so both can be reached (2x the outreach chance on one lead).
+  const hasCoInsured = !!(lead.owner2FirstName || lead.owner2LastName);
+  const rollSecondInsured = (!hasCoInsured && lead.ownerVerifyName)
+    ? (parseRollOwners(String(lead.ownerVerifyName)).person2?.display ?? null)
+    : null;
+
   // Owner-name verification badge (Frank Jul-2026). Shows the outcome of checking the
   // insured name against the municipal tax roll. Deliberately graded, not a plain tick:
   // a surname-only match usually means the roll lists a spouse or co-owner, which is
@@ -815,6 +825,21 @@ export default function LeadDetailPage() {
                 <Row label="REAPI DOB" value={dobDisplay(lead.reapiDob || lead.owner1Dob)} />
               )}
               {coInsuredName && <Row label="Co-Insured" value={coInsuredName} />}
+              {rollSecondInsured && (
+                <Row
+                  label="Co-Insured"
+                  value={
+                    <Tooltip title="Second owner on the municipal tax roll (usually a spouse). No co-insured was on file. Confirm on the call, then save it as the co-insured.">
+                      <Box component="span" sx={{ fontStyle: 'italic', color: '#6b7280', cursor: 'help' }}>
+                        {rollSecondInsured}
+                        <Box component="span" sx={{ fontStyle: 'normal', fontSize: 10, fontWeight: 600, color: '#8a5a00', ml: 0.75 }}>
+                          from tax roll · confirm on call
+                        </Box>
+                      </Box>
+                    </Tooltip>
+                  }
+                />
+              )}
               {lead.owner2Dob && (
                 <Row label="Co-Insured DOB" value={dobDisplay(lead.owner2Dob)} />
               )}
