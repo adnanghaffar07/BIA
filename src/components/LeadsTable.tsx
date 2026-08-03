@@ -155,6 +155,16 @@ function LeadRow({ lead }: { lead: any }) {
 
   const xDateUrgent = daysUntil != null && daysUntil <= 30;
 
+  // Expiration = effective + 1 year (standard annual policy term). Frank Jul-2026 —
+  // show the policy's expiry alongside its effective date. Derived, not stored.
+  const expDate = (() => {
+    if (!triageDate) return null;
+    const d = new Date(triageDate);
+    if (isNaN(d.getTime())) return null;
+    d.setFullYear(d.getFullYear() + 1);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+  })();
+
   return (
     <Fragment>
       <TableRow
@@ -236,6 +246,11 @@ function LeadRow({ lead }: { lead: any }) {
               {daysUntil != null && (
                 <Typography variant="caption" sx={{ fontSize: '0.62rem', lineHeight: 1.1, color: daysUntil < 0 ? '#c62828' : 'text.disabled' }}>
                   {daysUntil < 0 ? `${Math.abs(daysUntil)}d overdue` : `in ${daysUntil}d`}
+                </Typography>
+              )}
+              {expDate && (
+                <Typography variant="caption" sx={{ fontSize: '0.62rem', lineHeight: 1.1, color: 'text.disabled' }}>
+                  exp {expDate}
                 </Typography>
               )}
             </Stack>

@@ -589,6 +589,16 @@ export default function LeadDetailPage() {
   }
 
   const address = `${lead.addressStreet}, ${lead.addressCity}, ${lead.addressState} ${lead.addressZip}`;
+  // Expiration = effective + 1 year (standard annual policy term, Frank Jul-2026). Derived, not stored.
+  const expirationDate = (() => {
+    const base = lead.effectiveDate || lead.renewalTargetDate;
+    if (!base) return null;
+    const d = new Date(base);
+    if (isNaN(d.getTime())) return null;
+    d.setFullYear(d.getFullYear() + 1);
+    return d.toLocaleDateString();
+  })();
+
   const hasRealName = !!(lead.owner1FirstName || lead.owner1LastName);
   const ownerName = [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—';
   const coInsuredName = [lead.owner2FirstName, lead.owner2LastName].filter(Boolean).join(' ');
@@ -968,6 +978,7 @@ export default function LeadDetailPage() {
               <Row label="Recording Date" value={lead.recordingDate} />
               <Row label="Renewal Target" value={lead.renewalTargetDate ? new Date(lead.renewalTargetDate).toLocaleDateString() : undefined} />
               <Row label="Effective Date" value={lead.effectiveDate ? new Date(lead.effectiveDate).toLocaleDateString() : undefined} />
+              <Row label="Expiration Date" value={expirationDate ? `${expirationDate} (est.)` : undefined} />
             </Grid>
 
           </Grid>

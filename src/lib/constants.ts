@@ -140,8 +140,20 @@ export const SUCCESS_MESSAGES = {
 // Chadha). Filtering on it at source means such leads never arrive and the error can
 // never be caught. absentee_owner is the narrower, safer cut.
 export const REAPI_TARGET_ZIPS = [
+  // ── Monmouth County — original footprint ──────────────────────────────────
   '07722', '07724', '07726', '07728', '07730',
   '07731', '07733', '07746', '07748', '08701',
+  // ── Middlesex County — Frank Aug-2026 expansion (Travelers + Plymouth Rock) ─
+  // All 25 municipalities. WIPP owner-name verification is wired for 23 of them
+  // (see WIPP_BY_ZIP in taxRoll.service); Dunellen (Link2Gov) and Old Bridge
+  // (in-house portal) are NOT on Edmunds, so they pull but do not verify.
+  // NOTE: this is a large geography jump — run the weekly-pull Preview (free) to
+  // see exact credit cost before the first real pull.
+  '07001', '07008', '07064', '07067', '07077', '07080', '07095',
+  '08512', '08536', '08810', '08812', '08816', '08817', '08820',
+  '08824', '08828', '08830', '08831', '08832', '08837', '08840',
+  '08846', '08850', '08852', '08854', '08857', '08859', '08861',
+  '08863', '08872', '08879', '08882', '08884', '08901', '08902', '08904',
 ];
 
 export const REAPI_BASE_FILTERS = {

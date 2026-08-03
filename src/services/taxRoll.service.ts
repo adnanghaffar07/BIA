@@ -81,6 +81,57 @@ export const WIPP_BY_ZIP: Record<string, Municipality[]> = {
   '07733': [{ wippId: '1320', town: 'Holmdel' }],
   '07722': [{ wippId: '1310', town: 'Colts Neck' }],   // property tax only
   '08701': [{ wippId: '1515', town: 'Lakewood' }],     // Ocean County, property tax only
+
+  // ── Middlesex County (Frank Aug-2026) ───────────────────────────────────────
+  // Every id below was read from the town's official tax portal AND confirmed
+  // against the live Edmunds API (each returns that town's own roll). Edmunds
+  // assigned Middlesex a consecutive block 1201-1225 alphabetically. Dunellen (1203) and
+  // Old Bridge (1215) moved their PAYMENTS off Edmunds (Link2Gov / in-house portal), but
+  // Dunellen's tax ROLL is still live on the read-only API, so it's wired below; Old
+  // Bridge (1215) returns nothing on the API and is left out (its ZIP pulls, no verify).
+  // A stale/wrong id can never mis-verify: lookupTaxRoll requires an exact street match,
+  // so the worst case is "no match" (same as unverified), never a false tick.
+  '07008': [{ wippId: '1201', town: 'Carteret' }],
+  '08812': [{ wippId: '1203', town: 'Dunellen' }],     // payments on Link2Gov; roll still on Edmunds API
+  '08512': [{ wippId: '1202', town: 'Cranbury' }],
+  '08816': [{ wippId: '1204', town: 'East Brunswick' }],
+  '08817': [{ wippId: '1205', town: 'Edison' }],
+  '08820': [{ wippId: '1205', town: 'Edison' }],
+  '08837': [{ wippId: '1205', town: 'Edison' }],
+  '08828': [{ wippId: '1206', town: 'Helmetta' }],
+  '08904': [{ wippId: '1207', town: 'Highland Park' }],
+  // 08831 covers both Jamesburg Borough and the surrounding Monroe Township.
+  '08831': [{ wippId: '1212', town: 'Monroe Township' }, { wippId: '1208', town: 'Jamesburg' }],
+  '08840': [{ wippId: '1209', town: 'Metuchen' }],
+  '08846': [{ wippId: '1210', town: 'Middlesex Borough' }],
+  '08850': [{ wippId: '1211', town: 'Milltown' }],
+  '08901': [{ wippId: '1213', town: 'New Brunswick' }],
+  '08902': [{ wippId: '1214', town: 'North Brunswick' }],
+  '08861': [{ wippId: '1216', town: 'Perth Amboy' }],
+  '08854': [{ wippId: '1217', town: 'Piscataway' }],
+  '08536': [{ wippId: '1218', town: 'Plainsboro' }],
+  '08872': [{ wippId: '1219', town: 'Sayreville' }],
+  // 08859 (Parlin) is split between Sayreville and Old Bridge; only Sayreville is on Edmunds.
+  '08859': [{ wippId: '1219', town: 'Sayreville' }],
+  '08879': [{ wippId: '1220', town: 'South Amboy' }],
+  '08852': [{ wippId: '1221', town: 'South Brunswick' }],
+  '08810': [{ wippId: '1221', town: 'South Brunswick' }],
+  '08824': [{ wippId: '1221', town: 'South Brunswick' }],
+  '07080': [{ wippId: '1222', town: 'South Plainfield' }],
+  '08882': [{ wippId: '1223', town: 'South River' }],
+  '08884': [{ wippId: '1224', town: 'Spotswood' }],
+  // Woodbridge Township spans many sections/ZIPs; all share wippId 1225.
+  '07095': [{ wippId: '1225', town: 'Woodbridge' }],
+  '08830': [{ wippId: '1225', town: 'Woodbridge' }],  // Iselin
+  '07067': [{ wippId: '1225', town: 'Woodbridge' }],  // Colonia
+  '08863': [{ wippId: '1225', town: 'Woodbridge' }],  // Fords
+  '07001': [{ wippId: '1225', town: 'Woodbridge' }],  // Avenel
+  '07064': [{ wippId: '1225', town: 'Woodbridge' }],  // Port Reading
+  '07077': [{ wippId: '1225', town: 'Woodbridge' }],  // Sewaren
+  '08832': [{ wippId: '1225', town: 'Woodbridge' }],  // Keasbey
+  // Pull only, no WIPP verify: 08857 Old Bridge (in-house SharePoint portal; 1215 empty
+  // on the Edmunds API). 08859 (Parlin) is shared Sayreville/Old Bridge — Sayreville side
+  // verifies, Old Bridge side won't match and falls through unverified.
 };
 
 export interface TaxRollRecord {
