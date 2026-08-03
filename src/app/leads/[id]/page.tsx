@@ -1271,7 +1271,7 @@ export default function LeadDetailPage() {
             <Grid container spacing={1.5}>
               <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                 <FeatureSelect label="Garage Type" value={extra.garageType ?? ''} onChange={(v) => setEx('garageType', v)}
-                  options={[['attached', 'Attached'], ['built_in', 'Built-in (living space above)'], ['detached', 'Detached'], ['carport', 'Carport'], ['none', 'None']]} />
+                  options={[['attached', 'Attached'], ['detached', 'Detached']]} />
               </Grid>
               <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                 <TextField label="# Garages" type="number" size="small" fullWidth value={extra.garageCount ?? ''}
