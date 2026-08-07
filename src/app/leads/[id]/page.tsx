@@ -623,7 +623,7 @@ export default function LeadDetailPage() {
   // a surname-only match usually means the roll lists a spouse or co-owner, which is
   // legitimate but worth a producer's glance rather than a silent pass.
   const ownerVerify = (() => {
-    const st = lead.ownerVerifyStatus as 'match' | 'partial' | 'mismatch' | 'unknown' | null;
+    const st = lead.ownerVerifyStatus as 'match' | 'partial' | 'mismatch' | 'unknown' | 'not_found' | null;
     if (!st) return null;
     const when = lead.ownerVerifyAt ? String(lead.ownerVerifyAt).slice(0, 10) : '';
     const src = lead.ownerVerifySource ? ` · ${String(lead.ownerVerifySource).replace(/_/g, ' ')}` : '';
@@ -632,6 +632,7 @@ export default function LeadDetailPage() {
       match: { icon: <VerifiedIcon sx={{ fontSize: 16 }} />, color: '#1565c0', label: 'Verified' },
       partial: { icon: <HelpOutlineIcon sx={{ fontSize: 16 }} />, color: '#8a5a00', label: 'Partial' },
       mismatch: { icon: <CancelIcon sx={{ fontSize: 16 }} />, color: '#b3261e', label: 'Name mismatch' },
+      not_found: { icon: <CancelIcon sx={{ fontSize: 16 }} />, color: '#b3261e', label: 'Not on tax roll' },
       unknown: { icon: <HelpOutlineIcon sx={{ fontSize: 16 }} />, color: '#6b7280', label: 'Unverified' },
     }[st];
     if (!cfg) return null;

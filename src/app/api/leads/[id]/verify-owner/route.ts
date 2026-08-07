@@ -53,12 +53,26 @@ export async function POST(
     });
 
     if (!result) {
-      // Property isn't on the roll (or the town returned nothing) — record nothing
-      // rather than storing a misleading "mismatch".
-      return NextResponse.json({
-        success: false,
-        error: `No matching property found on the ${townLabel} tax roll for "${l.addressStreet}".`,
-      }, { status: 404 });
+      // Property isn't on the roll. Frank Aug-2026: WIP verify is mandatory and a
+      // "not found" must be TRACKABLE for review — so we persist the outcome as
+      // 'not_found' (rather than storing nothing) and surface it in QC. It is never a
+      // 'mismatch' (that would wrongly imply a name disagreement).
+      const detail = `No matching property found on the ${townLabel} tax roll for "${l.addressStreet}".`;
+      await updateLead(id, {
+        ownerVerifyStatus: 'not_found',
+        ownerVerifySource: 'tax_roll',
+        ownerVerifyAt: new Date(),
+        ownerVerifyDetail: detail,
+      });
+      await addActivity(
+        l.id,
+        'owner_verify',
+        `Owner name not found on ${townLabel} tax roll`,
+        { status: 'not_found', source: 'tax_roll' },
+        payload?._createdBy,
+      );
+      const updated = await getLeadByPropertyId(id);
+      return NextResponse.json({ success: true, cached: false, result: { status: 'not_found', detail }, data: updated });
     }
 
     await updateLead(id, {

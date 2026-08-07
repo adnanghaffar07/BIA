@@ -11,10 +11,11 @@ import SwapVertIcon from '@mui/icons-material/SwapVert';
 import SearchIcon from '@mui/icons-material/Search';
 import RoofingIcon from '@mui/icons-material/Roofing';
 import ReportProblemIcon from '@mui/icons-material/ReportProblem';
+import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import DownloadIcon from '@mui/icons-material/Download';
 import Link from 'next/link';
 
-type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch';
+type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify';
 
 interface QcRow {
   propertyId: string; owner: string; city: string | null; zip: string | null;
@@ -29,6 +30,7 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
   { key: 'keyword', label: 'Keyword Search', icon: <SearchIcon />, blurb: 'Search producer + variance notes and eligibility reasons for a keyword to spot trends.' },
   { key: 'roof_b', label: 'Grade-B: Roof Only', icon: <RoofingIcon />, blurb: 'Grade-B leads whose only knock is an unconfirmed roof (20+ yr home).' },
   { key: 'type_mismatch', label: 'Type Mismatch', icon: <ReportProblemIcon />, blurb: 'Leads a producer flagged where the REAPI property type looks wrong (e.g. condo that’s really a home).' },
+  { key: 'owner_verify', label: 'WIP Verify Fails', icon: <PersonSearchIcon />, blurb: 'Leads that failed tax-roll verification — not found on the roll, or the insured name disagrees with it. Review before outreach.' },
 ];
 
 const gradeColor = (g: string | null) =>

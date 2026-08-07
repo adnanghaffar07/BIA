@@ -7,7 +7,7 @@ import { eligibilityReasonLabel } from '@/types/carrier';
  * let Frank/Ruben pull that data back out to spot trends without cross-referencing
  * the Travelers portal by hand.
  */
-export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch';
+export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify';
 
 export interface QcRow {
   propertyId: string;
@@ -169,6 +169,25 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     return rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => rowOf(r, `CRM type: ${r.propertyType ?? '—'} — flagged as likely wrong by producer`));
+  }
+
+  if (type === 'owner_verify') {
+    // WIP owner-name verification failures (Frank Aug-2026 — mandatory verify): the
+    // property wasn't found on the tax roll ('not_found'), or the insured name disagrees
+    // with it ('mismatch'). Both need a human's review before the lead goes to outreach.
+    rows = await sql`
+      SELECT * FROM "Lead"
+      WHERE "ownerVerifyStatus" IN ('not_found', 'mismatch')
+      ORDER BY "ownerVerifyAt" DESC NULLS LAST`;
+    return rows
+      .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
+      .map((r: any) => {
+        const label = r.ownerVerifyStatus === 'not_found' ? 'Not on tax roll' : 'Name mismatch';
+        const detail = r.ownerVerifyName
+          ? `${label} — roll shows "${r.ownerVerifyName}"`
+          : (r.ownerVerifyDetail || label);
+        return rowOf(r, detail, null, iso(r.ownerVerifyAt));
+      });
   }
 
   return [];
