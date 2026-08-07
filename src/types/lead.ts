@@ -131,6 +131,7 @@ export interface Lead {
   estimatedEquity?: number;
   suggestedRent?: string;
   openMortgageBalance?: number;
+  originalMortgageAmount?: number;   // original loan amount at closing (from PropertyDetail) — equity analysis
   lenderName?: string;
   mortgageType?: string;
 

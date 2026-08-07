@@ -904,6 +904,7 @@ export default function LeadDetailPage() {
               <Row label="Last Sale" value={fmtCurrency(lead.lastSaleAmount)} />
               <Row label="Last Sale Date" value={lead.lastSaleDate} />
               <Row label="Open Mortgage" value={fmtCurrency(lead.openMortgageBalance)} />
+              <Row label="Original Mortgage" value={fmtCurrency(lead.originalMortgageAmount)} />
               <Row label="Lender" value={lead.lenderName} />
               <Row label="Mortgage Type" value={lead.mortgageType} />
               <Row label="Est. Equity" value={fmtCurrency(lead.estimatedEquity)} />

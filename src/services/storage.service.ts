@@ -12,7 +12,7 @@ const LEAD_COLS = [
   'lotSquareFeet', 'bedrooms', 'bathrooms', 'stories', 'unitsCount', 'roomsCount',
   'garage', 'pool', 'deck', 'patio', 'basement', 'airConditioning',
   'estimatedValue', 'assessedValue', 'lastSaleAmount', 'lastSaleDate',
-  'estimatedEquity', 'openMortgageBalance', 'lenderName', 'mortgageType',
+  'estimatedEquity', 'openMortgageBalance', 'originalMortgageAmount', 'lenderName', 'mortgageType',
   'owner1LastName', 'owner1FirstName', 'companyName', 'ownerOccupied',
   'corporateOwned', 'absenteeOwner', 'investorBuyer',
   'vacant', 'preForeclosure', 'foreclosure', 'reo', 'highEquity',
@@ -98,6 +98,8 @@ const CRM_ONLY_FIELDS = new Set([
   'basementFinishedPct', 'bathroomGrade', 'kitchenCount', 'kitchenGrade', 'propertyTypeMismatch',
   // Producer-edit tracking — never set by bulk pulls
   'lastEditedAt', 'lastEditedBy',
+  // Original mortgage amount — comes from PropertyDetail, not the bulk pull; never clobber
+  'originalMortgageAmount',
 ]);
 
 // ─── Value helpers ───────────────────────────────────────────────────────────
@@ -516,6 +518,8 @@ export async function updateLead(
     propertyTypeMismatch: boolean;
     // Producer-edit tracking (Recently Edited tab)
     lastEditedAt: Date | string; lastEditedBy: string;
+    // Original mortgage amount at closing (PropertyDetail) — equity analysis
+    originalMortgageAmount: number;
   }>,
 ): Promise<void> {
   const entries = Object.entries(data).filter(([, v]) => v !== undefined);
