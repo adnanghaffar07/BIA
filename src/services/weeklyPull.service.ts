@@ -1,12 +1,20 @@
 import { API_CONFIG, REAPI_BASE_FILTERS, REAPI_TARGET_ZIPS } from '@/lib/constants';
-import { pool } from '@/lib/neon';
+import sql, { pool } from '@/lib/neon';
 import {
   computePullWindows,
   RENEWAL_PULL_LEAD_DAYS,
   PullWindow,
 } from './pipeline.service';
-import { upsertLeads, getExistingPropertyIds } from './storage.service';
+import { upsertLeads, getExistingPropertyIds, updateLead } from './storage.service';
 import { enrichLeadBatch } from './enrichment.service';
+import { fetchPropertyDetailPatch } from './propertyDetail.service';
+
+// Frank Aug-2026: after the weekly pull grades leads, run the granular REAPI
+// PropertyDetail call on every NEW Grade-A SINGLE-FAMILY lead (condos excluded) to
+// fill bath split, garage type/count, basement finish %, and the original mortgage
+// amount. Costs 1 credit per lead. Flip to false to disable the whole step.
+const ENRICH_GRADE_A_WITH_DETAIL = true;
+const DETAIL_GAP_MS = 300; // small courtesy gap between PropertyDetail calls
 
 /**
  * Weekly REAPI pull (Frank Jun-2026) — credit-efficient, de-duplicated.
@@ -155,9 +163,35 @@ export interface WeeklyPullResult {
   totals: {
     matched: number;
     alreadyHave: number;
-    creditsSpent: number; // == sum(newPulled)
+    creditsSpent: number; // full-data pulls (newPulled) + PropertyDetail credits
     dated: number;
+    detailPulled: number;  // new Grade-A SFR leads enriched via PropertyDetail
+    detailCredits: number; // credits spent on PropertyDetail (1 per lead)
   };
+}
+
+/**
+ * Granular PropertyDetail enrichment for the just-pulled NEW Grade-A single-family
+ * leads (Frank Aug-2026). One REAPI credit per lead, serial + lightly throttled. These
+ * are brand-new leads (never in the DB before this run), so writing PropertyDetail's
+ * fields can't clobber any producer entry. Returns attempts (== credits) + writes.
+ */
+async function enrichGradeAWithDetail(newIds: string[]): Promise<{ attempted: number; detailed: number }> {
+  if (!ENRICH_GRADE_A_WITH_DETAIL || !newIds.length) return { attempted: 0, detailed: 0 };
+  // Only NEW Grade-A SINGLE-FAMILY (SFR) leads — condos are excluded (Frank: granular
+  // data isn't needed for condos, which are the bulk of Grade A).
+  const rows = (await sql`
+    SELECT "propertyId" FROM "Lead"
+    WHERE "propertyId" = ANY(${newIds}) AND "grade" = 'A' AND "propertyType" = 'SFR'
+  `) as { propertyId: string }[];
+
+  let detailed = 0;
+  for (const { propertyId } of rows) {
+    const patch = await fetchPropertyDetailPatch(propertyId); // 1 credit each
+    if (patch) { await updateLead(propertyId, patch); detailed++; }
+    await new Promise((r) => setTimeout(r, DETAIL_GAP_MS));
+  }
+  return { attempted: rows.length, detailed };
 }
 
 export async function runWeeklyPull(opts?: {
@@ -173,6 +207,7 @@ export async function runWeeklyPull(opts?: {
 
   const windows = computePullWindows(runDate);
   const reports: WindowReport[] = [];
+  const allNewIds = new Set<string>(); // distinct brand-new leads across all windows
 
   for (const w of windows) {
     const ids = await scanWindowIds(w); // FREE
@@ -189,6 +224,7 @@ export async function runWeeklyPull(opts?: {
         await upsertLeads(props);
         await enrichLeadBatch(props);
         newPulled = props.length;
+        newIds.forEach((id) => allNewIds.add(id));
       }
       // Stamp window effective/x-date on everything matched (new + already-stored). FREE.
       dated = await applyWindowDates(ids, w);
@@ -208,6 +244,10 @@ export async function runWeeklyPull(opts?: {
     });
   }
 
+  // Granular PropertyDetail on the new Grade-A single-family leads (Frank Aug-2026).
+  // Runs after all windows so a lead pulled in multiple windows is detailed once.
+  const detail = dryRun ? { attempted: 0, detailed: 0 } : await enrichGradeAWithDetail([...allNewIds]);
+
   return {
     dryRun,
     runDate: runDate.toISOString().slice(0, 10),
@@ -215,8 +255,10 @@ export async function runWeeklyPull(opts?: {
     totals: {
       matched: reports.reduce((s, r) => s + r.matched, 0),
       alreadyHave: reports.reduce((s, r) => s + r.alreadyHave, 0),
-      creditsSpent: reports.reduce((s, r) => s + r.newPulled, 0),
+      creditsSpent: reports.reduce((s, r) => s + r.newPulled, 0) + detail.attempted,
       dated: reports.reduce((s, r) => s + r.dated, 0),
+      detailPulled: detail.detailed,   // Grade-A SFR leads enriched via PropertyDetail
+      detailCredits: detail.attempted, // credits spent on PropertyDetail (1 per lead)
     },
   };
 }

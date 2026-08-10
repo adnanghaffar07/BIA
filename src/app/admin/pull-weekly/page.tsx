@@ -25,7 +25,7 @@ interface PullResult {
   dryRun: boolean;
   runDate: string;
   windows: WindowRow[];
-  totals: { matched: number; alreadyHave: number; creditsSpent: number; dated: number };
+  totals: { matched: number; alreadyHave: number; creditsSpent: number; dated: number; detailPulled?: number; detailCredits?: number };
 }
 
 export default function WeeklyPullPage() {
@@ -184,7 +184,13 @@ export default function WeeklyPullPage() {
             <Chip label={`Credits spent: ${runResult.totals.creditsSpent}`} size="small" color="primary" />
             <Chip label={`Reused free: ${runResult.totals.alreadyHave}`} size="small" color="success" variant="outlined" />
             <Chip label={`Dated: ${runResult.totals.dated}`} size="small" />
+            {!!runResult.totals.detailCredits && (
+              <Chip label={`Grade-A detail: ${runResult.totals.detailPulled} leads (${runResult.totals.detailCredits} credits)`} size="small" color="secondary" />
+            )}
           </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+            Includes the granular PropertyDetail pull on new Grade-A single-family leads.
+          </Typography>
         </Alert>
       )}
 
