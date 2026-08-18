@@ -832,8 +832,8 @@ export default function LeadDetailPage() {
                   {verifyingOwner ? 'Checking…' : lead.ownerVerifyStatus ? 'Re-check owner name' : 'Verify owner name'}
                 </Button>
               )}
-              {(lead.reapiDob || lead.owner1Dob) && (
-                <Row label="REAPI DOB" value={dobDisplay(lead.reapiDob || lead.owner1Dob)} />
+              {lead.reapiDob && (
+                <Row label="REAPI DOB" value={dobDisplay(lead.reapiDob)} />
               )}
               {coInsuredName && <Row label="Co-Insured" value={coInsuredName} />}
               {rollSecondInsured && (
