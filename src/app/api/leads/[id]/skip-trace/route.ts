@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLeadByPropertyId, updateLead, addActivity } from '@/services/storage.service';
 import { canRunSkipTrace } from '@/services/grade.service';
-import { runSkipTrace, insuredPatchFromPersons } from '@/services/skipTrace.service';
+import { runTracerfy } from '@/services/tracerfy.service';
 
 /**
  * POST /api/leads/[id]/skip-trace
  *
- * Runs a REAPI skip trace for one lead (consumes credits). Gated by
+ * Runs a Tracerfy skip trace for one lead (5 credits per hit). Frank Aug-2026:
+ * Tracerfy REPLACED the REAPI skip trace, whose data was corrupt. Gated by
  * canRunSkipTrace(): only carrier-qualified leads that haven't already been
  * traced. Found phone/email fill the empty contact slots without clobbering
  * any producer-entered values, then flags skipTraced + logs an activity.
@@ -38,13 +39,14 @@ export async function POST(
     try { payload = await request.json(); } catch { /* body optional */ }
     const createdBy = payload?._createdBy;
 
-    const result = await runSkipTrace(lead as any);
+    const result = await runTracerfy(lead as any);
 
     const now = new Date();
     const update: Record<string, any> = {
       skipTraced: true,
       skipTracedAt: now,
-      // Persist the entire REAPI response so the page can surface every field.
+      // Persist the entire Tracerfy response so the page can surface every field
+      // (DNC / TCPA / carrier / rank on each number).
       skipTraceData: result.raw ?? null,
     };
     // Fill empty slots only — never overwrite producer-entered contact info.
@@ -53,9 +55,9 @@ export async function POST(
     if (result.emails[0] && !(lead as any).email1) update.email1 = result.emails[0];
     if (result.emails[1] && !(lead as any).email2) update.email2 = result.emails[1];
 
-    // Pull through the co-insured ("people on loan") + DOB into Insured Info.
-    const persons = Array.isArray((result.raw as any)?.persons) ? (result.raw as any).persons : [];
-    const insuredPatch = insuredPatchFromPersons(persons, lead);
+    // Co-insured ("people on loan") + DOB into Insured Info — computed in the service.
+    const insuredPatch = result.insuredPatch ?? {};
+    const personCount = result.personCount;
     Object.assign(update, insuredPatch);
 
     await updateLead(id, update);
@@ -65,10 +67,10 @@ export async function POST(
       'skip_trace',
       result.matched
         ? `Skip trace: ${result.phones.length} phone(s), ${result.emails.length} email(s)`
-          + `${persons.length ? `, ${persons.length} person(s) on loan` : ''}`
+          + `${personCount ? `, ${personCount} person(s) on loan` : ''}`
           + `${coInsuredName ? `, co-insured ${coInsuredName}` : ''}`
         : 'Skip trace: no match found',
-      { phones: result.phones, emails: result.emails, persons: persons.length, insuredPatch },
+      { phones: result.phones, emails: result.emails, persons: personCount, insuredPatch },
       createdBy,
     );
 

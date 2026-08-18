@@ -29,7 +29,7 @@ const PHONE_TYPE: Record<string, string> = {
 function fmtAddress(a: any): string {
   if (!a || typeof a !== 'object') return '';
   if (a.address) return a.address;
-  return [a.streetAddress, a.city, a.state, a.zip].filter(Boolean).join(', ');
+  return [a.streetAddress ?? a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
 }
 
 /** camelCase / snake_case key → "Title Case" label. */
@@ -44,9 +44,12 @@ function humanize(k: string): string {
 // Person fields rendered explicitly elsewhere (name, formatted contacts/addresses,
 // and the header chips) — excluded from the generic "all other fields" grid.
 const HANDLED_KEYS = new Set([
+  // REAPI shape
   'phones', 'emails', 'address', 'previousAddress',
   'fullName', 'firstName', 'middleName', 'lastName',
   'age', 'gender', 'occupationDescription', 'maritalStatusDescription',
+  // Tracerfy shape (snake_case) — rendered explicitly, kept out of the generic grid
+  'full_name', 'first_name', 'last_name', 'mailing_address',
 ]);
 
 export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipTraceDialogProps) {
@@ -70,7 +73,9 @@ export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipT
         ) : (
           <Stack spacing={2}>
             {persons.map((p, i) => {
-              const name = p.fullName || [p.firstName, p.middleName, p.lastName].filter(Boolean).join(' ') || 'Unknown';
+              const name = p.full_name || p.fullName
+                || [p.first_name ?? p.firstName, p.middleName, p.last_name ?? p.lastName].filter(Boolean).join(' ')
+                || 'Unknown';
               const phones: any[] = Array.isArray(p.phones) ? p.phones : [];
               const emails: any[] = Array.isArray(p.emails) ? p.emails : [];
               // Every remaining scalar field, so nothing from the API is hidden.
@@ -95,22 +100,27 @@ export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipT
                   {/* Phones */}
                   {phones.length > 0 && (
                     <Stack spacing={0.75} sx={{ mb: emails.length ? 1.5 : 0 }}>
-                      {phones.map((ph, j) => (
-                        <Stack key={j} direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                          <PhoneIcon fontSize="small" color="action" />
-                          <Link href={`tel:${String(ph.phone ?? '').replace(/\D/g, '')}`} sx={{ fontWeight: 600 }}>
-                            {fmtPhone(ph.phone)}
-                          </Link>
-                          {ph.phoneType && <Chip size="small" variant="outlined" label={PHONE_TYPE[ph.phoneType] ?? ph.phoneType} />}
-                          {ph.phoneFtcDnc && <Chip size="small" color="error" label="DNC" title="On the FTC Do-Not-Call registry" />}
-                          {ph.phoneLastSeen && (
-                            <Typography variant="caption" color="text.secondary">last seen {ph.phoneLastSeen}</Typography>
-                          )}
-                          {ph.phoneUsage12Month != null && ph.phoneUsage12Month !== '' && (
-                            <Typography variant="caption" color="text.secondary">· usage 12mo: {String(ph.phoneUsage12Month)}</Typography>
-                          )}
-                        </Stack>
-                      ))}
+                      {phones.map((ph, j) => {
+                        const num = ph.number ?? ph.phone;                       // Tracerfy | REAPI
+                        const type = ph.type ?? (ph.phoneType ? (PHONE_TYPE[ph.phoneType] ?? ph.phoneType) : undefined);
+                        const dnc = ph.dnc ?? ph.phoneFtcDnc;
+                        return (
+                          <Stack key={j} direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                            <PhoneIcon fontSize="small" color="action" />
+                            <Link href={`tel:${String(num ?? '').replace(/\D/g, '')}`} sx={{ fontWeight: 600 }}>
+                              {fmtPhone(num)}
+                            </Link>
+                            {type && <Chip size="small" variant="outlined" label={type} />}
+                            {ph.carrier && <Chip size="small" variant="outlined" label={ph.carrier} />}
+                            {dnc && <Chip size="small" color="error" label="DNC" title="On the Do-Not-Call registry" />}
+                            {ph.tcpa && <Chip size="small" color="warning" label="TCPA" title="TCPA-flagged (litigation risk)" />}
+                            {ph.rank && <Typography variant="caption" color="text.secondary">rank {ph.rank}</Typography>}
+                            {ph.phoneLastSeen && (
+                              <Typography variant="caption" color="text.secondary">last seen {ph.phoneLastSeen}</Typography>
+                            )}
+                          </Stack>
+                        );
+                      })}
                     </Stack>
                   )}
 
@@ -130,9 +140,9 @@ export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipT
                   )}
 
                   {/* Addresses */}
-                  {fmtAddress(p.address) && (
+                  {fmtAddress(p.address ?? p.mailing_address) && (
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                      Address: {fmtAddress(p.address)}
+                      Address: {fmtAddress(p.address ?? p.mailing_address)}
                     </Typography>
                   )}
                   {fmtAddress(p.previousAddress) && (
@@ -172,7 +182,7 @@ export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipT
         )}
 
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
-          Source: REAPI Skip Trace{tracedAt ? ` · ${new Date(tracedAt).toLocaleString()}` : ''}. Verify DNC status before calling.
+          Source: Tracerfy Skip Trace{tracedAt ? ` · ${new Date(tracedAt).toLocaleString()}` : ''}. Verify DNC status before calling.
         </Typography>
       </DialogContent>
     </Dialog>
