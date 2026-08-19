@@ -43,7 +43,7 @@ const LEAD_COLS = [
   'revisitFlag', 'revisitDate', 'revisitNote',
   'competitorCarrier', 'competitorPremium',
   // Frank Jun-2026: dual insureds + DOB, confirm-on-call, home features
-  'owner2FirstName', 'owner2LastName', 'maritalStatus', 'owner1Dob', 'owner2Dob',
+  'owner2FirstName', 'owner2LastName', 'owner2Phone', 'owner2Email', 'maritalStatus', 'owner1Dob', 'owner2Dob',
   // Skip-trace REAPI DOB (age-derived, name-matched to the insured)
   'reapiDob', 'reapiAge',
   'dogBreed', 'insuranceHistory', 'heatingRenovatedYear', 'bathroomsFull', 'bathroomsHalf',
@@ -86,7 +86,7 @@ const CRM_ONLY_FIELDS = new Set([
   'floodZone', 'floodZoneType', 'floodZoneSubtype', 'floodSfha', 'floodZoneManual', 'floodCheckedAt',
   // Frank Jun-2026: producer/skip-trace-entered — never clobber on REAPI re-ingest
   'skipTraceData',
-  'owner2FirstName', 'owner2LastName', 'maritalStatus', 'owner1Dob', 'owner2Dob',
+  'owner2FirstName', 'owner2LastName', 'owner2Phone', 'owner2Email', 'maritalStatus', 'owner1Dob', 'owner2Dob',
   'reapiDob', 'reapiAge',
   'dogBreed', 'insuranceHistory', 'heatingRenovatedYear', 'bathroomsFull', 'bathroomsHalf',
   'garageType', 'garageCount', 'sidingType', 'foundationType', 'heatSource', 'feetFromHydrant',
@@ -498,7 +498,7 @@ export async function updateLead(
     revisitFlag: boolean; revisitDate: Date; revisitNote: string;
     competitorCarrier: string; competitorPremium: number;
     // Frank Jun-2026: dual insureds + DOB, confirm-on-call, home features
-    owner2FirstName: string; owner2LastName: string; maritalStatus: string;
+    owner2FirstName: string; owner2LastName: string; owner2Phone: string; owner2Email: string; maritalStatus: string;
     owner1Dob: string; owner2Dob: string;
     reapiDob: string; reapiAge: number;
     dogBreed: string; insuranceHistory: string; heatingRenovatedYear: number;

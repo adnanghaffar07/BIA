@@ -250,6 +250,8 @@ export default function LeadDetailPage() {
       setExtra({
         owner2FirstName: l.owner2FirstName ?? '',
         owner2LastName: l.owner2LastName ?? '',
+        owner2Phone: l.owner2Phone ?? '',
+        owner2Email: l.owner2Email ?? '',
         maritalStatus: l.maritalStatus ?? '',
         owner1Dob: l.owner1Dob ? String(l.owner1Dob).slice(0, 10) : '',
         owner2Dob: l.owner2Dob ? String(l.owner2Dob).slice(0, 10) : '',
@@ -384,6 +386,8 @@ export default function LeadDetailPage() {
       // Frank Jun-2026: dual insureds / DOB / confirm-on-call / home features
       owner2FirstName: extra.owner2FirstName || undefined,
       owner2LastName: extra.owner2LastName || undefined,
+      owner2Phone: extra.owner2Phone || undefined,
+      owner2Email: extra.owner2Email || undefined,
       maritalStatus: extra.maritalStatus || undefined,
       owner1Dob: extra.owner1Dob || undefined,
       owner2Dob: extra.owner2Dob || undefined,
@@ -854,6 +858,8 @@ export default function LeadDetailPage() {
               {lead.owner2Dob && (
                 <Row label="Co-Insured DOB" value={dobDisplay(lead.owner2Dob)} />
               )}
+              {lead.owner2Phone && <Row label="Co-Insured Phone" value={lead.owner2Phone} />}
+              {lead.owner2Email && <Row label="Co-Insured Email" value={lead.owner2Email} />}
               <Row label="Owner Occupied" value={lead.ownerOccupied ? 'Yes' : 'No'} />
               <Row label="Absentee Owner" value={lead.absenteeOwner ? 'Yes' : 'No'} />
               {mailAddress && (
@@ -1026,6 +1032,8 @@ export default function LeadDetailPage() {
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1, mb: 1 }}>
               <TextField label="Co-Insured First" size="small" fullWidth value={extra.owner2FirstName ?? ''} onChange={(e) => setEx('owner2FirstName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="spouse / co-borrower" />
               <TextField label="Co-Insured Last" size="small" fullWidth value={extra.owner2LastName ?? ''} onChange={(e) => setEx('owner2LastName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+              <TextField label="Co-Insured Phone" size="small" fullWidth value={extra.owner2Phone ?? ''} onChange={(e) => setEx('owner2Phone', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="spouse — skip trace" />
+              <TextField label="Co-Insured Email" size="small" fullWidth value={extra.owner2Email ?? ''} onChange={(e) => setEx('owner2Email', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
             </Stack>
             <Box sx={{ mb: 1.7 }}>
               <FeatureSelect label="Married / Single" value={extra.maritalStatus ?? ''} onChange={(v) => setEx('maritalStatus', v)}

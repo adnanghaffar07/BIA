@@ -257,6 +257,8 @@ export interface Lead {
   // Both named insureds — husband + wife are almost always both on the HO policy
   owner2FirstName?: string;
   owner2LastName?: string;
+  owner2Phone?: string;   // co-insured (spouse) contact — from Tracerfy, for 2x outreach
+  owner2Email?: string;
   maritalStatus?: 'married' | 'single' | 'unknown';
   owner1Dob?: string;            // ISO date — drives the insurance score (Travelers requires it)
   owner2Dob?: string;

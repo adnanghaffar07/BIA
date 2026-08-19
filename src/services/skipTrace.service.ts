@@ -120,6 +120,11 @@ export function insuredPatchFromPersons(persons: any[], lead: any): Record<strin
   if (coInsured) {
     if (!lead.owner2FirstName && coInsured.firstName) patch.owner2FirstName = coInsured.firstName;
     if (!lead.owner2LastName && coInsured.lastName) patch.owner2LastName = coInsured.lastName;
+    // Co-insured's OWN contact info (Frank Oct-2026) — so the spouse gets their own
+    // phone/email slots instead of being crowded out by the insured's numbers.
+    const cc = personContacts(coInsured);
+    if (!lead.owner2Phone && cc.phones[0]) patch.owner2Phone = cc.phones[0];
+    if (!lead.owner2Email && cc.emails[0]) patch.owner2Email = cc.emails[0];
   }
   // Pre-fill the editable DOB fields (empty slots only); reapiDob above stays source-of-truth.
   if (!lead.owner1Dob && primary?.age) { const d = estDob(primary.age); if (d) patch.owner1Dob = d; }

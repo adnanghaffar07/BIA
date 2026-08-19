@@ -221,11 +221,30 @@ function LeadRow({ lead }: { lead: any }) {
           <Typography variant="body2" sx={{ fontWeight: 500 }}>{getOwnerDisplayName(lead)}</Typography>
         </TableCell>
 
-        {/* Address */}
+        {/* Address + property type (SFH / Condo) — Frank Oct-2026: visible on the row ribbon */}
         <TableCell>
-          <Stack spacing={0}>
+          <Stack spacing={0.25}>
             <Typography variant="body2" sx={{ fontWeight: 500 }}>{addr.street}</Typography>
-            <Typography variant="caption" color="textSecondary">{addr.zip}</Typography>
+            <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+              <Typography variant="caption" color="textSecondary">{addr.zip}</Typography>
+              {(() => {
+                const t = String(lead.propertyType ?? '').toUpperCase();
+                const isCondo = t === 'CONDO' || /condo/i.test(lead.landUse ?? '');
+                const label = isCondo ? 'Condo' : t === 'SFR' ? 'SFH' : (lead.propertyType || '—');
+                return (
+                  <Chip
+                    label={label}
+                    size="small"
+                    sx={{
+                      height: 17, fontSize: 10, fontWeight: 700, letterSpacing: '0.02em',
+                      color: isCondo ? '#5b21b6' : '#166534',
+                      bgcolor: isCondo ? '#ede9fe' : '#dcfce7',
+                      border: `1px solid ${isCondo ? '#c4b5fd' : '#86efac'}`,
+                    }}
+                  />
+                );
+              })()}
+            </Stack>
           </Stack>
         </TableCell>
 
