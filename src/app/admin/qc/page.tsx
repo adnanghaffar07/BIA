@@ -12,16 +12,18 @@ import SearchIcon from '@mui/icons-material/Search';
 import RoofingIcon from '@mui/icons-material/Roofing';
 import ReportProblemIcon from '@mui/icons-material/ReportProblem';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
+import ContactPhoneIcon from '@mui/icons-material/ContactPhone';
 import DownloadIcon from '@mui/icons-material/Download';
 import Link from 'next/link';
 
-type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify';
+type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage';
 
 interface QcRow {
   propertyId: string; owner: string; city: string | null; zip: string | null;
   effectiveDate: string | null; grade: string | null; manualGrade: string | null;
   propertyType: string | null; travelersEligible: string | null; plymouthEligible: string | null;
   reason: string | null; context: string; by: string | null; at: string | null;
+  hasPhone?: boolean; hasEmail?: boolean; hasDob?: boolean; isCondo?: boolean;
 }
 
 const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: string }[] = [
@@ -31,6 +33,7 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
   { key: 'roof_b', label: 'Grade-B: Roof Only', icon: <RoofingIcon />, blurb: 'Grade-B leads whose only knock is an unconfirmed roof (20+ yr home).' },
   { key: 'type_mismatch', label: 'Type Mismatch', icon: <ReportProblemIcon />, blurb: 'Leads a producer flagged where the REAPI property type looks wrong (e.g. condo that’s really a home).' },
   { key: 'owner_verify', label: 'WIP Verify Fails', icon: <PersonSearchIcon />, blurb: 'Leads that failed tax-roll verification — not found on the roll, or the insured name disagrees with it. Review before outreach.' },
+  { key: 'contact_coverage', label: 'Contact Coverage', icon: <ContactPhoneIcon />, blurb: 'Rated accounts by property type (Condo/SFH) and contact status (phone-only / email-only / both / neither) + DOB. The no-email rows drive the downgrade decision.' },
 ];
 
 const gradeColor = (g: string | null) =>
@@ -92,6 +95,24 @@ export default function QcReportsPage() {
   };
 
   const active = REPORTS.find((r) => r.key === report)!;
+
+  // Contact-coverage tallies (Frank's breakdown) — computed from the returned rows.
+  const coverage = report === 'contact_coverage' && rows.length ? (() => {
+    const t = {
+      total: rows.length, sfh: 0, condo: 0,
+      both: 0, phoneOnly: 0, emailOnly: 0, neither: 0, noEmail: 0, hasDob: 0,
+    };
+    for (const r of rows) {
+      if (r.isCondo) t.condo++; else t.sfh++;
+      if (r.hasPhone && r.hasEmail) t.both++;
+      else if (r.hasPhone) t.phoneOnly++;
+      else if (r.hasEmail) t.emailOnly++;
+      else t.neither++;
+      if (!r.hasEmail) t.noEmail++;
+      if (r.hasDob) t.hasDob++;
+    }
+    return t;
+  })() : null;
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
@@ -160,6 +181,26 @@ export default function QcReportsPage() {
       </Paper>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+      {coverage && (
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+            Rated accounts — contact coverage ({coverage.total})
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+            <Chip label={`SFH: ${coverage.sfh}`} size="small" sx={{ bgcolor: '#dcfce7', color: '#166534', fontWeight: 700 }} />
+            <Chip label={`Condo: ${coverage.condo}`} size="small" sx={{ bgcolor: '#ede9fe', color: '#5b21b6', fontWeight: 700 }} />
+            <Box sx={{ width: 1, alignSelf: 'stretch', borderLeft: '1px solid', borderColor: 'divider', mx: 0.5 }} />
+            <Chip label={`Phone + Email: ${coverage.both}`} size="small" color="success" />
+            <Chip label={`Phone only: ${coverage.phoneOnly}`} size="small" sx={{ bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 }} />
+            <Chip label={`Email only: ${coverage.emailOnly}`} size="small" sx={{ bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 }} />
+            <Chip label={`Neither: ${coverage.neither}`} size="small" color="error" />
+            <Box sx={{ width: 1, alignSelf: 'stretch', borderLeft: '1px solid', borderColor: 'divider', mx: 0.5 }} />
+            <Chip label={`No email (downgrade review): ${coverage.noEmail}`} size="small" color="error" variant="outlined" />
+            <Chip label={`Has DOB: ${coverage.hasDob}`} size="small" variant="outlined" />
+          </Stack>
+        </Paper>
+      )}
 
       <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
         {loading ? <CircularProgress size={18} /> : <Typography variant="body2" color="text.secondary"><strong>{rows.length}</strong> record{rows.length === 1 ? '' : 's'}</Typography>}

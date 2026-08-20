@@ -156,6 +156,27 @@ export const REAPI_TARGET_ZIPS = [
   '08863', '08872', '08879', '08882', '08884', '08901', '08902', '08904',
 ];
 
+// County of each target ZIP (Frank Aug-2026: filter Monmouth vs Middlesex so the new
+// county can be scrutinized independently as it rolls out). Lakewood 08701 is Ocean.
+export const MIDDLESEX_ZIPS = new Set([
+  '07001', '07008', '07064', '07067', '07077', '07080', '07095',
+  '08512', '08536', '08810', '08812', '08816', '08817', '08820',
+  '08824', '08828', '08830', '08831', '08832', '08837', '08840',
+  '08846', '08850', '08852', '08854', '08857', '08859', '08861',
+  '08863', '08872', '08879', '08882', '08884', '08901', '08902', '08904',
+]);
+export const MONMOUTH_ZIPS = new Set([
+  '07722', '07724', '07726', '07728', '07730', '07731', '07733', '07746', '07748',
+]);
+export type LeadCounty = 'Monmouth' | 'Middlesex' | 'Ocean' | '';
+export function countyForZip(zip?: string | null): LeadCounty {
+  const z = String(zip ?? '').trim();
+  if (MIDDLESEX_ZIPS.has(z)) return 'Middlesex';
+  if (MONMOUTH_ZIPS.has(z)) return 'Monmouth';
+  if (z === '08701') return 'Ocean'; // Lakewood
+  return '';
+}
+
 export const REAPI_BASE_FILTERS = {
   state: 'NJ',
   flood_zone: false,

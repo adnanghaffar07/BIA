@@ -20,6 +20,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { useRouter } from 'next/navigation';
 import { Lead } from '@/types/lead';
 import { LeadGrade } from '@/types/grade';
+import { countyForZip } from '@/lib/constants';
 import { formatCurrency } from '@/utils/formatAddress';
 import { exportLeadsToCSV } from '@/utils/csvExport';
 import PropertyDetailsContent from '@/components/PropertyDetailsContent';
@@ -377,6 +378,7 @@ export default function LeadsTable({
   const [search, setSearch]         = useState('');
   const [filterZip, setFilterZip]   = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterCounty, setFilterCounty] = useState(''); // Monmouth | Middlesex | Ocean (Frank Aug-2026)
 
   // Derive unique ZIPs from current leads for the ZIP dropdown
   const availableZips = useMemo(() => {
@@ -398,16 +400,18 @@ export default function LeadsTable({
 
       if (q && !street.includes(q) && !owner.includes(q) && !zip.includes(q)) return false;
       if (filterZip && zip !== filterZip) return false;
+      if (filterCounty && countyForZip(zip) !== filterCounty) return false;
       if (filterStatus && (l.status ?? 'new') !== filterStatus) return false;
       return true;
     });
-  }, [leads, search, filterZip, filterStatus]);
+  }, [leads, search, filterZip, filterCounty, filterStatus]);
 
-  const hasFilters = search || filterZip || filterStatus;
+  const hasFilters = search || filterZip || filterCounty || filterStatus;
 
   const clearFilters = () => {
     setSearch('');
     setFilterZip('');
+    setFilterCounty('');
     setFilterStatus('');
   };
 
@@ -417,7 +421,7 @@ export default function LeadsTable({
   const maxPage = useMemo(() => Math.max(0, Math.ceil(totalRows / effRpp) - 1), [totalRows, effRpp]);
   const safePage = Math.min(page, maxPage);
 
-  useEffect(() => { setPage(0); }, [leads, search, filterZip, filterStatus]);
+  useEffect(() => { setPage(0); }, [leads, search, filterZip, filterCounty, filterStatus]);
   useEffect(() => { if (page > maxPage) setPage(maxPage); }, [page, maxPage]);
   // Tab change → reset to page 1 @ 25/page (Frank Jun-2026)
   useEffect(() => { setPage(0); setRowsPerPage(25); }, [resetKey]);
@@ -471,6 +475,15 @@ export default function LeadsTable({
               },
             }}
           />
+          <FormControl size="small" sx={{ minWidth: 140 }}>
+            <InputLabel>County</InputLabel>
+            <Select value={filterCounty} label="County" onChange={(e) => setFilterCounty(e.target.value)}>
+              <MenuItem value="">All Counties</MenuItem>
+              <MenuItem value="Monmouth">Monmouth</MenuItem>
+              <MenuItem value="Middlesex">Middlesex</MenuItem>
+              <MenuItem value="Ocean">Ocean</MenuItem>
+            </Select>
+          </FormControl>
           <FormControl size="small" sx={{ minWidth: 130 }}>
             <InputLabel>ZIP</InputLabel>
             <Select value={filterZip} label="ZIP" onChange={(e) => setFilterZip(e.target.value)}>

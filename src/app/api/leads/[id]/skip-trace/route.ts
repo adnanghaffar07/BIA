@@ -23,7 +23,20 @@ export async function POST(
       return NextResponse.json({ success: false, error: 'Lead not found' }, { status: 404 });
     }
 
-    if (!canRunSkipTrace(lead as any)) {
+    // ?deep=1 → Tracerfy advanced tier to recover a missing phone/email. A deep trace is
+    // a RE-trace, so it's allowed on an already-traced lead (unlike the normal one).
+    const deep = request.nextUrl.searchParams.get('deep') === '1';
+    const grade = String((lead as any).manualGrade || (lead as any).grade || '');
+    const gradeOk = ['A', 'B', 'C'].includes(grade);
+
+    if (deep) {
+      if (!gradeOk) {
+        return NextResponse.json(
+          { success: false, error: 'Deep skip trace is available on Grade A, B, or C leads.' },
+          { status: 400 },
+        );
+      }
+    } else if (!canRunSkipTrace(lead as any)) {
       return NextResponse.json(
         {
           success: false,
@@ -39,7 +52,7 @@ export async function POST(
     try { payload = await request.json(); } catch { /* body optional */ }
     const createdBy = payload?._createdBy;
 
-    const result = await runTracerfy(lead as any);
+    const result = await runTracerfy(lead as any, { deep });
 
     const now = new Date();
     const update: Record<string, any> = {
@@ -66,10 +79,10 @@ export async function POST(
       (lead as any).id,
       'skip_trace',
       result.matched
-        ? `Skip trace: ${result.phones.length} phone(s), ${result.emails.length} email(s)`
+        ? `${deep ? 'Deep skip trace' : 'Skip trace'}: ${result.phones.length} phone(s), ${result.emails.length} email(s)`
           + `${personCount ? `, ${personCount} person(s) on loan` : ''}`
           + `${coInsuredName ? `, co-insured ${coInsuredName}` : ''}`
-        : 'Skip trace: no match found',
+        : `${deep ? 'Deep skip trace' : 'Skip trace'}: no match found`,
       { phones: result.phones, emails: result.emails, persons: personCount, insuredPatch },
       createdBy,
     );

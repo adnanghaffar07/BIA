@@ -7,7 +7,7 @@ import { eligibilityReasonLabel } from '@/types/carrier';
  * let Frank/Ruben pull that data back out to spot trends without cross-referencing
  * the Travelers portal by hand.
  */
-export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify';
+export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage';
 
 export interface QcRow {
   propertyId: string;
@@ -25,6 +25,11 @@ export interface QcRow {
   context: string;        // the matching comment / detail / grade transition
   by: string | null;
   at: string | null;
+  // Contact-coverage report only — lets the UI tally the breakdown.
+  hasPhone?: boolean;
+  hasEmail?: boolean;
+  hasDob?: boolean;
+  isCondo?: boolean;
 }
 
 export interface QcReportParams {
@@ -169,6 +174,29 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     return rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => rowOf(r, `CRM type: ${r.propertyType ?? '—'} — flagged as likely wrong by producer`));
+  }
+
+  if (type === 'contact_coverage') {
+    // Frank Aug-2026: rated accounts broken down by property type (Condo/SFH) and
+    // contact status (phone-only / email-only / both / neither) + DOB. The UI tallies
+    // the summary from these rows; the no-email subset drives the downgrade decision.
+    // `value` reuses the status field: 'review' default = rated; pass a status via ?value.
+    rows = await sql`SELECT * FROM "Lead" WHERE "status" = 'rated' ORDER BY "effectiveDate"`;
+    return rows
+      .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
+      .map((r: any) => {
+        const hasPhone = !!(String(r.phone1 ?? '').trim() || String(r.phone2 ?? '').trim());
+        const hasEmail = !!(String(r.email1 ?? '').trim() || String(r.email2 ?? '').trim());
+        const hasDob = !!(r.reapiDob || r.owner1Dob);
+        const isCondo = String(r.propertyType ?? '').toUpperCase() === 'CONDO'
+          || /condo/i.test(r.landUse ?? '');
+        const contact = hasPhone && hasEmail ? 'Phone + Email'
+          : hasPhone ? 'Phone only'
+          : hasEmail ? 'Email only'
+          : 'No phone or email';
+        const row = rowOf(r, `${contact}${hasDob ? ' · DOB' : ' · no DOB'}`);
+        return { ...row, hasPhone, hasEmail, hasDob, isCondo };
+      });
   }
 
   if (type === 'owner_verify') {

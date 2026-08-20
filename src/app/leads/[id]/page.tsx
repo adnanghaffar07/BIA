@@ -523,28 +523,29 @@ export default function LeadDetailPage() {
     }
   };
 
-  const runSkipTraceAction = async () => {
+  const runSkipTraceAction = async (deep = false) => {
     setSkipTracing(true);
     try {
-      const res = await fetch(`/api/leads/${id}/skip-trace`, {
+      const res = await fetch(`/api/leads/${id}/skip-trace${deep ? '?deep=1' : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ _createdBy: lead?.producerEmail || undefined }),
       });
       const json = await res.json();
+      const label = deep ? 'Deep skip trace' : 'Skip trace';
       if (json.success) {
         const r = json.result ?? {};
         const found = (r.phones?.length ?? 0) + (r.emails?.length ?? 0);
         setSnackbar({
           open: true,
           msg: found > 0
-            ? `Skip trace: ${r.phones?.length ?? 0} phone(s), ${r.emails?.length ?? 0} email(s) found`
-            : 'Skip trace ran — no contact match found',
+            ? `${label}: ${r.phones?.length ?? 0} phone(s), ${r.emails?.length ?? 0} email(s) found`
+            : `${label} ran — no contact match found`,
           severity: found > 0 ? 'success' : 'error',
         });
         await load(); // refresh phone/email/skipTraced from the server
       } else {
-        setSnackbar({ open: true, msg: json.error || 'Skip trace failed', severity: 'error' });
+        setSnackbar({ open: true, msg: json.error || `${label} failed`, severity: 'error' });
       }
     } catch {
       setSnackbar({ open: true, msg: 'Skip trace failed — try again', severity: 'error' });
@@ -896,9 +897,26 @@ export default function LeadDetailPage() {
               } />
               <Row label="Stories" value={lead.stories} />
               <Row label="Lot Sq Ft" value={lead.lotSquareFeet ? Number(lead.lotSquareFeet).toLocaleString() : undefined} />
-              <Row label="Pool" value={lead.pool ? 'Yes' : 'No'} />
-              <Row label="Garage" value={lead.garage ? 'Yes' : 'No'} />
-              <Row label="Basement" value={lead.basement ? 'Yes' : 'No'} />
+              {/* SFH quoting assumptions (Frank Aug-2026): when the granular detail is missing,
+                  show the standard default so producers quote fast — pool in-ground, basement
+                  100% finished, garage 2-car. Actual data (if pulled) wins over the assumption. */}
+              <Row label="Pool" value={
+                !lead.pool ? 'No'
+                  : isCondoLead ? 'Yes'
+                  : <>Yes <Box component="span" sx={{ color: '#8a5a00', fontSize: 11 }}>· assume in-ground</Box></>
+              } />
+              <Row label="Garage" value={
+                !lead.garage ? 'No'
+                  : lead.garageCount || lead.garageType ? `Yes${lead.garageType ? ` · ${lead.garageType}` : ''}${lead.garageCount ? ` · ${lead.garageCount}-car` : ''}`
+                  : isCondoLead ? 'Yes'
+                  : <>Yes <Box component="span" sx={{ color: '#8a5a00', fontSize: 11 }}>· assume 2-car</Box></>
+              } />
+              <Row label="Basement" value={
+                !lead.basement ? 'No'
+                  : lead.basementFinishedPct ? `Yes · ${lead.basementFinishedPct}% finished`
+                  : isCondoLead ? 'Yes'
+                  : <>Yes <Box component="span" sx={{ color: '#8a5a00', fontSize: 11 }}>· assume 100% finished</Box></>
+              } />
               <Row label="A/C" value={lead.airConditioning ? 'Yes' : 'No'} />
             </Grid>
 
@@ -1013,12 +1031,23 @@ export default function LeadDetailPage() {
                     View Skip Trace
                   </Button>
                 )}
+                {/* Deep skip trace — recover a missing phone/email via Tracerfy's advanced tier (Frank Aug-2026). */}
+                {(!lead.phone1 || !lead.email1) && ['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade)) && (
+                  <Button
+                    size="small" variant="contained" color="warning"
+                    startIcon={skipTracing ? <CircularProgress size={13} color="inherit" /> : <PersonSearchIcon />}
+                    onClick={() => runSkipTraceAction(true)}
+                    disabled={skipTracing}
+                  >
+                    {skipTracing ? 'Deep tracing…' : `Deep Skip Trace (recover ${!lead.phone1 ? 'phone' : 'email'})`}
+                  </Button>
+                )}
               </Stack>
             ) : (['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade))) ? (
               <Button
                 variant="outlined" size="small"
                 startIcon={skipTracing ? <CircularProgress size={14} color="inherit" /> : <PersonSearchIcon />}
-                onClick={runSkipTraceAction}
+                onClick={() => runSkipTraceAction()}
                 disabled={skipTracing}
                 sx={{ mt: 1, mb: 0.5 }}
               >
