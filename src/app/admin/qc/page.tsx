@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Container, Box, Typography, Paper, ToggleButton, ToggleButtonGroup, TextField,
   FormControl, InputLabel, Select, MenuItem, Button, Chip, Table, TableHead, TableRow,
@@ -48,6 +48,8 @@ export default function QcReportsPage() {
   const [q, setQ] = useState('');
   const [effFrom, setEffFrom] = useState('');
   const [effTo, setEffTo] = useState('');
+  // Contact-coverage drill-down: click a summary chip to filter the rows to that slice.
+  const [covFilter, setCovFilter] = useState<'all' | 'sfh' | 'condo' | 'both' | 'phoneOnly' | 'emailOnly' | 'neither' | 'noEmail' | 'hasDob'>('all');
   const [rows, setRows] = useState<QcRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +79,7 @@ export default function QcReportsPage() {
 
   // Auto-run on report switch (except keyword, which waits for a term).
   useEffect(() => {
+    setCovFilter('all'); // reset the coverage drill-down on report change
     if (report === 'keyword') { setRows([]); setRan(false); return; }
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -86,7 +89,7 @@ export default function QcReportsPage() {
     const cols = ['Owner', 'City', 'ZIP', 'Eff Date', 'Grade', 'Manual', 'Type', 'Travelers', 'Plymouth', 'Reason', 'Detail', 'By', 'At'];
     const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const lines = [cols.join(',')];
-    for (const r of rows) lines.push([r.owner, r.city, r.zip, r.effectiveDate, r.grade, r.manualGrade, r.propertyType, eligLabel(r.travelersEligible), eligLabel(r.plymouthEligible), r.reason, r.context, r.by, r.at].map(esc).join(','));
+    for (const r of shownRows) lines.push([r.owner, r.city, r.zip, r.effectiveDate, r.grade, r.manualGrade, r.propertyType, eligLabel(r.travelersEligible), eligLabel(r.plymouthEligible), r.reason, r.context, r.by, r.at].map(esc).join(','));
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -113,6 +116,24 @@ export default function QcReportsPage() {
     }
     return t;
   })() : null;
+
+  // Rows actually shown in the table + exported: coverage drill-down filter applied.
+  const shownRows = useMemo(() => {
+    if (report !== 'contact_coverage' || covFilter === 'all') return rows;
+    return rows.filter((r) => {
+      switch (covFilter) {
+        case 'sfh': return !r.isCondo;
+        case 'condo': return !!r.isCondo;
+        case 'both': return !!r.hasPhone && !!r.hasEmail;
+        case 'phoneOnly': return !!r.hasPhone && !r.hasEmail;
+        case 'emailOnly': return !r.hasPhone && !!r.hasEmail;
+        case 'neither': return !r.hasPhone && !r.hasEmail;
+        case 'noEmail': return !r.hasEmail;
+        case 'hasDob': return !!r.hasDob;
+        default: return true;
+      }
+    });
+  }, [rows, report, covFilter]);
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
@@ -176,34 +197,53 @@ export default function QcReportsPage() {
           <TextField size="small" type="date" label="Eff to" value={effTo} onChange={(e) => setEffTo(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
           <Button variant="contained" size="small" startIcon={<SearchIcon />} onClick={run} disabled={loading || (report === 'keyword' && !q.trim())}>Run</Button>
           <Box sx={{ flex: 1 }} />
-          <Button variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={exportCsv} disabled={!rows.length}>Export CSV</Button>
+          <Button variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={exportCsv} disabled={!shownRows.length}>Export CSV</Button>
         </Stack>
       </Paper>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-      {coverage && (
-        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
-            Rated accounts — contact coverage ({coverage.total})
-          </Typography>
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
-            <Chip label={`SFH: ${coverage.sfh}`} size="small" sx={{ bgcolor: '#dcfce7', color: '#166534', fontWeight: 700 }} />
-            <Chip label={`Condo: ${coverage.condo}`} size="small" sx={{ bgcolor: '#ede9fe', color: '#5b21b6', fontWeight: 700 }} />
-            <Box sx={{ width: 1, alignSelf: 'stretch', borderLeft: '1px solid', borderColor: 'divider', mx: 0.5 }} />
-            <Chip label={`Phone + Email: ${coverage.both}`} size="small" color="success" />
-            <Chip label={`Phone only: ${coverage.phoneOnly}`} size="small" sx={{ bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 }} />
-            <Chip label={`Email only: ${coverage.emailOnly}`} size="small" sx={{ bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 }} />
-            <Chip label={`Neither: ${coverage.neither}`} size="small" color="error" />
-            <Box sx={{ width: 1, alignSelf: 'stretch', borderLeft: '1px solid', borderColor: 'divider', mx: 0.5 }} />
-            <Chip label={`No email (downgrade review): ${coverage.noEmail}`} size="small" color="error" variant="outlined" />
-            <Chip label={`Has DOB: ${coverage.hasDob}`} size="small" variant="outlined" />
-          </Stack>
-        </Paper>
-      )}
+      {coverage && (() => {
+        // Clickable chip → filter the table to that slice. Clicking the active one clears it.
+        const covChip = (key: typeof covFilter, label: string, sx: any) => {
+          const active = covFilter === key;
+          return (
+            <Chip
+              label={label} size="small" clickable
+              onClick={() => setCovFilter(active ? 'all' : key)}
+              sx={{ ...sx, cursor: 'pointer', outline: active ? '2px solid #1565c0' : 'none', outlineOffset: 1 }}
+            />
+          );
+        };
+        return (
+          <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+            <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1, flexWrap: 'wrap', gap: 1 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                Rated accounts — contact coverage ({coverage.total}){covFilter !== 'all' ? ` · showing ${shownRows.length}` : ''}
+              </Typography>
+              {covFilter !== 'all' && (
+                <Button size="small" onClick={() => setCovFilter('all')}>Clear filter</Button>
+              )}
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Click a chip to filter the list below.</Typography>
+            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+              {covChip('sfh', `SFH: ${coverage.sfh}`, { bgcolor: '#dcfce7', color: '#166534', fontWeight: 700 })}
+              {covChip('condo', `Condo: ${coverage.condo}`, { bgcolor: '#ede9fe', color: '#5b21b6', fontWeight: 700 })}
+              <Box sx={{ width: 1, alignSelf: 'stretch', borderLeft: '1px solid', borderColor: 'divider', mx: 0.5 }} />
+              {covChip('both', `Phone + Email: ${coverage.both}`, { bgcolor: '#dcfce7', color: '#166534' })}
+              {covChip('phoneOnly', `Phone only: ${coverage.phoneOnly}`, { bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 })}
+              {covChip('emailOnly', `Email only: ${coverage.emailOnly}`, { bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 })}
+              {covChip('neither', `Neither: ${coverage.neither}`, { bgcolor: '#fee2e2', color: '#b3261e', fontWeight: 600 })}
+              <Box sx={{ width: 1, alignSelf: 'stretch', borderLeft: '1px solid', borderColor: 'divider', mx: 0.5 }} />
+              {covChip('noEmail', `No email (downgrade review): ${coverage.noEmail}`, { bgcolor: '#fff', color: '#b3261e', fontWeight: 600, border: '1px solid #f2a3a3' })}
+              {covChip('hasDob', `Has DOB: ${coverage.hasDob}`, { border: '1px solid', borderColor: 'divider' })}
+            </Stack>
+          </Paper>
+        );
+      })()}
 
       <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-        {loading ? <CircularProgress size={18} /> : <Typography variant="body2" color="text.secondary"><strong>{rows.length}</strong> record{rows.length === 1 ? '' : 's'}</Typography>}
+        {loading ? <CircularProgress size={18} /> : <Typography variant="body2" color="text.secondary"><strong>{shownRows.length}</strong> record{shownRows.length === 1 ? '' : 's'}</Typography>}
       </Box>
 
       <Paper variant="outlined" sx={{ overflowX: 'auto' }}>
@@ -216,7 +256,7 @@ export default function QcReportsPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {rows.map((r) => (
+            {shownRows.map((r) => (
               <TableRow key={r.propertyId + r.context} hover>
                 <TableCell sx={{ whiteSpace: 'nowrap' }}>
                   <Link href={`/leads/${r.propertyId}`} style={{ color: '#1565c0', textDecoration: 'none' }}>{r.owner}</Link>
@@ -239,7 +279,7 @@ export default function QcReportsPage() {
                 <TableCell sx={{ whiteSpace: 'nowrap', fontSize: 12, color: '#616b7d' }}>{r.by ?? '—'}</TableCell>
               </TableRow>
             ))}
-            {!loading && ran && rows.length === 0 && (
+            {!loading && ran && shownRows.length === 0 && (
               <TableRow><TableCell colSpan={9} sx={{ textAlign: 'center', py: 4, color: '#888' }}>No records match.</TableCell></TableRow>
             )}
           </TableBody>
