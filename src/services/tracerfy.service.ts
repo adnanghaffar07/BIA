@@ -93,7 +93,8 @@ export async function runTracerfy(lead: Lead, opts?: { deep?: boolean }): Promis
   }
 
   const json: any = await res.json();
-  const persons = (Array.isArray(json?.persons) ? json.persons : []).map(toReapiPerson);
+  const rawPersons: any[] = Array.isArray(json?.persons) ? json.persons : [];
+  const persons = rawPersons.map(toReapiPerson);
 
   // Insured first — same ordering rule as the old provider.
   const insured = matchInsuredPerson(persons, l);
@@ -105,12 +106,32 @@ export async function runTracerfy(lead: Lead, opts?: { deep?: boolean }): Promis
     for (const em of p.emails) if (em.email) emails.push(em.email);
   }
 
+  const insuredPatch = insuredPatchFromPersons(persons, l);
+
+  // Deep / enhanced trace: the recovered household contacts live in `relatives`, NOT in
+  // persons[] (the named insured often has few/no emails of their own). Fill the co-insured
+  // slots from the top-ranked relative so a married/family household stays reachable, and
+  // add their numbers/emails to the overall pool. Producer confirms who's who on the call.
+  if (opts?.deep && rawPersons[0]?.relatives?.length) {
+    const rels = [...rawPersons[0].relatives].sort((a: any, b: any) => (a?.rank ?? 99) - (b?.rank ?? 99));
+    const relPhone = (r: any) => (Array.isArray(r?.phones) ? r.phones[0]?.number : undefined);
+    const relEmail = (r: any) => (Array.isArray(r?.emails) ? r.emails[0]?.email : undefined);
+    // Prefer the top-ranked relative that actually has a contact to hand over.
+    const top = rels.find((r: any) => relPhone(r) || relEmail(r)) ?? rels[0];
+    if (top) {
+      if (!l.owner2FirstName && !insuredPatch.owner2FirstName && top.first_name) insuredPatch.owner2FirstName = top.first_name;
+      if (!l.owner2LastName && !insuredPatch.owner2LastName && top.last_name) insuredPatch.owner2LastName = top.last_name;
+      if (!l.owner2Phone && !insuredPatch.owner2Phone && relPhone(top)) insuredPatch.owner2Phone = String(relPhone(top));
+      if (!l.owner2Email && !insuredPatch.owner2Email && relEmail(top)) insuredPatch.owner2Email = String(relEmail(top));
+    }
+  }
+
   return {
     phones: [...new Set(phones)],
     emails: [...new Set(emails)],
-    matched: !!json?.hit && persons.length > 0,
+    matched: !!json?.hit && (persons.length > 0),
     raw: json,
-    insuredPatch: insuredPatchFromPersons(persons, l),
+    insuredPatch,
     personCount: persons.length,
   };
 }

@@ -49,7 +49,7 @@ const HANDLED_KEYS = new Set([
   'fullName', 'firstName', 'middleName', 'lastName',
   'age', 'gender', 'occupationDescription', 'maritalStatusDescription',
   // Tracerfy shape (snake_case) — rendered explicitly, kept out of the generic grid
-  'full_name', 'first_name', 'last_name', 'mailing_address',
+  'full_name', 'first_name', 'last_name', 'mailing_address', 'relatives', 'address_history',
 ]);
 
 export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipTraceDialogProps) {
@@ -149,6 +149,39 @@ export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipT
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                       Previous: {fmtAddress(p.previousAddress)}
                     </Typography>
+                  )}
+
+                  {/* Relatives / household (deep trace) — where recovered contacts often live. */}
+                  {Array.isArray(p.relatives) && p.relatives.length > 0 && (
+                    <Box sx={{ mt: 1.5, pl: 1.5, borderLeft: '2px solid', borderColor: 'divider' }}>
+                      <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', display: 'block', mb: 0.5 }}>
+                        Relatives / household ({p.relatives.length})
+                      </Typography>
+                      <Stack spacing={0.75}>
+                        {p.relatives.map((rel: any, ri: number) => {
+                          const rphones: any[] = Array.isArray(rel.phones) ? rel.phones : [];
+                          const remails: any[] = Array.isArray(rel.emails) ? rel.emails : [];
+                          return (
+                            <Box key={ri}>
+                              <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                                {rel.full_name || [rel.first_name, rel.last_name].filter(Boolean).join(' ') || 'Unknown'}
+                                {rel.age ? ` · ${rel.age}` : ''}
+                              </Typography>
+                              <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                                {rphones.map((ph, j) => (
+                                  <Link key={`p${j}`} href={`tel:${String(ph.number ?? '').replace(/\D/g, '')}`} sx={{ fontSize: 12 }}>
+                                    {fmtPhone(ph.number)}
+                                  </Link>
+                                ))}
+                                {remails.map((em, j) => (
+                                  <Link key={`e${j}`} href={`mailto:${em.email}`} sx={{ fontSize: 12 }}>{em.email}</Link>
+                                ))}
+                              </Stack>
+                            </Box>
+                          );
+                        })}
+                      </Stack>
+                    </Box>
                   )}
 
                   {/* Every remaining field returned for this person */}
