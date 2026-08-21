@@ -12,6 +12,7 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import HistoryIcon from '@mui/icons-material/History';
 import LeadsTable from '@/components/LeadsTable';
+import { useStickyState } from '@/hooks/useStickyState';
 
 type QueueTab = 'quoteReady' | 'needsInfo' | 'closed' | 'edited';
 
@@ -33,9 +34,10 @@ export default function QueuePage() {
   const [loading,     setLoading]       = useState(true);
   const [error,       setError]         = useState<string | null>(null);
   const [activeTab,   setActiveTab]     = useState<QueueTab>('quoteReady');
-  const [carrier,     setCarrier]       = useState('');
-  const [effFrom,     setEffFrom]       = useState('');
-  const [effTo,       setEffTo]         = useState('');
+  // Filters persist across navigation until cleared (Frank Aug-2026).
+  const [carrier,     setCarrier]       = useStickyState('queue:carrier', '');
+  const [effFrom,     setEffFrom]       = useStickyState('queue:effFrom', '');
+  const [effTo,       setEffTo]         = useStickyState('queue:effTo', '');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -330,11 +332,9 @@ export default function QueuePage() {
       )}
 
       {/* ── Table ──────────────────────────────────────────────────────────── */}
-      {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-          <CircularProgress />
-        </Box>
-      ) : (
+      {/* Always render LeadsTable (it shows its own in-place loading spinner) so the
+          filter bar — including an open date picker — is never unmounted on refetch. */}
+      {(
         <LeadsTable
           leads={displayLeads}
           loading={loading}

@@ -15,6 +15,7 @@ import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import ContactPhoneIcon from '@mui/icons-material/ContactPhone';
 import DownloadIcon from '@mui/icons-material/Download';
 import Link from 'next/link';
+import { useStickyState } from '@/hooks/useStickyState';
 
 type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch';
 
@@ -42,13 +43,14 @@ const gradeColor = (g: string | null) =>
 const eligLabel = (v: string | null) => (v === 'review' ? 'Referral' : v === 'ineligible' ? 'Non-eligible' : v === 'eligible' ? 'Eligible' : '—');
 
 export default function QcReportsPage() {
-  const [report, setReport] = useState<ReportType>('referral');
-  const [carrier, setCarrier] = useState<'any' | 'travelers' | 'plymouth'>('any');
-  const [value, setValue] = useState<'review' | 'ineligible' | 'eligible'>('review');
-  const [setBy, setSetBy] = useState<'any' | 'producer' | 'system'>('any');
-  const [q, setQ] = useState('');
-  const [effFrom, setEffFrom] = useState('');
-  const [effTo, setEffTo] = useState('');
+  // Filters persist across navigation until reset (Frank Aug-2026).
+  const [report, setReport] = useStickyState<ReportType>('qc:report', 'referral');
+  const [carrier, setCarrier] = useStickyState<'any' | 'travelers' | 'plymouth'>('qc:carrier', 'any');
+  const [value, setValue] = useStickyState<'review' | 'ineligible' | 'eligible'>('qc:value', 'review');
+  const [setBy, setSetBy] = useStickyState<'any' | 'producer' | 'system'>('qc:setBy', 'any');
+  const [q, setQ] = useStickyState('qc:q', '');
+  const [effFrom, setEffFrom] = useStickyState('qc:effFrom', '');
+  const [effTo, setEffTo] = useStickyState('qc:effTo', '');
   // Contact-coverage drill-down: click a summary chip to filter the rows to that slice.
   const [covFilter, setCovFilter] = useState<'all' | 'sfh' | 'condo' | 'both' | 'phoneOnly' | 'emailOnly' | 'neither' | 'noEmail' | 'hasDob'>('all');
   const [rows, setRows] = useState<QcRow[]>([]);

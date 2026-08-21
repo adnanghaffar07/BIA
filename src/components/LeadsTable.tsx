@@ -17,10 +17,11 @@ import AutorenewIcon from '@mui/icons-material/Autorenew';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { Lead } from '@/types/lead';
 import { LeadGrade } from '@/types/grade';
 import { countyForZip } from '@/lib/constants';
+import { useStickyState } from '@/hooks/useStickyState';
 import { formatCurrency } from '@/utils/formatAddress';
 import { exportLeadsToCSV } from '@/utils/csvExport';
 import PropertyDetailsContent from '@/components/PropertyDetailsContent';
@@ -375,10 +376,13 @@ export default function LeadsTable({
   const [rowsPerPage, setRowsPerPage] = useState<number>(25);
 
   // ── Filter state ────────────────────────────────────────────────────────────
-  const [search, setSearch]         = useState('');
-  const [filterZip, setFilterZip]   = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
-  const [filterCounty, setFilterCounty] = useState(''); // Monmouth | Middlesex | Ocean (Frank Aug-2026)
+  // Filters persist across navigation (to a lead and back) until cleared — keyed per page
+  // so /leads and /queue keep their own (Frank Aug-2026).
+  const pathname = usePathname();
+  const [search, setSearch]             = useStickyState(`lt:${pathname}:search`, '');
+  const [filterZip, setFilterZip]       = useStickyState(`lt:${pathname}:zip`, '');
+  const [filterStatus, setFilterStatus] = useStickyState(`lt:${pathname}:status`, '');
+  const [filterCounty, setFilterCounty] = useStickyState(`lt:${pathname}:county`, ''); // Monmouth | Middlesex | Ocean
 
   // Derive unique ZIPs from current leads for the ZIP dropdown
   const availableZips = useMemo(() => {
