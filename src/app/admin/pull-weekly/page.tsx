@@ -4,7 +4,7 @@ import { useState } from 'react';
 import {
   Box, Button, Typography, Paper, Alert, CircularProgress,
   Stack, Divider, Chip, Table, TableHead, TableBody, TableRow, TableCell,
-  TextField,
+  TextField, MenuItem,
 } from '@mui/material';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
@@ -38,8 +38,17 @@ export default function WeeklyPullPage() {
   // lead offset is handled server-side (runDate = effDate − 60), so this is the
   // effective date the producer actually wants to work.
   const [effDate, setEffDate] = useState('');
+  // Which county's ZIPs to pull (Frank Aug-2026 — Middlesex launches 8/24, producers
+  // want to pull one county at a time). 'all' = the full Monmouth+Middlesex footprint.
+  const [county, setCounty] = useState<'all' | 'monmouth' | 'middlesex'>('all');
 
-  const pullQuery = effDate ? `?effDate=${effDate}` : '';
+  const pullQuery = (() => {
+    const p = new URLSearchParams();
+    if (effDate) p.set('effDate', effDate);
+    if (county !== 'all') p.set('county', county);
+    const qs = p.toString();
+    return qs ? `?${qs}` : '';
+  })();
 
   // would-spend = brand-new candidates not already stored
   const wouldSpend = preview
@@ -114,6 +123,18 @@ export default function WeeklyPullPage() {
 
       <Paper variant="outlined" sx={{ p: 2, mb: 3, borderRadius: 2 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: { sm: 'center' } }}>
+          <TextField
+            select
+            label="County"
+            size="small"
+            value={county}
+            onChange={(e) => { setCounty(e.target.value as typeof county); setPreview(null); setRunResult(null); }}
+            sx={{ minWidth: 170 }}
+          >
+            <MenuItem value="all">All counties</MenuItem>
+            <MenuItem value="monmouth">Monmouth</MenuItem>
+            <MenuItem value="middlesex">Middlesex</MenuItem>
+          </TextField>
           <TextField
             label="Renewal effective week starting"
             type="date"

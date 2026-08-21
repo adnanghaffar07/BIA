@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { runWeeklyPull } from '@/services/weeklyPull.service';
+import { runWeeklyPull, PullCounty } from '@/services/weeklyPull.service';
 import { RENEWAL_PULL_LEAD_DAYS } from '@/services/pipeline.service';
+
+/** ?county=monmouth|middlesex|all (default all) — pull only that county's ZIPs. */
+function parseCounty(req: NextRequest): PullCounty {
+  const c = req.nextUrl.searchParams.get('county');
+  return c === 'monmouth' || c === 'middlesex' ? c : 'all';
+}
 
 /**
  * Weekly REAPI pull — Frank Jun-2026. SuperAdmin only (middleware-enforced).
@@ -44,7 +50,7 @@ function parseRunDate(req: NextRequest): Date | undefined {
 
 export async function GET(req: NextRequest) {
   try {
-    const result = await runWeeklyPull({ runDate: parseRunDate(req), dryRun: true });
+    const result = await runWeeklyPull({ runDate: parseRunDate(req), dryRun: true, county: parseCounty(req) });
     return NextResponse.json({ success: true, ...result });
   } catch (err: any) {
     return NextResponse.json(
@@ -56,7 +62,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const result = await runWeeklyPull({ runDate: parseRunDate(req), dryRun: false });
+    const result = await runWeeklyPull({ runDate: parseRunDate(req), dryRun: false, county: parseCounty(req) });
     return NextResponse.json({ success: true, ...result });
   } catch (err: any) {
     return NextResponse.json(

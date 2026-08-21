@@ -1,4 +1,12 @@
-import { API_CONFIG, REAPI_BASE_FILTERS, REAPI_TARGET_ZIPS } from '@/lib/constants';
+import { API_CONFIG, REAPI_BASE_FILTERS, REAPI_TARGET_ZIPS, MIDDLESEX_ZIPS } from '@/lib/constants';
+
+/** Which target ZIPs a pull covers (Frank Aug-2026 — pull by county). */
+export type PullCounty = 'all' | 'monmouth' | 'middlesex';
+export function zipsForCounty(county?: PullCounty): string[] {
+  if (county === 'middlesex') return REAPI_TARGET_ZIPS.filter((z) => MIDDLESEX_ZIPS.has(z));
+  if (county === 'monmouth') return REAPI_TARGET_ZIPS.filter((z) => !MIDDLESEX_ZIPS.has(z)); // Monmouth + Lakewood (original footprint)
+  return [...REAPI_TARGET_ZIPS];
+}
 import sql, { pool } from '@/lib/neon';
 import {
   computePullWindows,
@@ -31,10 +39,6 @@ const DETAIL_GAP_MS = 300; // small courtesy gap between PropertyDetail calls
  * dryRun stops after Phase A so we can report exact credit cost before spending.
  */
 
-// BIA target ZIPs + permanent appetite filters — single definition in lib/constants
-// so every pull path (weekly, manual, seed) sources identically.
-const BASE_FILTERS = { ...REAPI_BASE_FILTERS, zip: REAPI_TARGET_ZIPS } as const;
-
 const FULL_PULL_BATCH = 100; // PropertySearch full-data page size
 
 async function reapiSearch(body: Record<string, any>): Promise<any> {
@@ -55,11 +59,12 @@ async function reapiSearch(body: Record<string, any>): Promise<any> {
 }
 
 /** Phase A — FREE. Return all candidate property IDs for a window's origination range. */
-async function scanWindowIds(w: PullWindow): Promise<string[]> {
+async function scanWindowIds(w: PullWindow, zips: string[]): Promise<string[]> {
   const data = await reapiSearch({
     ids_only: true, // ← no credits charged
     size: 10000,
-    ...BASE_FILTERS,
+    ...REAPI_BASE_FILTERS,
+    zip: zips, // county-scoped when the pull requests it
     // Sale date is the single anchor (Frank Jun-2026): the date we filter on is the
     // same one we store, display, and derive the effective date from.
     last_sale_date_min: w.originationMin,
@@ -159,6 +164,7 @@ export interface WindowReport {
 export interface WeeklyPullResult {
   dryRun: boolean;
   runDate: string;
+  county: PullCounty;
   windows: WindowReport[];
   totals: {
     matched: number;
@@ -197,9 +203,12 @@ async function enrichGradeAWithDetail(newIds: string[]): Promise<{ attempted: nu
 export async function runWeeklyPull(opts?: {
   runDate?: Date;
   dryRun?: boolean;
+  county?: PullCounty;
 }): Promise<WeeklyPullResult> {
   const dryRun = opts?.dryRun ?? false;
   const runDate = opts?.runDate ?? new Date();
+  const county: PullCounty = opts?.county ?? 'all';
+  const zips = zipsForCounty(county);
 
   if (!API_CONFIG.API_KEY) {
     throw new Error('REAPI key not configured (NEXT_PUBLIC_REAL_ESTATE_API_KEY)');
@@ -210,7 +219,7 @@ export async function runWeeklyPull(opts?: {
   const allNewIds = new Set<string>(); // distinct brand-new leads across all windows
 
   for (const w of windows) {
-    const ids = await scanWindowIds(w); // FREE
+    const ids = await scanWindowIds(w, zips); // FREE
     const have = new Set(await getExistingPropertyIds(ids));
     const newIds = ids.filter((id) => !have.has(id));
     const existingIds = ids.filter((id) => have.has(id));
@@ -251,6 +260,7 @@ export async function runWeeklyPull(opts?: {
   return {
     dryRun,
     runDate: runDate.toISOString().slice(0, 10),
+    county,
     windows: reports,
     totals: {
       matched: reports.reduce((s, r) => s + r.matched, 0),
