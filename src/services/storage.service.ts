@@ -18,7 +18,7 @@ const LEAD_COLS = [
   'vacant', 'preForeclosure', 'foreclosure', 'reo', 'highEquity',
   'floodZone', 'floodZoneType', 'floodZoneSubtype', 'floodSfha', 'floodZoneManual', 'floodCheckedAt',
   'hoa', 'latitude', 'longitude', 'fips', 'apn',
-  'recordingDate', 'lastUpdateDate', 'skipTraced', 'skipTracedAt',
+  'recordingDate', 'lastUpdateDate', 'skipTraced', 'skipTracedAt', 'skipTraceOwnerName',
   'phone1', 'phone2', 'email1', 'email2', 'engine', 'renewalTargetDate', 'grade',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'travelersEligibilityReason', 'plymouthEligibilityReason',
@@ -63,7 +63,8 @@ const LEAD_COLS_SQL = LEAD_COLS.map((c) => `"${c}"`).join(', ');
 
 /** CRM fields that must NOT be overwritten when re-ingesting API data */
 const CRM_ONLY_FIELDS = new Set([
-  'status', 'grade', 'skipTraced', 'skipTracedAt',
+  'status', 'grade', 'skipTraced', 'skipTracedAt', 'skipTraceOwnerName',
+  'owner1FirstName', 'owner1LastName',
   'phone1', 'phone2', 'email1', 'email2',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'travelersEligibilityReason', 'plymouthEligibilityReason',
@@ -477,7 +478,8 @@ export async function updateLead(
     indicativeBandLow: number; indicativeBandHigh: number;
     ownerVerifyStatus: string; ownerVerifyName: string; ownerVerifySource: string; ownerVerifyAt: Date | string; ownerVerifyDetail: string;
     lowPremium: number; expectedPremium: number; highPremium: number; pricingConfidence: number;
-    skipTraced: boolean; skipTracedAt: Date; skipTraceData: any;
+    skipTraced: boolean; skipTracedAt: Date; skipTraceData: any; skipTraceOwnerName: string | null;
+    owner1FirstName: string; owner1LastName: string;
     phone1: string; phone2: string; email1: string; email2: string;
     producerEmail: string; posQuoteNumber: string; posCarrier: string;
     boundPremium: number; boundDate: Date; authorizationDate: Date;

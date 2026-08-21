@@ -28,6 +28,7 @@ export interface TracerfyResult {
   raw?: unknown;                      // full Tracerfy response (keeps DNC/TCPA/carrier/rank)
   insuredPatch: Record<string, any>;  // co-insured + DOB, empty-slot fill only
   personCount: number;
+  ownerName: string | null;           // insured/owner name Tracerfy returned (for name-mismatch QC)
 }
 
 /**
@@ -126,6 +127,13 @@ export async function runTracerfy(lead: Lead, opts?: { deep?: boolean }): Promis
     }
   }
 
+  // The insured/owner name Tracerfy returned — property owner if flagged, else the first
+  // person. Used for the name-mismatch surface (never auto-applied to the on-file name).
+  const ownerRaw = rawPersons.find((p: any) => p?.property_owner) ?? rawPersons[0];
+  const ownerName = ownerRaw
+    ? [ownerRaw.first_name, ownerRaw.last_name].filter(Boolean).join(' ').trim() || null
+    : null;
+
   return {
     phones: [...new Set(phones)],
     emails: [...new Set(emails)],
@@ -133,5 +141,6 @@ export async function runTracerfy(lead: Lead, opts?: { deep?: boolean }): Promis
     raw: json,
     insuredPatch,
     personCount: persons.length,
+    ownerName,
   };
 }

@@ -13,7 +13,7 @@ import { GRADE_INFO, LeadGrade } from '@/types/grade';
 import { LEAD_STATUS_OPTIONS, leadStatusLabel, CLOSED_STATUSES, LeadStatus } from '@/types/lead';
 import { ELIGIBILITY_REASONS } from '@/types/carrier';
 import { WIPP_BY_ZIP } from '@/services/taxRoll.service';
-import { parseRollOwners } from '@/services/ownerNameMatch.service';
+import { parseRollOwners, compareOwnerNames } from '@/services/ownerNameMatch.service';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import HomeIcon from '@mui/icons-material/Home';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -198,6 +198,7 @@ export default function LeadDetailPage() {
   const [authorizationDate, setAuthorizationDate] = useState<string | null>(null);
   const [stampingAuth, setStampingAuth] = useState(false);
   const [skipTracing, setSkipTracing] = useState(false);
+  const [overridingName, setOverridingName] = useState(false);
   const [verifyingOwner, setVerifyingOwner] = useState(false);
   const [floodChecking, setFloodChecking] = useState(false);
   const [skipDialogOpen, setSkipDialogOpen] = useState(false);
@@ -553,6 +554,37 @@ export default function LeadDetailPage() {
     setSkipTracing(false);
   };
 
+  /** Override the on-file insured name with the skip-trace name (Frank Aug-2026). */
+  const runOverrideInsuredName = async () => {
+    if (!lead?.skipTraceOwnerName) return;
+    setOverridingName(true);
+    const parts = String(lead.skipTraceOwnerName).trim().split(/\s+/);
+    const first = parts[0] ?? '';
+    const last = parts.slice(1).join(' ');
+    try {
+      const res = await fetch(`/api/leads/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          owner1FirstName: first, owner1LastName: last, skipTraceOwnerName: null,
+          _createdBy: lead?.producerEmail || undefined,
+          _activityType: 'edit',
+          _activityNote: `Insured name overridden with skip-trace name: ${lead.skipTraceOwnerName}`,
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setSnackbar({ open: true, msg: `Insured name updated to ${[first, last].filter(Boolean).join(' ')}`, severity: 'success' });
+        await load();
+      } else {
+        setSnackbar({ open: true, msg: json.error || 'Override failed', severity: 'error' });
+      }
+    } catch {
+      setSnackbar({ open: true, msg: 'Override failed — try again', severity: 'error' });
+    }
+    setOverridingName(false);
+  };
+
   /** Re-check FEMA flood zone for this lead (FREE — no credits). */
   const runFloodCheckAction = async () => {
     setFloodChecking(true);
@@ -607,6 +639,11 @@ export default function LeadDetailPage() {
   const hasRealName = !!(lead.owner1FirstName || lead.owner1LastName);
   const ownerName = [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—';
   const coInsuredName = [lead.owner2FirstName, lead.owner2LastName].filter(Boolean).join(' ');
+
+  // Skip-trace name mismatch (Frank Aug-2026): the name Tracerfy returned disagrees with
+  // the insured on file. Surface both + an override button; never auto-applied.
+  const nameMismatch = !!lead.skipTraceOwnerName
+    && compareOwnerNames({ first: lead.owner1FirstName, last: lead.owner1LastName }, String(lead.skipTraceOwnerName)).result === 'mismatch';
 
   // No insured name on file, but the tax roll gave us one. Show it as a SUGGESTION —
   // greyed/italic, no verified tick — because it is the roll's word alone (nothing of
@@ -1031,17 +1068,6 @@ export default function LeadDetailPage() {
                     View Skip Trace
                   </Button>
                 )}
-                {/* Deep skip trace — recover a missing phone/email via Tracerfy's advanced tier (Frank Aug-2026). */}
-                {(!lead.phone1 || !lead.email1) && ['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade)) && (
-                  <Button
-                    size="small" variant="contained" color="warning"
-                    startIcon={skipTracing ? <CircularProgress size={13} color="inherit" /> : <PersonSearchIcon />}
-                    onClick={() => runSkipTraceAction(true)}
-                    disabled={skipTracing}
-                  >
-                    {skipTracing ? 'Deep tracing…' : `Deep Skip Trace (recover ${!lead.phone1 ? 'phone' : 'email'})`}
-                  </Button>
-                )}
               </Stack>
             ) : (['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade))) ? (
               <Button
@@ -1057,6 +1083,35 @@ export default function LeadDetailPage() {
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, mb: 0.5 }}>
                 Skip trace is available on Grade A, B, or C leads.
               </Typography>
+            )}
+            {/* Deep Skip Trace — available on ALL leads (Frank Aug-2026). Tracerfy enhanced
+                tier (15 credits) — digs into relatives to recover a phone/email + spouse. */}
+            <Button
+              size="small" variant="contained" color="warning"
+              startIcon={skipTracing ? <CircularProgress size={13} color="inherit" /> : <PersonSearchIcon />}
+              onClick={() => runSkipTraceAction(true)}
+              disabled={skipTracing}
+              sx={{ mt: 0.5, mb: 0.5 }}
+            >
+              {skipTracing ? 'Deep tracing…' : 'Deep Skip Trace'}
+            </Button>
+            {/* Insured-name mismatch (Frank Aug-2026): skip trace found a different name.
+                Show both and let the producer override the on-file name. */}
+            {nameMismatch && (
+              <Box sx={{ mt: 1, mb: 1, p: 1.25, border: '1px solid #f2a3a3', borderRadius: 1.5, bgcolor: '#fff7f7' }}>
+                <Typography variant="caption" sx={{ fontWeight: 700, color: '#b3261e', display: 'block' }}>
+                  Name mismatch — skip trace differs from the insured on file
+                </Typography>
+                <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+                  On file: <b>{[lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—'}</b>
+                  {'  ·  '}Skip trace: <b>{lead.skipTraceOwnerName}</b>
+                </Typography>
+                <Button size="small" variant="outlined" color="error" sx={{ mt: 0.75 }}
+                  disabled={overridingName}
+                  onClick={runOverrideInsuredName}>
+                  {overridingName ? 'Updating…' : 'Override insured name with skip-trace name'}
+                </Button>
+              </Box>
             )}
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1, mb: 1 }}>
               <TextField label="Co-Insured First" size="small" fullWidth value={extra.owner2FirstName ?? ''} onChange={(e) => setEx('owner2FirstName', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="spouse / co-borrower" />

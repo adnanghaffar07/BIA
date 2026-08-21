@@ -59,29 +59,27 @@ export async function POST(req: NextRequest) {
       if (!result.matched) { await new Promise((r) => setTimeout(r, GAP_MS)); continue; }
       coverage.hit++;
 
-      // Insured-name QC — Tracerfy's property owner is treated as the truth (Frank).
-      const persons: any[] = Array.isArray(result.raw?.persons) ? result.raw.persons : [];
-      const owner = persons.find((p) => p.property_owner) ?? persons[0];
-      const nameUpdate: Record<string, any> = {};
-      if (owner) {
-        const onFile = { first: lead.owner1FirstName, last: lead.owner1LastName };
-        const cmp = compareOwnerNames(onFile, `${owner.last_name}, ${owner.first_name}`);
-        if (cmp.result === 'mismatch' && (owner.first_name || owner.last_name)) {
+      // Insured-name QC — record a discrepancy for the Excel, but DO NOT auto-override.
+      // Producers override per-lead from the card (Frank Aug-2026). We only store the name.
+      const owner = (Array.isArray(result.raw?.persons) ? result.raw.persons : [])
+        .find((p: any) => p?.property_owner) ?? (result.raw?.persons?.[0]);
+      if (owner && (owner.first_name || owner.last_name)) {
+        const cmp = compareOwnerNames({ first: lead.owner1FirstName, last: lead.owner1LastName }, `${owner.last_name}, ${owner.first_name}`);
+        if (cmp.result === 'mismatch') {
           discrepancies.push({
             address: [lead.addressStreet, lead.addressCity, lead.addressZip].filter(Boolean).join(', '),
             oldName: fullName(lead.owner1FirstName, lead.owner1LastName) || '(none)',
             tracerfyName: fullName(owner.first_name, owner.last_name),
             verdict: cmp.result,
           });
-          nameUpdate.owner1FirstName = owner.first_name;
-          nameUpdate.owner1LastName = owner.last_name;
         }
       }
 
       // Contacts — fill empty slots only (the book was purged of REAPI contacts, so mostly empty).
       const update: Record<string, any> = {
         skipTraced: true, skipTracedAt: new Date(), skipTraceData: result.raw,
-        ...result.insuredPatch, ...nameUpdate,
+        skipTraceOwnerName: result.ownerName ?? null,
+        ...result.insuredPatch,
       };
       if (result.phones[0] && !lead.phone1) update.phone1 = result.phones[0];
       if (result.phones[1] && !lead.phone2) update.phone2 = result.phones[1];

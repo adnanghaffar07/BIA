@@ -1,5 +1,6 @@
 import { sql } from '@/lib/neon';
 import { eligibilityReasonLabel } from '@/types/carrier';
+import { compareOwnerNames } from './ownerNameMatch.service';
 
 /**
  * QC / data-validation reports (Frank Jul-2026). The CRM captures producer notes,
@@ -7,7 +8,7 @@ import { eligibilityReasonLabel } from '@/types/carrier';
  * let Frank/Ruben pull that data back out to spot trends without cross-referencing
  * the Travelers portal by hand.
  */
-export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage';
+export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch';
 
 export interface QcRow {
   propertyId: string;
@@ -174,6 +175,19 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     return rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => rowOf(r, `CRM type: ${r.propertyType ?? '—'} — flagged as likely wrong by producer`));
+  }
+
+  if (type === 'skiptrace_mismatch') {
+    // Frank Aug-2026: leads where the skip-trace insured name disagrees with the on-file
+    // name. Producers override per-lead from the card; this lists them for carrier-portal QC.
+    rows = await sql`SELECT * FROM "Lead" WHERE "skipTraceOwnerName" IS NOT NULL AND "skipTraceOwnerName" <> '' ORDER BY "effectiveDate"`;
+    return rows
+      .filter((r: any) => {
+        const c = compareOwnerNames({ first: r.owner1FirstName, last: r.owner1LastName }, String(r.skipTraceOwnerName));
+        return c.result === 'mismatch';
+      })
+      .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
+      .map((r: any) => rowOf(r, `On file "${nm(r) || '—'}" → skip trace "${r.skipTraceOwnerName}"`));
   }
 
   if (type === 'contact_coverage') {

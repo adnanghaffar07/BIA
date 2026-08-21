@@ -23,20 +23,11 @@ export async function POST(
       return NextResponse.json({ success: false, error: 'Lead not found' }, { status: 404 });
     }
 
-    // ?deep=1 → Tracerfy advanced tier to recover a missing phone/email. A deep trace is
-    // a RE-trace, so it's allowed on an already-traced lead (unlike the normal one).
+    // ?deep=1 → Tracerfy enhanced tier (15 credits). Frank Aug-2026: available on ALL leads
+    // (any grade, traced or not) — it's a deliberate, per-lead recovery a producer chooses.
     const deep = request.nextUrl.searchParams.get('deep') === '1';
-    const grade = String((lead as any).manualGrade || (lead as any).grade || '');
-    const gradeOk = ['A', 'B', 'C'].includes(grade);
 
-    if (deep) {
-      if (!gradeOk) {
-        return NextResponse.json(
-          { success: false, error: 'Deep skip trace is available on Grade A, B, or C leads.' },
-          { status: 400 },
-        );
-      }
-    } else if (!canRunSkipTrace(lead as any)) {
+    if (!deep && !canRunSkipTrace(lead as any)) {
       return NextResponse.json(
         {
           success: false,
@@ -61,6 +52,9 @@ export async function POST(
       // Persist the entire Tracerfy response so the page can surface every field
       // (DNC / TCPA / carrier / rank on each number).
       skipTraceData: result.raw ?? null,
+      // The insured name Tracerfy returned — the card compares it to the on-file name and
+      // offers a manual override if they differ. Never auto-overwrites the insured name.
+      skipTraceOwnerName: result.ownerName ?? null,
     };
     // Fill empty slots only — never overwrite producer-entered contact info.
     if (result.phones[0] && !(lead as any).phone1) update.phone1 = result.phones[0];
