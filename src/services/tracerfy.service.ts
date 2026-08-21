@@ -41,6 +41,7 @@ function toReapiPerson(p: any) {
     firstName: p?.first_name ?? '',
     lastName: p?.last_name ?? '',
     age: p?.age ?? null,
+    dob: p?.dob ?? null,   // Tracerfy year-month DOB (e.g. "1996-04") — more precise than age
     address: { streetAddress: p?.mailing_address?.street ?? '' },
     phones: (Array.isArray(p?.phones) ? p.phones : [])
       .map((ph: any) => ({ phone: String(ph?.number ?? ''), dnc: !!ph?.dnc, type: ph?.type, rank: ph?.rank })),
@@ -124,6 +125,8 @@ export async function runTracerfy(lead: Lead, opts?: { deep?: boolean }): Promis
       if (!l.owner2LastName && !insuredPatch.owner2LastName && top.last_name) insuredPatch.owner2LastName = top.last_name;
       if (!l.owner2Phone && !insuredPatch.owner2Phone && relPhone(top)) insuredPatch.owner2Phone = String(relPhone(top));
       if (!l.owner2Email && !insuredPatch.owner2Email && relEmail(top)) insuredPatch.owner2Email = String(relEmail(top));
+      const rd = String(top.dob ?? '').match(/^(\d{4})-(\d{2})/);
+      if (!l.owner2Dob && !insuredPatch.owner2Dob && rd) insuredPatch.owner2Dob = `${rd[1]}-${rd[2]}-01`;
     }
   }
 

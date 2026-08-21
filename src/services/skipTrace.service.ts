@@ -107,14 +107,22 @@ export function insuredPatchFromPersons(persons: any[], lead: any): Record<strin
     const a = parseInt(String(age), 10);
     return a > 0 && a < 120 ? `${new Date().getFullYear() - a}-01-01` : undefined;
   };
+  // Prefer the skip-trace's actual year-month DOB (e.g. "1996-04" → 1996-04-01); only fall
+  // back to the age-derived year (…-01-01) when no real DOB is returned.
+  const dobOf = (p: any): string | undefined => {
+    const m = String(p?.dob ?? '').match(/^(\d{4})-(\d{2})/);
+    if (m) return `${m[1]}-${m[2]}-01`;
+    return estDob(p?.age);
+  };
 
   const patch: Record<string, any> = {};
 
   // REAPI DOB — strictly from the name-matched insured (read-only display field).
-  if (nameMatch?.age != null) {
+  if (nameMatch != null && (nameMatch.dob || nameMatch.age != null)) {
     const a = parseInt(String(nameMatch.age), 10);
-    const d = estDob(nameMatch.age);
-    if (d) { patch.reapiDob = d; patch.reapiAge = a; }
+    const d = dobOf(nameMatch);
+    if (d) patch.reapiDob = d;
+    if (a > 0 && a < 120) patch.reapiAge = a;
   }
 
   if (coInsured) {
@@ -127,8 +135,8 @@ export function insuredPatchFromPersons(persons: any[], lead: any): Record<strin
     if (!lead.owner2Email && cc.emails[0]) patch.owner2Email = cc.emails[0];
   }
   // Pre-fill the editable DOB fields (empty slots only); reapiDob above stays source-of-truth.
-  if (!lead.owner1Dob && primary?.age) { const d = estDob(primary.age); if (d) patch.owner1Dob = d; }
-  if (!lead.owner2Dob && coInsured?.age) { const d = estDob(coInsured.age); if (d) patch.owner2Dob = d; }
+  if (!lead.owner1Dob) { const d = dobOf(primary); if (d) patch.owner1Dob = d; }
+  if (!lead.owner2Dob && coInsured) { const d = dobOf(coInsured); if (d) patch.owner2Dob = d; }
   return patch;
 }
 
