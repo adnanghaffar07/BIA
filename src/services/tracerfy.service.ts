@@ -6,19 +6,23 @@ import { matchInsuredPerson, insuredPatchFromPersons } from './skipTrace.service
  * corrupt (wrong owners, junk emails like "jessica6267@netscape.com"). Tracerfy returns
  * real, ranked owner contacts with DNC/TCPA/carrier flags.
  *
- * Endpoint (verified live): POST https://tracerfy.com/v1/api/trace/lookup/
- *   body: { address, city, state, zip, find_owner: true }   auth: Bearer <TRACERFY_API_KEY>
+ * Endpoint (verified live): POST https://tracerfy.com/v1/api/trace/enhanced/lookup/
+ *   body: { first_name, last_name, address, city, state, zip }  auth: Bearer <TRACERFY_API_KEY>
  *   → { hit, persons:[{ first_name, last_name, age, mailing_address:{street,...},
  *        phones:[{ number, type, dnc, tcpa, carrier, rank }], emails:[{ email, rank }] }],
- *        credits_deducted }   (5 credits per hit, 0 on miss)
+ *        credits_deducted }   (15 credits per hit, 0 on miss)
  *
  * The insured/co-insured/DOB logic already exists for the old provider, so we normalize
  * Tracerfy's people onto that person shape and reuse it verbatim.
  */
-const LOOKUP_URL = 'https://tracerfy.com/v1/api/trace/lookup/';
-// Deep / enhanced tier (Frank Aug-2026) — a SEPARATE endpoint that targets the named
-// insured and returns deeper context (linked addresses, relatives → more phones/emails).
-// Higher credit cost; used only to recover a missing phone/email on a partial hit.
+// The Tracerfy ENHANCED tier is the ONLY skip trace in the system (Frank Aug-2026). The
+// 5-credit standard address lookup was removed: same vendor, thinner data, and the deep
+// tier measured 78% hit / 59% email recovery on accounts the standard tier had left with
+// no contact at all. 15 credits per call.
+//
+// IMPORTANT: this endpoint targets the NAMED INSURED, so a lead with no owner1First/Last
+// name on file cannot be traced at all now that the address-based lookup is gone. Callers
+// must gate on the name being present rather than letting this throw.
 const ENHANCED_URL = 'https://tracerfy.com/v1/api/trace/enhanced/lookup/';
 
 export interface TracerfyResult {
@@ -55,7 +59,7 @@ function toReapiPerson(p: any) {
  * named INSURED's contacts first (so phone1/email1 belong to them, not a co-owner), plus
  * the co-insured/DOB patch and the full raw response. Throws on transport / auth errors.
  */
-export async function runTracerfy(lead: Lead, opts?: { deep?: boolean }): Promise<TracerfyResult> {
+export async function runTracerfy(lead: Lead): Promise<TracerfyResult> {
   const key = process.env.TRACERFY_API_KEY;
   if (!key) throw new Error('Tracerfy API key not configured (TRACERFY_API_KEY).');
 
@@ -68,20 +72,14 @@ export async function runTracerfy(lead: Lead, opts?: { deep?: boolean }): Promis
     throw new Error('Lead is missing a property address, so it cannot be skip traced.');
   }
 
-  let url = LOOKUP_URL;
-  let body: Record<string, any>;
-  if (opts?.deep) {
-    // Enhanced endpoint targets the named insured — needs first + last.
-    const first = String(l.owner1FirstName ?? '').trim();
-    const last = String(l.owner1LastName ?? '').trim();
-    if (!first || !last) {
-      throw new Error('Deep skip trace needs the insured first + last name on file.');
-    }
-    url = ENHANCED_URL;
-    body = { first_name: first, last_name: last, address, city, state, zip };
-  } else {
-    body = { address, city, state, zip, find_owner: true };
+  // The enhanced endpoint keys off the named insured — first + last are required.
+  const first = String(l.owner1FirstName ?? '').trim();
+  const last = String(l.owner1LastName ?? '').trim();
+  if (!first || !last) {
+    throw new Error('Skip trace needs the insured first + last name on file.');
   }
+  const url = ENHANCED_URL;
+  const body: Record<string, any> = { first_name: first, last_name: last, address, city, state, zip };
 
   const res = await fetch(url, {
     method: 'POST',
@@ -114,7 +112,7 @@ export async function runTracerfy(lead: Lead, opts?: { deep?: boolean }): Promis
   // persons[] (the named insured often has few/no emails of their own). Fill the co-insured
   // slots from the top-ranked relative so a married/family household stays reachable, and
   // add their numbers/emails to the overall pool. Producer confirms who's who on the call.
-  if (opts?.deep && rawPersons[0]?.relatives?.length) {
+  if (rawPersons[0]?.relatives?.length) {
     const rels = [...rawPersons[0].relatives].sort((a: any, b: any) => (a?.rank ?? 99) - (b?.rank ?? 99));
     const relPhone = (r: any) => (Array.isArray(r?.phones) ? r.phones[0]?.number : undefined);
     const relEmail = (r: any) => (Array.isArray(r?.emails) ? r.emails[0]?.email : undefined);

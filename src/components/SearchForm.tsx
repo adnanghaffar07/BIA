@@ -17,7 +17,7 @@ interface SearchFormProps {
   onSearch: (filters: LeadFilters) => void;
   loading?: boolean;
   /** Seed the controls (used to restore filters when returning from a lead). */
-  initial?: { size?: number; engine?: number; grade?: string; status?: string; carrier?: string; effectiveDate?: string; effectiveTo?: string };
+  initial?: { size?: number; engine?: number; grade?: string; status?: string; carrier?: string; propertyType?: string; effectiveDate?: string; effectiveTo?: string };
 }
 
 const GRADE_OPTIONS = [
@@ -26,6 +26,14 @@ const GRADE_OPTIONS = [
   { value: 'B', label: 'B — Almost Ready' },
   { value: 'C', label: 'C — Needs Info' },
   { value: 'D', label: 'D — Disqualified' },
+];
+
+// Frank Aug-2026 — split the book by dwelling type. propertyType is the reliable field:
+// every condo-ish landUse ('Condominium', 'Townhouse/Condo') already carries CONDO here.
+const PROPERTY_TYPE_OPTIONS = [
+  { value: '', label: 'All Property Types' },
+  { value: 'SFR', label: 'Single Family (SFR)' },
+  { value: 'CONDO', label: 'Condo' },
 ];
 
 const STATUS_OPTIONS = [
@@ -46,6 +54,7 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
   const [grade, setGrade] = useState(initial?.grade ?? '');
   const [status, setStatus] = useState(initial?.status ?? '');
   const [carrier, setCarrier] = useState(initial?.carrier ?? '');
+  const [propertyType, setPropertyType] = useState(initial?.propertyType ?? '');
   const [effDate, setEffDate] = useState(initial?.effectiveDate ?? '');
   const [effTo, setEffTo] = useState(initial?.effectiveTo ?? '');
 
@@ -64,6 +73,7 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
       grade: (grade || undefined) as LeadGradeValue | undefined,
       status: (status || undefined) as LeadStatus | undefined,
       carrier: carrier || undefined,
+      propertyType: propertyType || undefined,
       effectiveDate: eff || undefined,
       effectiveTo: effEnd || undefined,
     });
@@ -79,12 +89,13 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
     setGrade('');
     setStatus('');
     setCarrier('');
+    setPropertyType('');
     setEffDate('');
     setEffTo('');
     onSearch({});
   };
 
-  const hasActiveFilters = engine !== 'all' || grade !== '' || status !== '' || carrier !== '' || effDate !== '' || effTo !== '';
+  const hasActiveFilters = engine !== 'all' || grade !== '' || status !== '' || carrier !== '' || propertyType !== '' || effDate !== '' || effTo !== '';
 
   return (
     <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
@@ -171,6 +182,20 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
               <MenuItem value="">All Carriers</MenuItem>
               <MenuItem value="travelers">Travelers</MenuItem>
               <MenuItem value="plymouth">Plymouth Rock</MenuItem>
+            </Select>
+          </FormControl>
+
+          {/* Property type filter (Frank Aug-2026) — SFR vs Condo split */}
+          <FormControl size="small" sx={{ minWidth: 190 }}>
+            <InputLabel>Property Type</InputLabel>
+            <Select
+              value={propertyType}
+              label="Property Type"
+              onChange={(e) => setPropertyType(e.target.value)}
+            >
+              {PROPERTY_TYPE_OPTIONS.map((o) => (
+                <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+              ))}
             </Select>
           </FormControl>
 

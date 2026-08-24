@@ -524,16 +524,16 @@ export default function LeadDetailPage() {
     }
   };
 
-  const runSkipTraceAction = async (deep = false) => {
+  const runSkipTraceAction = async () => {
     setSkipTracing(true);
     try {
-      const res = await fetch(`/api/leads/${id}/skip-trace${deep ? '?deep=1' : ''}`, {
+      const res = await fetch(`/api/leads/${id}/skip-trace`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ _createdBy: lead?.producerEmail || undefined }),
       });
       const json = await res.json();
-      const label = deep ? 'Deep skip trace' : 'Skip trace';
+      const label = 'Skip trace';
       if (json.success) {
         const r = json.result ?? {};
         const found = (r.phones?.length ?? 0) + (r.emails?.length ?? 0);
@@ -639,6 +639,10 @@ export default function LeadDetailPage() {
   const hasRealName = !!(lead.owner1FirstName || lead.owner1LastName);
   const ownerName = [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || '—';
   const coInsuredName = [lead.owner2FirstName, lead.owner2LastName].filter(Boolean).join(' ');
+
+  // The only skip trace left is the Tracerfy ENHANCED tier, which keys off the named
+  // insured — without a first AND last name on file it cannot run at all (Frank Aug-2026).
+  const insuredNameOnFile = !!String(lead.owner1FirstName ?? '').trim() && !!String(lead.owner1LastName ?? '').trim();
 
   // Skip-trace name mismatch (Frank Aug-2026): the name Tracerfy returned disagrees with
   // the insured on file. Surface both + an override button; never auto-applied.
@@ -1058,46 +1062,35 @@ export default function LeadDetailPage() {
           {/* Insured Details (editable) */}
           <Grid size={{ xs: 12, md: 6 }}>
             <SubHead>Insured Details</SubHead>
-            {/* Skip trace (REAPI) — enabled for Grade A/B/C leads not yet traced (Frank Jun-2026) */}
-            {lead.skipTraced ? (
+            {/* Skip trace — Tracerfy ENHANCED tier ONLY (Frank Aug-2026, 15 credits). The
+                5-credit standard lookup was removed, so this is the single trace button.
+                Grade A/B/C, one run per lead, and it needs the insured first+last name
+                because the enhanced endpoint keys off the named insured. */}
+            {lead.skipTraced || lead.deepSkipTracedAt ? (
               <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', mt: 1, mb: 0.5 }}>
                 <Chip size="small" color="success" variant="outlined" icon={<PersonSearchIcon />}
-                  label={`Skip traced${lead.skipTracedAt ? ` · ${new Date(lead.skipTracedAt).toLocaleDateString()}` : ''}`} />
+                  label={`Skip traced${lead.deepSkipTracedAt || lead.skipTracedAt ? ` · ${new Date((lead.deepSkipTracedAt || lead.skipTracedAt)!).toLocaleDateString()}` : ''}`} />
                 {lead.skipTraceData && (
                   <Button size="small" variant="outlined" startIcon={<PersonSearchIcon />} onClick={() => setSkipDialogOpen(true)}>
                     View Skip Trace
                   </Button>
                 )}
               </Stack>
-            ) : (['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade))) ? (
-              <Button
-                variant="outlined" size="small"
-                startIcon={skipTracing ? <CircularProgress size={14} color="inherit" /> : <PersonSearchIcon />}
-                onClick={() => runSkipTraceAction()}
-                disabled={skipTracing}
-                sx={{ mt: 1, mb: 0.5 }}
-              >
-                {skipTracing ? 'Tracing…' : 'Run Skip Trace'}
-              </Button>
-            ) : (
+            ) : !['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade)) ? (
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, mb: 0.5 }}>
                 Skip trace is available on Grade A, B, or C leads.
               </Typography>
-            )}
-            {/* Deep Skip Trace — available on ALL leads (Frank Aug-2026). Tracerfy enhanced
-                tier (15 credits) — digs into relatives to recover a phone/email + spouse.
-                Once run, the button is replaced by a badge so it can't be re-charged. */}
-            {lead.deepSkipTracedAt ? (
-              <Chip size="small" color="warning" variant="outlined" icon={<PersonSearchIcon />}
-                sx={{ mt: 0.5, mb: 0.5 }}
-                label={`Deep skip traced · ${new Date(lead.deepSkipTracedAt).toLocaleDateString()}`} />
+            ) : !insuredNameOnFile ? (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, mb: 0.5 }}>
+                Skip trace needs the insured first and last name on file.
+              </Typography>
             ) : (
               <Button
                 size="small" variant="contained" color="warning"
                 startIcon={skipTracing ? <CircularProgress size={13} color="inherit" /> : <PersonSearchIcon />}
-                onClick={() => runSkipTraceAction(true)}
+                onClick={() => runSkipTraceAction()}
                 disabled={skipTracing}
-                sx={{ mt: 0.5, mb: 0.5 }}
+                sx={{ mt: 1, mb: 0.5 }}
               >
                 {skipTracing ? 'Deep tracing…' : 'Deep Skip Trace'}
               </Button>

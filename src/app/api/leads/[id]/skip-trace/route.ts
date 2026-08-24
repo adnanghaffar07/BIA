@@ -23,30 +23,28 @@ export async function POST(
       return NextResponse.json({ success: false, error: 'Lead not found' }, { status: 404 });
     }
 
-    // ?deep=1 → Tracerfy enhanced tier (15 credits). Frank Aug-2026: available on ALL leads
-    // (any grade, traced or not) — it's a deliberate, per-lead recovery a producer chooses.
-    const deep = request.nextUrl.searchParams.get('deep') === '1';
-
-    // Credit guard (Frank Aug-2026): the enhanced tier is 15 credits, so it runs at most
-    // ONCE per lead. The card already hides the button once deepSkipTracedAt is set, but a
-    // stale tab or a retry could still post — refuse here too so the charge cannot repeat.
-    // The Aug-2026 retroactive blast (299 accounts, since removed) stamped this same field,
-    // so those leads are already protected here too.
-    if (deep && (lead as any).deepSkipTracedAt) {
+    // The Tracerfy ENHANCED tier (15 credits) is now the ONLY skip trace — the 5-credit
+    // standard lookup was removed (Frank Aug-2026). Same gate as before: Grade A/B/C, and
+    // one run per lead so the 15 credits can never be charged twice (the card hides the
+    // button once stamped, but a stale tab or a retry could still post).
+    if ((lead as any).deepSkipTracedAt || !canRunSkipTrace(lead as any)) {
       return NextResponse.json(
-        { success: false, error: 'This lead has already had a deep skip trace.' },
+        {
+          success: false,
+          error: (lead as any).skipTraced || (lead as any).deepSkipTracedAt
+            ? 'This lead has already been skip traced.'
+            : 'Skip trace is available on Grade A, B, or C leads.',
+        },
         { status: 400 },
       );
     }
 
-    if (!deep && !canRunSkipTrace(lead as any)) {
+    // The enhanced endpoint keys off the named insured, so a lead with no first+last name
+    // on file can no longer be traced by any route. Fail with a reason the card can show
+    // rather than letting runTracerfy throw.
+    if (!String((lead as any).owner1FirstName ?? '').trim() || !String((lead as any).owner1LastName ?? '').trim()) {
       return NextResponse.json(
-        {
-          success: false,
-          error: (lead as any).skipTraced
-            ? 'This lead has already been skip traced.'
-            : 'Skip trace is available on Grade A, B, or C leads.',
-        },
+        { success: false, error: 'Skip trace needs the insured first and last name on file.' },
         { status: 400 },
       );
     }
@@ -55,15 +53,15 @@ export async function POST(
     try { payload = await request.json(); } catch { /* body optional */ }
     const createdBy = payload?._createdBy;
 
-    const result = await runTracerfy(lead as any, { deep });
+    const result = await runTracerfy(lead as any);
 
     const now = new Date();
     const update: Record<string, any> = {
       skipTraced: true,
       skipTracedAt: now,
-      // Stamp the deep-trace timestamp only on the enhanced run so the UI can hide the
-      // Deep Skip Trace button and show a "deep skip traced" badge (Frank Aug-2026).
-      ...(deep ? { deepSkipTracedAt: now } : {}),
+      // Every trace is the enhanced tier now, so this is always stamped — it is what hides
+      // the button on the card and blocks a second 15-credit charge.
+      deepSkipTracedAt: now,
       // Persist the entire Tracerfy response so the page can surface every field
       // (DNC / TCPA / carrier / rank on each number).
       skipTraceData: result.raw ?? null,
@@ -88,10 +86,10 @@ export async function POST(
       (lead as any).id,
       'skip_trace',
       result.matched
-        ? `${deep ? 'Deep skip trace' : 'Skip trace'}: ${result.phones.length} phone(s), ${result.emails.length} email(s)`
+        ? `Skip trace: ${result.phones.length} phone(s), ${result.emails.length} email(s)`
           + `${personCount ? `, ${personCount} person(s) on loan` : ''}`
           + `${coInsuredName ? `, co-insured ${coInsuredName}` : ''}`
-        : `${deep ? 'Deep skip trace' : 'Skip trace'}: no match found`,
+        : `Skip trace: no match found`,
       { phones: result.phones, emails: result.emails, persons: personCount, insuredPatch },
       createdBy,
     );

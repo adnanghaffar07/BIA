@@ -169,6 +169,23 @@ export const MONMOUTH_ZIPS = new Set([
   '07722', '07724', '07726', '07728', '07730', '07731', '07733', '07746', '07748',
 ]);
 export type LeadCounty = 'Monmouth' | 'Middlesex' | 'Ocean' | '';
+
+// Counties the County filter offers. Somerset/Mercer are here because ZIP boundaries
+// cross county lines — 08812 splits Dunellen (Middlesex) from Green Brook (Somerset),
+// and 08512 splits Cranbury (Middlesex) from East Windsor (Mercer). Filtering on the
+// ZIP map alone mislabelled those leads, so the filter now reads the county REAPI
+// actually returned ("addressCounty") and only falls back to the ZIP map when that
+// column is empty (Frank Aug-2026).
+export const COUNTY_FILTER_OPTIONS = ['Monmouth', 'Middlesex', 'Ocean', 'Somerset', 'Mercer'] as const;
+
+/** ZIPs we know belong to a county — the fallback when "addressCounty" is missing. */
+export function zipsForCountyName(county: string): string[] {
+  const c = String(county ?? '').trim().toLowerCase();
+  if (c === 'middlesex') return [...MIDDLESEX_ZIPS];
+  if (c === 'monmouth') return [...MONMOUTH_ZIPS];
+  if (c === 'ocean') return ['08701'];
+  return []; // Somerset / Mercer have no dedicated target ZIPs — county column only
+}
 export function countyForZip(zip?: string | null): LeadCounty {
   const z = String(zip ?? '').trim();
   if (MIDDLESEX_ZIPS.has(z)) return 'Middlesex';

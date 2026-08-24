@@ -11,7 +11,7 @@ import AllInboxIcon from '@mui/icons-material/AllInbox';
 import SearchForm from '@/components/SearchForm';
 import LeadsTable from '@/components/LeadsTable';
 import { LeadFilters } from '@/types/lead';
-import { ERROR_MESSAGES } from '@/lib/constants';
+import { ERROR_MESSAGES, REAPI_TARGET_ZIPS } from '@/lib/constants';
 
 type TabValue = 'all' | 'engine1' | 'engine2';
 
@@ -20,7 +20,7 @@ export default function LeadsPage() {
   const [counts, setCounts] = useState<{ total: number; engine1: number; engine2: number }>({ total: 0, engine1: 0, engine2: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<{ grade?: string; status?: string; size: number; effectiveDate?: string; effectiveTo?: string; carrier?: string }>({ size: 100 });
+  const [filters, setFilters] = useState<{ grade?: string; status?: string; size: number; effectiveDate?: string; effectiveTo?: string; carrier?: string; propertyType?: string; county?: string; zip?: string }>({ size: 100 });
   const [activeTab, setActiveTab] = useState<TabValue>('all');
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
 
@@ -47,7 +47,7 @@ export default function LeadsPage() {
     try { sessionStorage.setItem('biaLeadsView', JSON.stringify({ filters, activeTab })); } catch { /* ignore */ }
   }, [filters, activeTab]);
 
-  const fetchLeads = async (tab: TabValue, f: { grade?: string; status?: string; size: number; effectiveDate?: string; effectiveTo?: string; carrier?: string }) => {
+  const fetchLeads = async (tab: TabValue, f: { grade?: string; status?: string; size: number; effectiveDate?: string; effectiveTo?: string; carrier?: string; propertyType?: string; county?: string; zip?: string }) => {
     try {
       setLoading(true);
       setError(null);
@@ -61,6 +61,11 @@ export default function LeadsPage() {
       if (f.grade) url.searchParams.set('grade', f.grade);
       if (f.status) url.searchParams.set('status', f.status);
       if (f.carrier) url.searchParams.set('carrier', f.carrier);
+      if (f.propertyType) url.searchParams.set('propertyType', f.propertyType);
+      // County/ZIP are server-side (Frank Aug-2026) so their counts describe the whole
+      // book rather than whichever rows this page happened to load.
+      if (f.county) url.searchParams.set('county', f.county);
+      if (f.zip) url.searchParams.set('zip', f.zip);
       if (f.effectiveDate) { url.searchParams.set('effectiveDate', f.effectiveDate); url.searchParams.set('orderBy', 'xdate'); }
       if (f.effectiveTo) url.searchParams.set('effectiveTo', f.effectiveTo);
 
@@ -91,7 +96,7 @@ export default function LeadsPage() {
       newFilters.engine === 2 ? 'engine2' : 'all';
     // Page size is no longer a form field — preserve the current size (100 default,
     // or "all" if the user picked All in the pagination) across filter changes.
-    const f = { grade: newFilters.grade, status: newFilters.status, size: filters.size ?? 100, effectiveDate: newFilters.effectiveDate, effectiveTo: newFilters.effectiveTo, carrier: newFilters.carrier };
+    const f = { grade: newFilters.grade, status: newFilters.status, size: filters.size ?? 100, effectiveDate: newFilters.effectiveDate, effectiveTo: newFilters.effectiveTo, carrier: newFilters.carrier, propertyType: newFilters.propertyType, county: filters.county, zip: filters.zip };
     setActiveTab(tab);
     setFilters(f);
     fetchLeads(tab, f);
@@ -243,6 +248,16 @@ export default function LeadsPage() {
           loading={loading}
           resetKey={activeTab}
           onRowsPerPageChange={(rpp) => { if (rpp === -1) loadAll(); }}
+          serverFilters={{
+            county: filters.county ?? '',
+            zip: filters.zip ?? '',
+            zipOptions: [...REAPI_TARGET_ZIPS].sort(),
+            onChange: (next) => {
+              const f = { ...filters, ...next };
+              setFilters(f);
+              fetchLeads(activeTab, f);
+            },
+          }}
         />
       )}
 

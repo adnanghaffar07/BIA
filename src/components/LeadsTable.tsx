@@ -20,7 +20,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { useRouter, usePathname } from 'next/navigation';
 import { Lead } from '@/types/lead';
 import { LeadGrade } from '@/types/grade';
-import { countyForZip } from '@/lib/constants';
+import { countyForZip, COUNTY_FILTER_OPTIONS } from '@/lib/constants';
 import { useStickyState } from '@/hooks/useStickyState';
 import { formatCurrency } from '@/utils/formatAddress';
 import { exportLeadsToCSV } from '@/utils/csvExport';
@@ -42,6 +42,19 @@ interface LeadsTableProps {
    * the Queue's date/carrier controls belong here, not in the page header).
    */
   extraFilters?: React.ReactNode;
+  /**
+   * Drive County/ZIP from the SERVER instead of filtering the loaded rows (Frank Aug-2026).
+   * Without this the two selects only ever saw the rows already fetched — at the default
+   * page size of 100 a county count silently described a 100-row sample. Pages that pass
+   * this own the values and refetch on change; pages that don't keep the old local
+   * behaviour, which is still correct for a fully-loaded list (the Queue).
+   */
+  serverFilters?: {
+    county: string;
+    zip: string;
+    zipOptions: string[];
+    onChange: (next: { county?: string; zip?: string }) => void;
+  };
 }
 
 function getLeadRowKey(lead: any, index: number): string {
@@ -371,6 +384,7 @@ export default function LeadsTable({
   onPageChange,
   onRowsPerPageChange,
   extraFilters,
+  serverFilters,
 }: LeadsTableProps) {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState<number>(25);
@@ -384,6 +398,13 @@ export default function LeadsTable({
   const [filterStatus, setFilterStatus] = useStickyState(`lt:${pathname}:status`, '');
   const [filterCounty, setFilterCounty] = useStickyState(`lt:${pathname}:county`, ''); // Monmouth | Middlesex | Ocean
 
+  // When the page filters server-side its values win and the local state is bypassed.
+  const isServer = !!serverFilters;
+  const countyValue = serverFilters ? serverFilters.county : filterCounty;
+  const zipValue = serverFilters ? serverFilters.zip : filterZip;
+  const setCountyValue = (v: string) => (serverFilters ? serverFilters.onChange({ county: v }) : setFilterCounty(v));
+  const setZipValue = (v: string) => (serverFilters ? serverFilters.onChange({ zip: v }) : setFilterZip(v));
+
   // Derive unique ZIPs from current leads for the ZIP dropdown
   const availableZips = useMemo(() => {
     const zips = new Set<string>();
@@ -393,6 +414,8 @@ export default function LeadsTable({
     });
     return Array.from(zips).sort();
   }, [leads]);
+  // Server-side ZIP options come from the whole target list, not just the loaded rows.
+  const zipChoices = serverFilters ? serverFilters.zipOptions : availableZips;
 
   const filteredLeads = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -403,20 +426,21 @@ export default function LeadsTable({
       const zip = addr.zip || '';
 
       if (q && !street.includes(q) && !owner.includes(q) && !zip.includes(q)) return false;
-      if (filterZip && zip !== filterZip) return false;
-      if (filterCounty && countyForZip(zip) !== filterCounty) return false;
+      if (!isServer && filterZip && zip !== filterZip) return false;
+      if (!isServer && filterCounty && countyForZip(zip) !== filterCounty) return false;
       if (filterStatus && (l.status ?? 'new') !== filterStatus) return false;
       return true;
     });
-  }, [leads, search, filterZip, filterCounty, filterStatus]);
+  }, [leads, search, filterZip, filterCounty, filterStatus, isServer]);
 
-  const hasFilters = search || filterZip || filterCounty || filterStatus;
+  const hasFilters = search || zipValue || countyValue || filterStatus;
 
   const clearFilters = () => {
     setSearch('');
     setFilterZip('');
     setFilterCounty('');
     setFilterStatus('');
+    if (serverFilters) serverFilters.onChange({ county: '', zip: '' });
   };
 
   const totalRows = filteredLeads.length;
@@ -425,7 +449,7 @@ export default function LeadsTable({
   const maxPage = useMemo(() => Math.max(0, Math.ceil(totalRows / effRpp) - 1), [totalRows, effRpp]);
   const safePage = Math.min(page, maxPage);
 
-  useEffect(() => { setPage(0); }, [leads, search, filterZip, filterCounty, filterStatus]);
+  useEffect(() => { setPage(0); }, [leads, search, zipValue, countyValue, filterStatus]);
   useEffect(() => { if (page > maxPage) setPage(maxPage); }, [page, maxPage]);
   // Tab change → reset to page 1 @ 25/page (Frank Jun-2026)
   useEffect(() => { setPage(0); setRowsPerPage(25); }, [resetKey]);
@@ -481,18 +505,16 @@ export default function LeadsTable({
           />
           <FormControl size="small" sx={{ minWidth: 140 }}>
             <InputLabel>County</InputLabel>
-            <Select value={filterCounty} label="County" onChange={(e) => setFilterCounty(e.target.value)}>
+            <Select value={countyValue} label="County" onChange={(e) => setCountyValue(e.target.value)}>
               <MenuItem value="">All Counties</MenuItem>
-              <MenuItem value="Monmouth">Monmouth</MenuItem>
-              <MenuItem value="Middlesex">Middlesex</MenuItem>
-              <MenuItem value="Ocean">Ocean</MenuItem>
+              {COUNTY_FILTER_OPTIONS.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
             </Select>
           </FormControl>
           <FormControl size="small" sx={{ minWidth: 130 }}>
             <InputLabel>ZIP</InputLabel>
-            <Select value={filterZip} label="ZIP" onChange={(e) => setFilterZip(e.target.value)}>
+            <Select value={zipValue} label="ZIP" onChange={(e) => setZipValue(e.target.value)}>
               <MenuItem value="">All ZIPs</MenuItem>
-              {availableZips.map((z) => <MenuItem key={z} value={z}>{z}</MenuItem>)}
+              {zipChoices.map((z) => <MenuItem key={z} value={z}>{z}</MenuItem>)}
             </Select>
           </FormControl>
           <FormControl size="small" sx={{ minWidth: 150 }}>

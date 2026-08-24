@@ -1,6 +1,7 @@
 import sql, { pool } from '@/lib/neon';
 import { LeadStatus } from '@/types/lead';
 import { assignPipelineEngine, getRenewalTargetDate } from './pipeline.service';
+import { zipsForCountyName } from '@/lib/constants';
 
 // ─── Column lists ────────────────────────────────────────────────────────────
 
@@ -312,6 +313,39 @@ function carrierColumn(carrier?: string): string | null {
   return null;
 }
 
+/**
+ * Shared county/ZIP predicate for BOTH the list and the counts, so the table and the
+ * tab badges can never disagree. County reads REAPI's "addressCounty" — authoritative,
+ * because ZIPs straddle county lines (08812 is Dunellen/Middlesex AND Green Brook/
+ * Somerset; 08512 is Cranbury/Middlesex AND East Windsor/Mercer) — and only falls back
+ * to our ZIP map when that column is empty. Mutates conditions/params in place to match
+ * the style of both callers.
+ */
+function applyCountyZip(
+  filters: { county?: string; zip?: string } | undefined,
+  conditions: string[],
+  params: (string | string[])[],
+): void {
+  if (filters?.county) {
+    params.push(`${filters.county}%`);
+    const likeIdx = params.length;
+    const fallbackZips = zipsForCountyName(filters.county);
+    if (fallbackZips.length) {
+      params.push(fallbackZips);
+      conditions.push(
+        `(("addressCounty" ILIKE $${likeIdx})`
+        + ` OR (NULLIF(TRIM("addressCounty"), '') IS NULL AND "addressZip" = ANY($${params.length})))`,
+      );
+    } else {
+      conditions.push(`"addressCounty" ILIKE $${likeIdx}`);
+    }
+  }
+  if (filters?.zip) {
+    params.push(filters.zip);
+    conditions.push(`"addressZip" = $${params.length}`);
+  }
+}
+
 export async function getLeadsFromDb(filters?: {
   engine?: number;
   grade?: string;
@@ -319,6 +353,14 @@ export async function getLeadsFromDb(filters?: {
   /** Effective-date filter (daily triage): single day, or a [from,to] range */
   effectiveDate?: string;
   effectiveTo?: string;
+  /** County + ZIP (Frank Aug-2026). These used to be browser-side filters over only the
+   *  rows already loaded, so a county count silently reflected a 100-row sample rather
+   *  than the book. Server-side now, so every filter counts the same population. */
+  county?: string;
+  zip?: string;
+  /** Property type (Frank Aug-2026): 'SFR' | 'CONDO' — every condo-ish landUse already
+   *  carries propertyType='CONDO', so plain equality matches the QC report's split. */
+  propertyType?: string;
   /** Carrier filter: 'travelers' | 'plymouth' — leads strictly eligible for that carrier */
   carrier?: string;
   /** Exclude leads with these statuses — e.g. ['bound','lost'] for the active queue */
@@ -355,6 +397,11 @@ export async function getLeadsFromDb(filters?: {
       params.push(filters.effectiveDate);
       conditions.push(`"effectiveDate"::date = $${params.length}`);
     }
+  }
+  applyCountyZip(filters, conditions, params);
+  if (filters?.propertyType) {
+    params.push(String(filters.propertyType).toUpperCase());
+    conditions.push(`UPPER("propertyType") = $${params.length}`);
   }
   const carrierCol = carrierColumn(filters?.carrier);
   if (carrierCol) conditions.push(`"${carrierCol}" = 'eligible'`);
@@ -410,11 +457,16 @@ export async function getLeadCounts(filters?: {
   effectiveDate?: string;
   effectiveTo?: string;
   carrier?: string;
+  propertyType?: string;
+  county?: string;
+  zip?: string;
 }): Promise<{ total: number; engine1: number; engine2: number }> {
   const conditions: string[] = [];
   const params: any[] = [];
   if (filters?.grade) { params.push(filters.grade); conditions.push(`"grade" = $${params.length}`); }
   if (filters?.status) { params.push(filters.status); conditions.push(`"status" = $${params.length}`); }
+  applyCountyZip(filters, conditions, params);
+  if (filters?.propertyType) { params.push(String(filters.propertyType).toUpperCase()); conditions.push(`UPPER("propertyType") = $${params.length}`); }
   const cCol = carrierColumn(filters?.carrier);
   if (cCol) conditions.push(`"${cCol}" = 'eligible'`);
   if (filters?.effectiveDate) {

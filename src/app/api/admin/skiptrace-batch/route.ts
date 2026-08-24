@@ -10,18 +10,22 @@ import { compareOwnerNames } from '@/services/ownerNameMatch.service';
  * co-insured (spouse) phone/email + DOB, and to QC insured names against Tracerfy.
  *
  *   GET  /api/admin/skiptrace-batch[?from=YYYY-MM-DD]  → DRY RUN (free) — count + credit est.
- *   POST /api/admin/skiptrace-batch[?from=YYYY-MM-DD]  → REAL RUN — 5 Tracerfy credits/account.
+ *   POST /api/admin/skiptrace-batch[?from=YYYY-MM-DD]  → REAL RUN — 15 Tracerfy credits/account.
  *
  * Returns the name-discrepancy list (address / old name / Tracerfy name) for carrier-portal
  * fixes, plus a contact-coverage summary and the no-email list. SuperAdmin only (middleware).
  */
+// The 5-credit standard lookup was removed Aug-2026, so runTracerfy is now always the
+// 15-credit ENHANCED tier. Leads already carrying deepSkipTracedAt are skipped so this
+// batch can never re-charge an account the card (or the Aug-2026 blast) already traced.
+const DEEP_CREDITS_PER_LEAD = 15;
 const GAP_MS = 200;
 const DEFAULT_FROM = '2026-10-05';
 
 function ratedInRange(from: string) {
   return sql`
     SELECT * FROM "Lead"
-    WHERE "status" = 'rated' AND "effectiveDate" >= ${from}
+    WHERE "status" = 'rated' AND "effectiveDate" >= ${from} AND "deepSkipTracedAt" IS NULL
     ORDER BY "effectiveDate"
   ` as Promise<any[]>;
 }
@@ -35,8 +39,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true, dryRun: true, from,
       accounts: rows.length,
-      estimatedCredits: rows.length * 5,
-      note: `Would run Tracerfy on ${rows.length} rated accounts effective ${from}+ (≈${rows.length * 5} credits).`,
+      estimatedCredits: rows.length * DEEP_CREDITS_PER_LEAD,
+      note: `Would run Tracerfy on ${rows.length} rated accounts effective ${from}+ (≈${rows.length * DEEP_CREDITS_PER_LEAD} credits at 15/account).`,
     });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err?.message || 'Dry run failed' }, { status: 500 });
@@ -77,7 +81,7 @@ export async function POST(req: NextRequest) {
 
       // Contacts — fill empty slots only (the book was purged of REAPI contacts, so mostly empty).
       const update: Record<string, any> = {
-        skipTraced: true, skipTracedAt: new Date(), skipTraceData: result.raw,
+        skipTraced: true, skipTracedAt: new Date(), deepSkipTracedAt: new Date(), skipTraceData: result.raw,
         skipTraceOwnerName: result.ownerName ?? null,
         ...result.insuredPatch,
       };
@@ -103,7 +107,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true, dryRun: false, from,
-      creditsSpent: coverage.processed * 5,
+      creditsSpent: coverage.processed * DEEP_CREDITS_PER_LEAD,
       coverage, discrepancies, noEmail,
     });
   } catch (err: any) {

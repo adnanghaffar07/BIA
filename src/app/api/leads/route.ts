@@ -35,6 +35,8 @@ function offsetDate(days: number): string {
  *   engine  — 1 (New Purchase), 2 (Renewal), omit for all
  *   grade   — A | B | C | D (filter DB results)
  *   status  — new | contacted | qualified | quote_sent | bound | lost
+ *   propertyType — SFR | CONDO (Frank Aug-2026)
+ *   county / zip — server-side so the counts match the table (Frank Aug-2026)
  *   source  — 'db' to skip API and return stored leads only
  *   active  — 'true' excludes bound/lost (active working queue)
  *   closed  — 'true' returns only bound/lost leads
@@ -56,6 +58,9 @@ export async function GET(request: NextRequest) {
     const effectiveDate = searchParams.get('effectiveDate') || undefined; // daily triage filter
     const effectiveTo   = searchParams.get('effectiveTo') || undefined;   // optional range end
     const carrier       = searchParams.get('carrier') || undefined;       // 'travelers' | 'plymouth'
+    const propertyType  = searchParams.get('propertyType') || undefined;  // 'SFR' | 'CONDO'
+    const county        = searchParams.get('county') || undefined;        // 'Middlesex' | 'Monmouth' | …
+    const zip           = searchParams.get('zip') || undefined;
 
     // Quarantined leads are parked by the appetite rules — never in the working queue.
     const excludeStatuses = active ? [...PARKED_STATUSES] : undefined;
@@ -66,7 +71,7 @@ export async function GET(request: NextRequest) {
       const leads = await getLeadsFromDb({
         engine, grade,
         status: closed ? undefined : (status || undefined),
-        effectiveDate, effectiveTo, carrier,
+        effectiveDate, effectiveTo, carrier, propertyType, county, zip,
         excludeStatuses,
         editedOnly,
         orderBy,
@@ -77,7 +82,7 @@ export async function GET(request: NextRequest) {
         ? leads.filter((l) => l.status === 'bound' || l.status === 'lost')
         : leads;
       // DB-wide counts (per engine) so the UI can show totals + offer "load all"
-      const counts = await getLeadCounts({ grade, status: closed ? undefined : (status || undefined), effectiveDate, effectiveTo, carrier });
+      const counts = await getLeadCounts({ grade, status: closed ? undefined : (status || undefined), effectiveDate, effectiveTo, carrier, propertyType, county, zip });
       return NextResponse.json({ success: true, data: result, total: result.length, counts, source: 'db' });
     }
 
