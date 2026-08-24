@@ -27,6 +27,18 @@ export async function POST(
     // (any grade, traced or not) — it's a deliberate, per-lead recovery a producer chooses.
     const deep = request.nextUrl.searchParams.get('deep') === '1';
 
+    // Credit guard (Frank Aug-2026): the enhanced tier is 15 credits, so it runs at most
+    // ONCE per lead. The card already hides the button once deepSkipTracedAt is set, but a
+    // stale tab or a retry could still post — refuse here too so the charge cannot repeat.
+    // The Aug-2026 retroactive blast (299 accounts, since removed) stamped this same field,
+    // so those leads are already protected here too.
+    if (deep && (lead as any).deepSkipTracedAt) {
+      return NextResponse.json(
+        { success: false, error: 'This lead has already had a deep skip trace.' },
+        { status: 400 },
+      );
+    }
+
     if (!deep && !canRunSkipTrace(lead as any)) {
       return NextResponse.json(
         {
@@ -49,6 +61,9 @@ export async function POST(
     const update: Record<string, any> = {
       skipTraced: true,
       skipTracedAt: now,
+      // Stamp the deep-trace timestamp only on the enhanced run so the UI can hide the
+      // Deep Skip Trace button and show a "deep skip traced" badge (Frank Aug-2026).
+      ...(deep ? { deepSkipTracedAt: now } : {}),
       // Persist the entire Tracerfy response so the page can surface every field
       // (DNC / TCPA / carrier / rank on each number).
       skipTraceData: result.raw ?? null,

@@ -195,6 +195,7 @@ export interface Lead {
   // Skip trace results (populated ONLY after carrier qualification)
   skipTraced?: boolean;
   skipTracedAt?: string;
+  deepSkipTracedAt?: string;     // set once the Tracerfy enhanced (deep) trace has run — hides the button
   skipTraceOwnerName?: string;   // insured name Tracerfy returned — for the mismatch/override UI
   /** Full REAPI v2 SkipTrace response (identity, phones, emails, demographics, …). */
   skipTraceData?: any;

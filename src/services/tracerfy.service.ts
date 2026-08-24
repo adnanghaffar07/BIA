@@ -130,12 +130,16 @@ export async function runTracerfy(lead: Lead, opts?: { deep?: boolean }): Promis
     }
   }
 
-  // The insured/owner name Tracerfy returned — property owner if flagged, else the first
-  // person. Used for the name-mismatch surface (never auto-applied to the on-file name).
+  // Name-mismatch surface (Frank Aug-2026): flag ONLY when the on-file insured matched
+  // NONE of the traced people. If the insured IS among the persons returned — just not the
+  // top-ranked / property_owner one (e.g. a spouse owns the deed) — there is no genuine
+  // mismatch, so leave ownerName null and no override is offered. Never auto-applied.
   const ownerRaw = rawPersons.find((p: any) => p?.property_owner) ?? rawPersons[0];
-  const ownerName = ownerRaw
-    ? [ownerRaw.first_name, ownerRaw.last_name].filter(Boolean).join(' ').trim() || null
-    : null;
+  const ownerName = insured
+    ? null
+    : ownerRaw
+      ? [ownerRaw.first_name, ownerRaw.last_name].filter(Boolean).join(' ').trim() || null
+      : null;
 
   return {
     phones: [...new Set(phones)],

@@ -1085,16 +1085,23 @@ export default function LeadDetailPage() {
               </Typography>
             )}
             {/* Deep Skip Trace — available on ALL leads (Frank Aug-2026). Tracerfy enhanced
-                tier (15 credits) — digs into relatives to recover a phone/email + spouse. */}
-            <Button
-              size="small" variant="contained" color="warning"
-              startIcon={skipTracing ? <CircularProgress size={13} color="inherit" /> : <PersonSearchIcon />}
-              onClick={() => runSkipTraceAction(true)}
-              disabled={skipTracing}
-              sx={{ mt: 0.5, mb: 0.5 }}
-            >
-              {skipTracing ? 'Deep tracing…' : 'Deep Skip Trace'}
-            </Button>
+                tier (15 credits) — digs into relatives to recover a phone/email + spouse.
+                Once run, the button is replaced by a badge so it can't be re-charged. */}
+            {lead.deepSkipTracedAt ? (
+              <Chip size="small" color="warning" variant="outlined" icon={<PersonSearchIcon />}
+                sx={{ mt: 0.5, mb: 0.5 }}
+                label={`Deep skip traced · ${new Date(lead.deepSkipTracedAt).toLocaleDateString()}`} />
+            ) : (
+              <Button
+                size="small" variant="contained" color="warning"
+                startIcon={skipTracing ? <CircularProgress size={13} color="inherit" /> : <PersonSearchIcon />}
+                onClick={() => runSkipTraceAction(true)}
+                disabled={skipTracing}
+                sx={{ mt: 0.5, mb: 0.5 }}
+              >
+                {skipTracing ? 'Deep tracing…' : 'Deep Skip Trace'}
+              </Button>
+            )}
             {/* Insured-name mismatch (Frank Aug-2026): skip trace found a different name.
                 Show both and let the producer override the on-file name. */}
             {nameMismatch && (

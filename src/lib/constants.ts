@@ -179,7 +179,15 @@ export function countyForZip(zip?: string | null): LeadCounty {
 
 export const REAPI_BASE_FILTERS = {
   state: 'NJ',
-  flood_zone: false,
+  // NO flood_zone filter here — deliberately removed (Frank Aug-2026, Middlesex launch).
+  // REAPI's flood_zone flag is wrong across most of Middlesex: it reports 100% of Edison
+  // (08817) and New Brunswick (08901), 721/726 of East Brunswick (08816) and 1,499/1,640 of
+  // Lakewood (08701) as flood_zone:true. Sending flood_zone:false therefore blanked 24 of 36
+  // Middlesex ZIPs entirely and cut the county's 2024 sales from 7,852 to 914 — that is why
+  // the Middlesex pull looked so thin. Flood is no longer a sourcing knockout anyway: per
+  // Frank Jun-2026 it is a GRADE outcome (SFHA -> D, shaded X -> C cap) sourced per-lead from
+  // the FEMA NFHL API in femaFlood.service.ts, which is free and accurate. Filter on that,
+  // never on REAPI's flag.
   vacant: false,
   pre_foreclosure: false,
   foreclosure: false,
