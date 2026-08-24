@@ -427,7 +427,15 @@ export default function LeadsTable({
 
       if (q && !street.includes(q) && !owner.includes(q) && !zip.includes(q)) return false;
       if (!isServer && filterZip && zip !== filterZip) return false;
-      if (!isServer && filterCounty && countyForZip(zip) !== filterCounty) return false;
+      if (!isServer && filterCounty) {
+        // Prefer the county REAPI actually returned; the ZIP map is only a fallback,
+        // because ZIPs straddle county lines (08812, 08512). Same rule the server-side
+        // filter uses, so the Queue and the Leads page agree (Frank Aug-2026).
+        const ac = String(l.addressCounty ?? '').trim();
+        const bare = ac.toLowerCase().endsWith(' county') ? ac.slice(0, -' county'.length).trim() : ac;
+        const c = bare || countyForZip(zip);
+        if (c !== filterCounty) return false;
+      }
       if (filterStatus && (l.status ?? 'new') !== filterStatus) return false;
       return true;
     });

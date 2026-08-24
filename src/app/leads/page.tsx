@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Container, Box, Alert, CircularProgress, Typography, Button,
   Snackbar, Tabs, Tab, Chip, FormControl, InputLabel, Select, MenuItem,
@@ -26,6 +26,9 @@ export default function LeadsPage() {
 
   const engineForTab = (t: TabValue): 1 | 2 | undefined => (t === 'engine1' ? 1 : t === 'engine2' ? 2 : undefined);
   const [restoreKey, setRestoreKey] = useState(0);
+  // Stale-response guard: a broad fetch (e.g. "All" rows) can outlive a newer, narrower one
+  // and overwrite it. Only the newest request writes state (Frank Aug-2026).
+  const reqSeq = useRef(0);
 
   // Restore the last-used filters so the Back button returns to the same filtered
   // list (Frank Jun-2026), then keep them persisted across the detail-page round-trip.
@@ -48,6 +51,7 @@ export default function LeadsPage() {
   }, [filters, activeTab]);
 
   const fetchLeads = async (tab: TabValue, f: { grade?: string; status?: string; size: number; effectiveDate?: string; effectiveTo?: string; carrier?: string; propertyType?: string; county?: string; zip?: string }) => {
+    const seq = ++reqSeq.current;
     try {
       setLoading(true);
       setError(null);
@@ -73,6 +77,7 @@ export default function LeadsPage() {
       if (!res.ok) throw new Error('Failed to fetch leads');
 
       const result = await res.json();
+      if (seq !== reqSeq.current) return; // superseded by a newer filter change
       if (result.success) {
         setAllLeads(result.data || []);
         if (result.counts) setCounts(result.counts);
@@ -80,11 +85,12 @@ export default function LeadsPage() {
         throw new Error(result.error || 'Failed to fetch leads');
       }
     } catch (err) {
+      if (seq !== reqSeq.current) return;
       const msg = err instanceof Error ? err.message : ERROR_MESSAGES.FETCH_LEADS_FAILED;
       setError(msg);
       setSnackbar({ open: true, message: msg, severity: 'error' });
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   };
 

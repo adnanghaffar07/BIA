@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Container, Box, Typography, Tabs, Tab, Chip,
   CircularProgress, Alert, Card, CardContent, Stack, Grid, Tooltip,
@@ -39,7 +39,17 @@ export default function QueuePage() {
   const [effFrom,     setEffFrom]       = useStickyState('queue:effFrom', '');
   const [effTo,       setEffTo]         = useStickyState('queue:effTo', '');
 
+  // Stale-response guard (Frank Aug-2026). This page mounts with the sticky filters still
+  // empty — useStickyState restores from sessionStorage in an effect — so the first load()
+  // fires UNFILTERED and a second, filtered load() follows a tick later. The unfiltered
+  // request pulls the whole book (size=100000) and lands LAST, overwriting the filtered
+  // result: the date boxes showed 10/26 while the list still showed all 775 Quote-Ready
+  // leads. Tag every request and let only the newest one write state. Also covers a
+  // producer changing the date twice in quick succession.
+  const reqSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     setError(null);
     try {
@@ -61,6 +71,8 @@ export default function QueuePage() {
       const [activeJson, closedJson, editedJson, dashJson] = await Promise.all([
         activeRes.json(), closedRes.json(), editedRes.json(), dashRes.json(),
       ]);
+      // A newer load() started while this one was in flight — its result is the truth.
+      if (seq !== reqSeq.current) return;
       if (activeJson.success) setActiveLeads(activeJson.data || []);
       else setError(activeJson.error || 'Failed to load active leads');
       if (closedJson.success) setClosedLeads(closedJson.data || []);
@@ -78,9 +90,10 @@ export default function QueuePage() {
         });
       }
     } catch {
-      setError('Failed to load queue');
+      if (seq === reqSeq.current) setError('Failed to load queue');
     } finally {
-      setLoading(false);
+      // Only the newest request may clear the spinner, or a superseded one un-loads the UI.
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, [effFrom, effTo]);
 
