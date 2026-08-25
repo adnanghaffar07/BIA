@@ -140,9 +140,20 @@ export const SUCCESS_MESSAGES = {
 // Chadha). Filtering on it at source means such leads never arrive and the error can
 // never be caught. absentee_owner is the narrower, safer cut.
 export const REAPI_TARGET_ZIPS = [
-  // ── Monmouth County — original footprint ──────────────────────────────────
-  '07722', '07724', '07726', '07728', '07730',
-  '07731', '07733', '07746', '07748', '08701',
+  // ── Monmouth County — FULL county (Frank Aug-2026) ────────────────────────
+  // Was 9 ZIPs ("original footprint") = ~18% of the county. Now every Monmouth
+  // street-address ZIP per the USPS county listing. PO-Box-only and unique ZIPs
+  // are deliberately omitted — no homes to quote there.
+  // NOTE: ~20 of these are shore towns that the coastal rule grades D on arrival
+  // (barrier island / 2-5mi band). They still cost a credit each to pull, so run
+  // the free Preview before the first full-county pull.
+  '07701', '07702', '07703', '07704', '07711', '07712', '07716', '07717', '07718', '07719',
+  '07720', '07721', '07722', '07723', '07724', '07726', '07727', '07728', '07730', '07731',
+  '07732', '07733', '07734', '07735', '07737', '07738', '07739', '07740', '07746', '07747',
+  '07748', '07750', '07751', '07753', '07755', '07756', '07757', '07758', '07760', '07762',
+  '07764', '07799', '08501', '08510', '08514', '08535', '08730', '08736', '08750',
+  // Lakewood 08701 is Ocean County, kept in the Monmouth pull option since launch.
+  '08701',
   // ── Middlesex County — Frank Aug-2026 expansion (Travelers + Plymouth Rock) ─
   // All 25 municipalities. WIPP owner-name verification is wired for 23 of them
   // (see WIPP_BY_ZIP in taxRoll.service); Dunellen (Link2Gov) and Old Bridge
@@ -166,7 +177,11 @@ export const MIDDLESEX_ZIPS = new Set([
   '08863', '08872', '08879', '08882', '08884', '08901', '08902', '08904',
 ]);
 export const MONMOUTH_ZIPS = new Set([
-  '07722', '07724', '07726', '07728', '07730', '07731', '07733', '07746', '07748',
+  '07701', '07702', '07703', '07704', '07711', '07712', '07716', '07717', '07718', '07719',
+  '07720', '07721', '07722', '07723', '07724', '07726', '07727', '07728', '07730', '07731',
+  '07732', '07733', '07734', '07735', '07737', '07738', '07739', '07740', '07746', '07747',
+  '07748', '07750', '07751', '07753', '07755', '07756', '07757', '07758', '07760', '07762',
+  '07764', '07799', '08501', '08510', '08514', '08535', '08730', '08736', '08750',
 ]);
 export type LeadCounty = 'Monmouth' | 'Middlesex' | 'Ocean' | '';
 
