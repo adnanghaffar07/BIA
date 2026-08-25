@@ -5,7 +5,7 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Paper, IconButton, Box, TablePagination, CircularProgress,
   Typography, Button, Stack, Collapse, Chip, Menu, MenuItem, ListItemIcon, ListItemText,
-  TextField, Select, FormControl, InputLabel, InputAdornment,
+  TextField, Select, FormControl, InputLabel, InputAdornment, Tooltip,
 } from '@mui/material';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
@@ -17,6 +17,7 @@ import AutorenewIcon from '@mui/icons-material/Autorenew';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import { useRouter, usePathname } from 'next/navigation';
 import { Lead } from '@/types/lead';
 import { LeadGrade } from '@/types/grade';
@@ -231,9 +232,33 @@ function LeadRow({ lead }: { lead: any }) {
           )}
         </TableCell>
 
-        {/* Owner */}
+        {/* Owner + skip-trace badge (Frank Aug-2026). Deep trace is the only tier, so
+            deepSkipTracedAt is the marker. Colour carries the useful half: green =
+            traced AND we got a contact; grey = traced and Tracerfy had nothing, which
+            is a dead end rather than something still to do. No badge = never traced. */}
         <TableCell>
           <Typography variant="body2" sx={{ fontWeight: 500 }}>{getOwnerDisplayName(lead)}</Typography>
+          {lead.deepSkipTracedAt && (() => {
+            const hasContact = !!(String(lead.phone1 ?? '').trim() || String(lead.phone2 ?? '').trim()
+              || String(lead.email1 ?? '').trim() || String(lead.email2 ?? '').trim());
+            const on = new Date(lead.deepSkipTracedAt).toLocaleDateString();
+            return (
+              <Tooltip title={hasContact ? `Deep skip traced ${on} — contact found` : `Deep skip traced ${on} — no contact returned`}>
+                <Chip
+                  size="small"
+                  icon={<PersonSearchIcon sx={{ fontSize: 12 }} />}
+                  label={hasContact ? 'Traced' : 'Traced · none'}
+                  sx={{
+                    mt: 0.4, height: 18, fontSize: 10, fontWeight: 600,
+                    '& .MuiChip-icon': { ml: '4px', mr: '-2px' },
+                    color: hasContact ? '#166534' : '#6b7280',
+                    bgcolor: hasContact ? '#dcfce7' : '#f3f4f6',
+                    border: `1px solid ${hasContact ? '#86efac' : '#d1d5db'}`,
+                  }}
+                />
+              </Tooltip>
+            );
+          })()}
         </TableCell>
 
         {/* Address + property type (SFH / Condo) — Frank Oct-2026: visible on the row ribbon */}
