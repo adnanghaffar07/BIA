@@ -2,6 +2,38 @@ import { API_CONFIG, REAPI_BASE_FILTERS, REAPI_TARGET_ZIPS, MIDDLESEX_ZIPS } fro
 
 /** Which target ZIPs a pull covers (Frank Aug-2026 — pull by county). */
 export type PullCounty = 'all' | 'monmouth' | 'middlesex';
+/**
+ * Counties each pull option is allowed to bring in. ZIP boundaries cross county lines,
+ * so a ZIP-scoped scan alone is not a county filter: 08812 covers Dunellen (Middlesex)
+ * AND Green Brook (Somerset); 08512 covers Cranbury (Middlesex) AND East Windsor
+ * (Mercer). That leaked 15 out-of-footprint leads into the book (12 Somerset, 3 Mercer).
+ *
+ * REAPI cannot filter this for us: sending county alongside zip is ignored — 08812
+ * returns the same 152 rows with county:'Middlesex', county:'Somerset', or no county at
+ * all (measured 2026-08-25). So the check happens here, on the full record REAPI returns,
+ * which is the first point the real county is known.
+ *
+ * 'monmouth' keeps Ocean because that option is the original footprint and deliberately
+ * includes Lakewood (08701) — see zipsForCounty.
+ */
+const COUNTIES_FOR_PULL: Record<Exclude<PullCounty, 'all'>, string[]> = {
+  middlesex: ['Middlesex'],
+  monmouth: ['Monmouth', 'Ocean'],
+};
+
+/** Is this REAPI property inside the footprint the operator asked to pull? */
+export function propertyInCounty(property: { address?: { county?: string } } | null | undefined, county: PullCounty): boolean {
+  if (county === 'all') return true;
+  const allowed = COUNTIES_FOR_PULL[county];
+  if (!allowed) return true;
+  const raw = String(property?.address?.county ?? '').trim();
+  // REAPI returns "Middlesex County"; compare on the leading name, and keep anything
+  // with no county at all rather than silently dropping a record over missing data.
+  if (!raw) return true;
+  const bare = raw.toLowerCase().replace(/\s+county$/, '').trim();
+  return allowed.some((c) => c.toLowerCase() === bare);
+}
+
 export function zipsForCounty(county?: PullCounty): string[] {
   if (county === 'middlesex') return REAPI_TARGET_ZIPS.filter((z) => MIDDLESEX_ZIPS.has(z));
   if (county === 'monmouth') return REAPI_TARGET_ZIPS.filter((z) => !MIDDLESEX_ZIPS.has(z)); // Monmouth + Lakewood (original footprint)
@@ -41,6 +73,22 @@ const DETAIL_GAP_MS = 300; // small courtesy gap between PropertyDetail calls
 
 const FULL_PULL_BATCH = 100; // PropertySearch full-data page size
 
+// Topping the account up is a manager task (billing console:
+// https://console.realestateapi.com/dashboard/billing), so the UI points producers at
+// their manager rather than at a payment page they cannot action.
+
+/**
+ * REAPI has no wallet balance left. Distinct from a generic API failure because the
+ * operator can fix it, and because NOTHING was pulled or charged when it happens.
+ */
+export class ReapiCreditsError extends Error {
+  readonly code = 'REAPI_OUT_OF_CREDITS';
+  constructor() {
+    super('The RealEstateAPI account has no credits left, so scans and pulls are paused.');
+    this.name = 'ReapiCreditsError';
+  }
+}
+
 async function reapiSearch(body: Record<string, any>): Promise<any> {
   const res = await fetch(`${API_CONFIG.BASE_URL}/PropertySearch`, {
     method: 'POST',
@@ -53,7 +101,14 @@ async function reapiSearch(body: Record<string, any>): Promise<any> {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`REAPI ${res.status}: ${await res.text()}`);
+    const body = await res.text().catch(() => '');
+    // Out of REAPI wallet balance. This blocks the FREE ids_only scan too, so Preview
+    // stops working as well — worth saying plainly instead of showing the raw JSON
+    // (Frank Aug-2026). Tagged with a code so the page can render a real message.
+    if (res.status === 402 || /WALLET_INSUFFICIENT_BALANCE|Insufficient wallet balance/i.test(body)) {
+      throw new ReapiCreditsError();
+    }
+    throw new Error(`REAPI ${res.status}: ${body}`);
   }
   return res.json();
 }
@@ -170,6 +225,8 @@ export interface WeeklyPullResult {
     matched: number;
     alreadyHave: number;
     creditsSpent: number; // full-data pulls (newPulled) + PropertyDetail credits
+    /** Fetched (and charged) but discarded as outside the requested county. */
+    outOfCounty: number;
     dated: number;
     detailPulled: number;  // new Grade-A SFR leads enriched via PropertyDetail
     detailCredits: number; // credits spent on PropertyDetail (1 per lead)
@@ -217,6 +274,7 @@ export async function runWeeklyPull(opts?: {
   const windows = computePullWindows(runDate);
   const reports: WindowReport[] = [];
   const allNewIds = new Set<string>(); // distinct brand-new leads across all windows
+  let outOfCounty = 0;                 // fetched but discarded — wrong county for this pull
 
   for (const w of windows) {
     const ids = await scanWindowIds(w, zips); // FREE
@@ -230,10 +288,18 @@ export async function runWeeklyPull(opts?: {
     if (!dryRun) {
       if (newIds.length) {
         const props = await fetchFullByIds(newIds); // CREDITS — new only
-        await upsertLeads(props);
-        await enrichLeadBatch(props);
-        newPulled = props.length;
-        newIds.forEach((id) => allNewIds.add(id));
+        // County guard (Frank Aug-2026): the scan is ZIP-scoped and ZIPs straddle county
+        // lines, so drop anything outside the requested footprint before it reaches the
+        // book. The credit is already spent by this point — county is not knowable until
+        // the full record arrives — but a Middlesex pull now yields only Middlesex leads.
+        const inFootprint = props.filter((p) => propertyInCounty(p, county));
+        outOfCounty += props.length - inFootprint.length;
+        if (inFootprint.length) {
+          await upsertLeads(inFootprint);
+          await enrichLeadBatch(inFootprint);
+        }
+        newPulled = inFootprint.length;
+        inFootprint.forEach((p) => allNewIds.add(String(p?.id ?? '')));
       }
       // Stamp window effective/x-date on everything matched (new + already-stored). FREE.
       dated = await applyWindowDates(ids, w);
@@ -267,6 +333,9 @@ export async function runWeeklyPull(opts?: {
       alreadyHave: reports.reduce((s, r) => s + r.alreadyHave, 0),
       creditsSpent: reports.reduce((s, r) => s + r.newPulled, 0) + detail.attempted,
       dated: reports.reduce((s, r) => s + r.dated, 0),
+      // Fetched (and therefore charged) but discarded as outside the requested county.
+      // Surfaced so a rising number is visible rather than silently absorbed.
+      outOfCounty,
       detailPulled: detail.detailed,   // Grade-A SFR leads enriched via PropertyDetail
       detailCredits: detail.attempted, // credits spent on PropertyDetail (1 per lead)
     },
