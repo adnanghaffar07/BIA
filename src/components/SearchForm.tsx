@@ -262,7 +262,7 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
         </Box>
 
         {/* Active filter hint */}
-        {(engine !== 'all' || grade || status || carrier || effDate || effTo) && (
+        {(engine !== 'all' || grade || status || carrier || propertyType || effDate || effTo) && (
           <Box sx={{ mt: 1.5, p: 1, backgroundColor: '#f0f4ff', borderRadius: 1, border: '1px solid #c5cae9' }}>
             <Typography variant="caption" color="primary">
               Filters active:
@@ -270,6 +270,7 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
               {grade && <strong> · Grade {grade}</strong>}
               {status && <strong> · Status: {STATUS_OPTIONS.find(o => o.value === status)?.label}</strong>}
               {carrier && <strong> · Carrier: {carrier === 'travelers' ? 'Travelers' : 'Plymouth Rock'}</strong>}
+              {propertyType && <strong> · Type: {PROPERTY_TYPE_OPTIONS.find(o => o.value === propertyType)?.label}</strong>}
               {effDate && <strong> · Effective {effDate}{effTo ? ` → ${effTo}` : ''}</strong>}
             </Typography>
           </Box>

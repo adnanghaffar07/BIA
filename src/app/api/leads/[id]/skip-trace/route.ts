@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getLeadByPropertyId, updateLead, addActivity } from '@/services/storage.service';
 import { canRunSkipTrace } from '@/services/grade.service';
 import { runTracerfy } from '@/services/tracerfy.service';
+import { getSessionUser, actorLabel } from '@/lib/auth';
 
 /**
  * POST /api/leads/[id]/skip-trace
@@ -51,7 +52,7 @@ export async function POST(
 
     let payload: any = {};
     try { payload = await request.json(); } catch { /* body optional */ }
-    const createdBy = payload?._createdBy;
+    const createdBy = actorLabel(await getSessionUser(request)) ?? payload?._createdBy ?? null;
 
     const result = await runTracerfy(lead as any);
 

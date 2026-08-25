@@ -65,7 +65,9 @@ export default function QueuePage() {
       const [activeRes, closedRes, editedRes, dashRes] = await Promise.all([
         fetch(`/api/leads?source=db&size=100000&active=true&orderBy=xdate${effQs}`),
         fetch(`/api/leads?source=db&size=100000&closed=true&orderBy=updated${effQs}`),
-        fetch(`/api/leads?source=db&size=200&editedOnly=true&orderBy=edited${effQs}`),
+        // Uncapped like the other two: at size=200 the Recently Edited badge showed 200
+        // when the book actually held 496 edited leads (Frank Aug-2026).
+        fetch(`/api/leads?source=db&size=100000&editedOnly=true&orderBy=edited${effQs}`),
         fetch('/api/dashboard'),
       ]);
       const [activeJson, closedJson, editedJson, dashJson] = await Promise.all([

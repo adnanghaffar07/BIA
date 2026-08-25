@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLeadByPropertyId, updateLead, addActivity } from '@/services/storage.service';
+import { getSessionUser, actorLabel } from '@/lib/auth';
 
 export async function GET(
   _request: NextRequest,
@@ -35,6 +36,10 @@ export async function PUT(
     const body = await request.json();
     const { _activityNote, _activityType, _createdBy, ...updateData } = body;
 
+    // Who is actually doing this. The session wins over the client's _createdBy, which
+    // carried the lead's producerEmail (usually null) rather than the signed-in user.
+    const actor = actorLabel(await getSessionUser(request)) ?? _createdBy ?? null;
+
     // Fetch current lead state to drive auto-stamp logic
     const existing = await getLeadByPropertyId(id);
     if (!existing) {
@@ -45,7 +50,7 @@ export async function PUT(
 
     // Producer edit — stamp who/when so this lead surfaces in "Recently Edited".
     updateData.lastEditedAt = now;
-    updateData.lastEditedBy = _createdBy ?? existing.lastEditedBy ?? null;
+    updateData.lastEditedBy = actor ?? existing.lastEditedBy ?? null;
 
     // Auto-stamp: firstRpcAt — set once when the lead first moves off 'new'
     // (producer engagement = enters the active queue, Frank Phase 5).
@@ -95,7 +100,7 @@ export async function PUT(
       if (mg && ['A', 'B', 'C', 'D'].includes(mg)) {
         updateData.grade = mg;
         updateData.gradeOverrideAt = now;
-        updateData.gradeOverrideBy = _createdBy ?? updateData.gradeOverrideBy;
+        updateData.gradeOverrideBy = actor ?? updateData.gradeOverrideBy;
       } else {
         // Clear the override (leave `grade` as-is until re-enrichment recomputes it)
         updateData.manualGrade = null;
@@ -207,7 +212,7 @@ export async function PUT(
         _activityType || (grade ? 'grade_override' : statusC ? 'status_change' : 'edit'),
         _activityNote || changes.join(' · '),
         { changes: changeDetails },
-        _createdBy,
+        actor,
       );
     }
 

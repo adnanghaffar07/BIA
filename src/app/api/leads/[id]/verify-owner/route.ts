@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLeadByPropertyId, updateLead, addActivity } from '@/services/storage.service';
 import { verifyOwnerName, WIPP_BY_ZIP } from '@/services/taxRoll.service';
+import { getSessionUser, actorLabel } from '@/lib/auth';
 
 /**
  * POST /api/leads/[id]/verify-owner
@@ -44,6 +45,8 @@ export async function POST(
 
     let payload: any = {};
     try { payload = await request.json(); } catch { /* body optional */ }
+    // Attribution comes from the session, not the client (Frank Aug-2026).
+    const actor = actorLabel(await getSessionUser(request)) ?? payload?._createdBy ?? null;
 
     const result = await verifyOwnerName({
       addressStreet: l.addressStreet,
@@ -69,7 +72,7 @@ export async function POST(
         'owner_verify',
         `Owner name not found on ${townLabel} tax roll`,
         { status: 'not_found', source: 'tax_roll' },
-        payload?._createdBy,
+        actor,
       );
       const updated = await getLeadByPropertyId(id);
       return NextResponse.json({ success: true, cached: false, result: { status: 'not_found', detail }, data: updated });
@@ -89,7 +92,7 @@ export async function POST(
       `Owner name ${result.status} vs ${result.source.replace(/_tax_roll$/, "").replace(/_/g, " ")} tax roll`
         + `${result.recordName ? ` — record shows "${result.recordName}"` : ''}`,
       { status: result.status, recordName: result.recordName, source: result.source },
-      payload?._createdBy,
+      actor,
     );
 
     const updated = await getLeadByPropertyId(id);

@@ -53,6 +53,27 @@ export async function createSessionToken(user: AuthUser): Promise<string> {
   return token;
 }
 
+/**
+ * The signed-in user behind a request, read from the session cookie.
+ *
+ * Audit attribution (Frank Aug-2026): activity rows used to take createdBy from a
+ * client-supplied `_createdBy`, which the lead page filled with the LEAD's assigned
+ * producerEmail — a field that is null on nearly every lead. The result was createdBy
+ * null on 400 of 402 status changes, so "who rated this account?" could not be answered
+ * from the app. The actor now comes from the session server-side, where it cannot be
+ * spoofed or forgotten.
+ */
+export async function getSessionUser(request: { cookies: { get(name: string): { value: string } | undefined } }): Promise<AuthUser | null> {
+  const token = request.cookies.get('bia_session')?.value;
+  if (!token) return null;
+  return verifySessionToken(token);
+}
+
+/** What we store in createdBy / lastEditedBy — email is what producers recognise. */
+export function actorLabel(user: AuthUser | null): string | null {
+  return user?.email ?? null;
+}
+
 export async function verifySessionToken(token: string): Promise<AuthUser | null> {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
