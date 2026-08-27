@@ -33,6 +33,13 @@ interface LeadsTableProps {
   leads: any[]; // accepts both Lead and DB lead shapes
   loading?: boolean;
   fetchSize?: number;
+  /**
+   * Total rows available on the SERVER for the current filters, when that is larger
+   * than what has been loaded. The page-size ladder is built from this so a size big
+   * enough to trigger a full load stays offerable — capping the ladder at the loaded
+   * count would make "load more" unreachable. Omit when everything is already loaded.
+   */
+  totalAvailable?: number;
   /** When this changes (e.g. the active tab), pagination resets to page 1 @ 25/page. */
   resetKey?: string | number;
   onPageChange?: (page: number) => void;
@@ -410,6 +417,7 @@ export default function LeadsTable({
   onRowsPerPageChange,
   extraFilters,
   serverFilters,
+  totalAvailable,
 }: LeadsTableProps) {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState<number>(25);
@@ -477,8 +485,30 @@ export default function LeadsTable({
   };
 
   const totalRows = filteredLeads.length;
+
+  // Page-size options derived from how many rows there actually are (Frank Aug-2026).
+  // The list used to be a fixed [25,50,100,250,500,All], so a 146-row result still
+  // offered 250 and 500 — both of which do nothing. Only sizes smaller than the row
+  // count are worth offering; "All" always covers the rest.
+  const rowsPerPageOptions = useMemo(() => {
+    const ceiling = Math.max(totalRows, totalAvailable ?? 0);
+    const ladder = [25, 50, 100, 250, 500, 1000, 2500].filter((n) => n < ceiling);
+    return [...ladder, { label: 'All', value: -1 }];
+  }, [totalRows, totalAvailable]);
+
+  // If the result set shrinks (a narrower filter), a previously chosen size can vanish
+  // from the list, and MUI then renders a blank selector. Step DOWN to the largest size
+  // still on offer rather than jumping to "All" — on the full book "All" means rendering
+  // thousands of rows at once, which locks the page up. Derived rather than stored, so
+  // there is never a render where the selected size is not one of the options.
+  const activeRowsPerPage = useMemo(() => {
+    const numeric = rowsPerPageOptions.filter((o): o is number => typeof o === 'number');
+    if (rowsPerPage === -1 || numeric.includes(rowsPerPage)) return rowsPerPage;
+    const smaller = numeric.filter((n) => n < rowsPerPage);
+    return smaller.length ? Math.max(...smaller) : (numeric[0] ?? -1);
+  }, [rowsPerPageOptions, rowsPerPage]);
   // rowsPerPage === -1 → "All" (show every loaded row on one page)
-  const effRpp = rowsPerPage === -1 ? Math.max(totalRows, 1) : rowsPerPage;
+  const effRpp = activeRowsPerPage === -1 ? Math.max(totalRows, 1) : activeRowsPerPage;
   const maxPage = useMemo(() => Math.max(0, Math.ceil(totalRows / effRpp) - 1), [totalRows, effRpp]);
   const safePage = Math.min(page, maxPage);
 
@@ -495,10 +525,10 @@ export default function LeadsTable({
   const renderPager = (loc: 'top' | 'bottom') => (
     <TablePagination
       key={loc}
-      rowsPerPageOptions={[25, 50, 100, 250, 500, { label: 'All', value: -1 }]}
+      rowsPerPageOptions={rowsPerPageOptions}
       component="div"
       count={totalRows}
-      rowsPerPage={rowsPerPage}
+      rowsPerPage={activeRowsPerPage}
       page={safePage}
       onPageChange={(_e, p) => { setPage(p); onPageChange?.(p); }}
       onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); onRowsPerPageChange?.(parseInt(e.target.value, 10)); }}
@@ -620,7 +650,7 @@ export default function LeadsTable({
           </TableHead>
           <TableBody>
             {paginatedLeads.map((lead, index) => (
-              <LeadRow key={getLeadRowKey(lead, safePage * rowsPerPage + index)} lead={lead} />
+              <LeadRow key={getLeadRowKey(lead, safePage * effRpp + index)} lead={lead} />
             ))}
           </TableBody>
         </Table>

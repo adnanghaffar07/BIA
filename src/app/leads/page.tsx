@@ -276,6 +276,7 @@ export default function LeadsPage() {
           leads={displayLeads}
           loading={loading}
           resetKey={activeTab}
+          totalAvailable={viewTotal}
           onRowsPerPageChange={(rpp) => {
             // -1 is "All". Any size larger than the rows currently loaded also needs a
             // server fetch, otherwise the footer says 250/page while only 100 exist.
