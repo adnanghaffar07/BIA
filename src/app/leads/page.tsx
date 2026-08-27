@@ -232,15 +232,38 @@ export default function LeadsPage() {
 
       {/* Total in DB + load-all control */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mb: 1.5 }}>
+        {/* Frank Aug-2026: this used to always read "Showing 728 of 728 leads in database",
+            which sat next to "Rows per page: 100" and looked like the page size had been
+            ignored. The two numbers answer different questions — how many are loaded vs how
+            many are on screen — so once everything is loaded we stop repeating the count. */}
         <Typography variant="body2" color="text.secondary">
-          Showing <strong>{displayLeads.length.toLocaleString()}</strong> of{' '}
-          <strong>{viewTotal.toLocaleString()}</strong>{' '}
-          {activeTab === 'engine1' ? 'New Purchase' : activeTab === 'engine2' ? 'Renewal' : ''} leads in database
+          {displayLeads.length < viewTotal ? (
+            <>
+              Loaded <strong>{displayLeads.length.toLocaleString()}</strong> of{' '}
+              <strong>{viewTotal.toLocaleString()}</strong>{' '}
+              {activeTab === 'engine1' ? 'New Purchase' : activeTab === 'engine2' ? 'Renewal' : ''} leads matching these filters
+            </>
+          ) : (
+            <>
+              <strong>{viewTotal.toLocaleString()}</strong>{' '}
+              {activeTab === 'engine1' ? 'New Purchase' : activeTab === 'engine2' ? 'Renewal' : ''} leads match these filters —
+              {' '}use the pager below to page through them
+            </>
+          )}
         </Typography>
+        {/* One-click load-all (Frank Aug-2026). This used to be a line of text telling
+            the user to go find the rows-per-page menu in the table footer — easy to miss,
+            and it read as "the page won't show me past 100". */}
         {displayLeads.length < viewTotal && (
-          <Typography variant="caption" color="text.secondary">
-            Set rows-per-page to <strong>All</strong> (table footer) to load all {viewTotal.toLocaleString()}.
-          </Typography>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={loadAll}
+            disabled={loading}
+            startIcon={loading ? <CircularProgress size={13} color="inherit" /> : undefined}
+          >
+            {loading ? 'Loading…' : `Load all ${viewTotal.toLocaleString()}`}
+          </Button>
         )}
       </Box>
 
@@ -253,7 +276,11 @@ export default function LeadsPage() {
           leads={displayLeads}
           loading={loading}
           resetKey={activeTab}
-          onRowsPerPageChange={(rpp) => { if (rpp === -1) loadAll(); }}
+          onRowsPerPageChange={(rpp) => {
+            // -1 is "All". Any size larger than the rows currently loaded also needs a
+            // server fetch, otherwise the footer says 250/page while only 100 exist.
+            if (rpp === -1 || rpp > allLeads.length) loadAll();
+          }}
           serverFilters={{
             county: filters.county ?? '',
             zip: filters.zip ?? '',
