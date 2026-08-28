@@ -60,13 +60,33 @@ interface LeadsTableProps {
   serverFilters?: {
     county: string;
     zip: string;
+    propertyType: string;
     zipOptions: string[];
-    onChange: (next: { county?: string; zip?: string }) => void;
+    onChange: (next: { county?: string; zip?: string; propertyType?: string }) => void;
   };
 }
 
 function getLeadRowKey(lead: any, index: number): string {
   return lead.propertyId || lead.id || `lead-row-${index}`;
+}
+
+// Dwelling type (Frank Aug-2026). Condos are underwritten very differently — they are
+// exempt from the roof-age gate, so they grade A far more often than single-family. Being
+// able to split the book by this on BOTH the Leads page and the Queue matters for working
+// the right slate. propertyType is the reliable field: every condo-ish landUse value
+// ('Condominium', 'Townhouse/Condo') already carries CONDO there, and no SFR does.
+export const DWELLING_TYPE_OPTIONS = [
+  { value: '', label: 'All Property Types' },
+  { value: 'SFR', label: 'Single Family (SFH)' },
+  { value: 'CONDO', label: 'Condo' },
+];
+
+/** Does this lead match the chosen dwelling type? Mirrors the QC report's condo rule. */
+function matchesDwellingType(lead: { propertyType?: string | null; landUse?: string | null }, want: string): boolean {
+  if (!want) return true;
+  const t = String(lead.propertyType ?? '').toUpperCase();
+  const isCondo = t === 'CONDO' || /condo/i.test(lead.landUse ?? '');
+  return want === 'CONDO' ? isCondo : t === want && !isCondo;
 }
 
 const COLUMN_COUNT = 12;
@@ -430,6 +450,7 @@ export default function LeadsTable({
   const [filterZip, setFilterZip]       = useStickyState(`lt:${pathname}:zip`, '');
   const [filterStatus, setFilterStatus] = useStickyState(`lt:${pathname}:status`, '');
   const [filterCounty, setFilterCounty] = useStickyState(`lt:${pathname}:county`, ''); // Monmouth | Middlesex | Ocean
+  const [filterType, setFilterType] = useStickyState(`lt:${pathname}:ptype`, ''); // SFR | CONDO
 
   // When the page filters server-side its values win and the local state is bypassed.
   const isServer = !!serverFilters;
@@ -437,6 +458,8 @@ export default function LeadsTable({
   const zipValue = serverFilters ? serverFilters.zip : filterZip;
   const setCountyValue = (v: string) => (serverFilters ? serverFilters.onChange({ county: v }) : setFilterCounty(v));
   const setZipValue = (v: string) => (serverFilters ? serverFilters.onChange({ zip: v }) : setFilterZip(v));
+  const typeValue = serverFilters ? serverFilters.propertyType : filterType;
+  const setTypeValue = (v: string) => (serverFilters ? serverFilters.onChange({ propertyType: v }) : setFilterType(v));
 
   // Derive unique ZIPs from current leads for the ZIP dropdown
   const availableZips = useMemo(() => {
@@ -469,19 +492,21 @@ export default function LeadsTable({
         const c = bare || countyForZip(zip);
         if (c !== filterCounty) return false;
       }
+      if (!isServer && !matchesDwellingType(l, filterType)) return false;
       if (filterStatus && (l.status ?? 'new') !== filterStatus) return false;
       return true;
     });
-  }, [leads, search, filterZip, filterCounty, filterStatus, isServer]);
+  }, [leads, search, filterZip, filterCounty, filterType, filterStatus, isServer]);
 
-  const hasFilters = search || zipValue || countyValue || filterStatus;
+  const hasFilters = search || zipValue || countyValue || typeValue || filterStatus;
 
   const clearFilters = () => {
     setSearch('');
     setFilterZip('');
     setFilterCounty('');
     setFilterStatus('');
-    if (serverFilters) serverFilters.onChange({ county: '', zip: '' });
+    setFilterType('');
+    if (serverFilters) serverFilters.onChange({ county: '', zip: '', propertyType: '' });
   };
 
   const totalRows = filteredLeads.length;
@@ -512,7 +537,7 @@ export default function LeadsTable({
   const maxPage = useMemo(() => Math.max(0, Math.ceil(totalRows / effRpp) - 1), [totalRows, effRpp]);
   const safePage = Math.min(page, maxPage);
 
-  useEffect(() => { setPage(0); }, [leads, search, zipValue, countyValue, filterStatus]);
+  useEffect(() => { setPage(0); }, [leads, search, zipValue, countyValue, typeValue, filterStatus]);
   useEffect(() => { if (page > maxPage) setPage(maxPage); }, [page, maxPage]);
   // Tab change → reset to page 1 @ 25/page (Frank Jun-2026)
   useEffect(() => { setPage(0); setRowsPerPage(25); }, [resetKey]);
@@ -578,6 +603,12 @@ export default function LeadsTable({
             <Select value={zipValue} label="ZIP" onChange={(e) => setZipValue(e.target.value)}>
               <MenuItem value="">All ZIPs</MenuItem>
               {zipChoices.map((z) => <MenuItem key={z} value={z}>{z}</MenuItem>)}
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 175 }}>
+            <InputLabel>Property Type</InputLabel>
+            <Select value={typeValue} label="Property Type" onChange={(e) => setTypeValue(e.target.value)}>
+              {DWELLING_TYPE_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
             </Select>
           </FormControl>
           <FormControl size="small" sx={{ minWidth: 150 }}>

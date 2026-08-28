@@ -102,7 +102,7 @@ export default function LeadsPage() {
       newFilters.engine === 2 ? 'engine2' : 'all';
     // Page size is no longer a form field — preserve the current size (100 default,
     // or "all" if the user picked All in the pagination) across filter changes.
-    const f = { grade: newFilters.grade, status: newFilters.status, size: filters.size ?? 100, effectiveDate: newFilters.effectiveDate, effectiveTo: newFilters.effectiveTo, carrier: newFilters.carrier, propertyType: newFilters.propertyType, county: filters.county, zip: filters.zip };
+    const f = { grade: newFilters.grade, status: newFilters.status, size: filters.size ?? 100, effectiveDate: newFilters.effectiveDate, effectiveTo: newFilters.effectiveTo, carrier: newFilters.carrier, propertyType: filters.propertyType, county: filters.county, zip: filters.zip };
     setActiveTab(tab);
     setFilters(f);
     fetchLeads(tab, f);
@@ -285,6 +285,7 @@ export default function LeadsPage() {
           serverFilters={{
             county: filters.county ?? '',
             zip: filters.zip ?? '',
+            propertyType: filters.propertyType ?? '',
             zipOptions: [...REAPI_TARGET_ZIPS].sort(),
             onChange: (next) => {
               const f = { ...filters, ...next };

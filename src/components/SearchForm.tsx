@@ -17,7 +17,7 @@ interface SearchFormProps {
   onSearch: (filters: LeadFilters) => void;
   loading?: boolean;
   /** Seed the controls (used to restore filters when returning from a lead). */
-  initial?: { size?: number; engine?: number; grade?: string; status?: string; carrier?: string; propertyType?: string; effectiveDate?: string; effectiveTo?: string };
+  initial?: { size?: number; engine?: number; grade?: string; status?: string; carrier?: string; effectiveDate?: string; effectiveTo?: string };
 }
 
 const GRADE_OPTIONS = [
@@ -28,13 +28,6 @@ const GRADE_OPTIONS = [
   { value: 'D', label: 'D — Disqualified' },
 ];
 
-// Frank Aug-2026 — split the book by dwelling type. propertyType is the reliable field:
-// every condo-ish landUse ('Condominium', 'Townhouse/Condo') already carries CONDO here.
-const PROPERTY_TYPE_OPTIONS = [
-  { value: '', label: 'All Property Types' },
-  { value: 'SFR', label: 'Single Family (SFR)' },
-  { value: 'CONDO', label: 'Condo' },
-];
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All Statuses' },
@@ -54,7 +47,6 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
   const [grade, setGrade] = useState(initial?.grade ?? '');
   const [status, setStatus] = useState(initial?.status ?? '');
   const [carrier, setCarrier] = useState(initial?.carrier ?? '');
-  const [propertyType, setPropertyType] = useState(initial?.propertyType ?? '');
   const [effDate, setEffDate] = useState(initial?.effectiveDate ?? '');
   const [effTo, setEffTo] = useState(initial?.effectiveTo ?? '');
 
@@ -73,7 +65,6 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
       grade: (grade || undefined) as LeadGradeValue | undefined,
       status: (status || undefined) as LeadStatus | undefined,
       carrier: carrier || undefined,
-      propertyType: propertyType || undefined,
       effectiveDate: eff || undefined,
       effectiveTo: effEnd || undefined,
     });
@@ -89,13 +80,12 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
     setGrade('');
     setStatus('');
     setCarrier('');
-    setPropertyType('');
     setEffDate('');
     setEffTo('');
     onSearch({});
   };
 
-  const hasActiveFilters = engine !== 'all' || grade !== '' || status !== '' || carrier !== '' || propertyType !== '' || effDate !== '' || effTo !== '';
+  const hasActiveFilters = engine !== 'all' || grade !== '' || status !== '' || carrier !== '' || effDate !== '' || effTo !== '';
 
   return (
     <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
@@ -185,19 +175,6 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
             </Select>
           </FormControl>
 
-          {/* Property type filter (Frank Aug-2026) — SFR vs Condo split */}
-          <FormControl size="small" sx={{ minWidth: 190 }}>
-            <InputLabel>Property Type</InputLabel>
-            <Select
-              value={propertyType}
-              label="Property Type"
-              onChange={(e) => setPropertyType(e.target.value)}
-            >
-              {PROPERTY_TYPE_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
 
           {/* Effective-date RANGE (Frank Jul-2026): a pull covers a 7-day window, so a
               single date only ever showed the first day of it. Leaving "to" empty works
@@ -262,7 +239,7 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
         </Box>
 
         {/* Active filter hint */}
-        {(engine !== 'all' || grade || status || carrier || propertyType || effDate || effTo) && (
+        {(engine !== 'all' || grade || status || carrier || effDate || effTo) && (
           <Box sx={{ mt: 1.5, p: 1, backgroundColor: '#f0f4ff', borderRadius: 1, border: '1px solid #c5cae9' }}>
             <Typography variant="caption" color="primary">
               Filters active:
@@ -270,7 +247,6 @@ export default function SearchForm({ onSearch, loading = false, initial }: Searc
               {grade && <strong> · Grade {grade}</strong>}
               {status && <strong> · Status: {STATUS_OPTIONS.find(o => o.value === status)?.label}</strong>}
               {carrier && <strong> · Carrier: {carrier === 'travelers' ? 'Travelers' : 'Plymouth Rock'}</strong>}
-              {propertyType && <strong> · Type: {PROPERTY_TYPE_OPTIONS.find(o => o.value === propertyType)?.label}</strong>}
               {effDate && <strong> · Effective {effDate}{effTo ? ` → ${effTo}` : ''}</strong>}
             </Typography>
           </Box>
