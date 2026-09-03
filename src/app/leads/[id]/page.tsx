@@ -1075,6 +1075,23 @@ export default function LeadDetailPage() {
                     View Skip Trace
                   </Button>
                 )}
+                {/* Re-run stays available (Frank Sep-2026) so a producer can check a lead
+                    themselves rather than trusting a previous empty result. Confirms first
+                    because a hit costs 15 credits; a miss costs nothing. */}
+                {['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade)) && insuredNameOnFile && (
+                  <Button
+                    size="small" variant="outlined" color="warning"
+                    startIcon={skipTracing ? <CircularProgress size={13} color="inherit" /> : <PersonSearchIcon />}
+                    disabled={skipTracing}
+                    onClick={() => {
+                      if (confirm('Run the deep skip trace again for this lead?\n\nIt costs 15 credits only if Tracerfy returns a match — a miss is free.')) {
+                        runSkipTraceAction();
+                      }
+                    }}
+                  >
+                    {skipTracing ? 'Tracing…' : 'Re-run Deep Skip Trace'}
+                  </Button>
+                )}
               </Stack>
             ) : !['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade)) ? (
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, mb: 0.5 }}>

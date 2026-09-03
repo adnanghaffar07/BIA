@@ -78,21 +78,31 @@ export async function runTracerfy(lead: Lead): Promise<TracerfyResult> {
   if (!first || !last) {
     throw new Error('Skip trace needs the insured first + last name on file.');
   }
-  const url = ENHANCED_URL;
-  const body: Record<string, any> = { first_name: first, last_name: last, address, city, state, zip };
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30000),
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`Tracerfy error ${res.status}: ${t.slice(0, 200)}`);
+  const callEnhanced = async (firstName: string) => {
+    const res = await fetch(ENHANCED_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ first_name: firstName, last_name: last, address, city, state, zip }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(`Tracerfy error ${res.status}: ${t.slice(0, 200)}`);
+    }
+    return res.json();
+  };
+
+  // Middle-name retry (Frank Sep-2026). owner1FirstName often holds a middle name too —
+  // "Jesse Meyer" for Jesse Meyer Horowitz — and Tracerfy will not match on that, so the
+  // lookup comes back empty. Measured across the traced book: compound first names missed
+  // 80% of the time vs 14% for single ones, and 924 leads carry one. A miss is billed 0
+  // credits, so retrying with just the first token is free and recovers the match.
+  let json: any = await callEnhanced(first);
+  const firstToken = first.split(/\s+/)[0];
+  if (!json?.hit && firstToken && firstToken !== first) {
+    json = await callEnhanced(firstToken);
   }
-
-  const json: any = await res.json();
   const rawPersons: any[] = Array.isArray(json?.persons) ? json.persons : [];
   const persons = rawPersons.map(toReapiPerson);
 

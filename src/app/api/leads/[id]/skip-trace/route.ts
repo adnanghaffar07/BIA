@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLeadByPropertyId, updateLead, addActivity } from '@/services/storage.service';
-import { canRunSkipTrace } from '@/services/grade.service';
 import { runTracerfy } from '@/services/tracerfy.service';
 import { getSessionUser, actorLabel } from '@/lib/auth';
 
@@ -24,18 +23,15 @@ export async function POST(
       return NextResponse.json({ success: false, error: 'Lead not found' }, { status: 404 });
     }
 
-    // The Tracerfy ENHANCED tier (15 credits) is now the ONLY skip trace — the 5-credit
-    // standard lookup was removed (Frank Aug-2026). Same gate as before: Grade A/B/C, and
-    // one run per lead so the 15 credits can never be charged twice (the card hides the
-    // button once stamped, but a stale tab or a retry could still post).
-    if ((lead as any).deepSkipTracedAt || !canRunSkipTrace(lead as any)) {
+    // Re-runs are allowed (Frank Sep-2026). The one-run-per-lead block was removed after
+    // the middle-name bug: traces had been failing for a reason that looked like "no data",
+    // producers wrote leads off on the strength of it, and there was no way to check. A
+    // re-run costs 15 credits only if Tracerfy actually answers — a miss is billed 0 — so
+    // the cost of letting someone verify is low. Grade A/B/C still gates it.
+    const effGrade = String((lead as any).manualGrade || (lead as any).grade || '');
+    if (!['A', 'B', 'C'].includes(effGrade)) {
       return NextResponse.json(
-        {
-          success: false,
-          error: (lead as any).skipTraced || (lead as any).deepSkipTracedAt
-            ? 'This lead has already been skip traced.'
-            : 'Skip trace is available on Grade A, B, or C leads.',
-        },
+        { success: false, error: 'Skip trace is available on Grade A, B, or C leads.' },
         { status: 400 },
       );
     }
