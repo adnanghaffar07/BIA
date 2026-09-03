@@ -73,22 +73,6 @@ const DETAIL_GAP_MS = 300; // small courtesy gap between PropertyDetail calls
 
 const FULL_PULL_BATCH = 100; // PropertySearch full-data page size
 
-// Topping the account up is a manager task (billing console:
-// https://console.realestateapi.com/dashboard/billing), so the UI points producers at
-// their manager rather than at a payment page they cannot action.
-
-/**
- * REAPI has no wallet balance left. Distinct from a generic API failure because the
- * operator can fix it, and because NOTHING was pulled or charged when it happens.
- */
-export class ReapiCreditsError extends Error {
-  readonly code = 'REAPI_OUT_OF_CREDITS';
-  constructor() {
-    super('The RealEstateAPI account has no credits left, so scans and pulls are paused.');
-    this.name = 'ReapiCreditsError';
-  }
-}
-
 async function reapiSearch(body: Record<string, any>): Promise<any> {
   const res = await fetch(`${API_CONFIG.BASE_URL}/PropertySearch`, {
     method: 'POST',
@@ -101,14 +85,7 @@ async function reapiSearch(body: Record<string, any>): Promise<any> {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    // Out of REAPI wallet balance. This blocks the FREE ids_only scan too, so Preview
-    // stops working as well — worth saying plainly instead of showing the raw JSON
-    // (Frank Aug-2026). Tagged with a code so the page can render a real message.
-    if (res.status === 402 || /WALLET_INSUFFICIENT_BALANCE|Insufficient wallet balance/i.test(body)) {
-      throw new ReapiCreditsError();
-    }
-    throw new Error(`REAPI ${res.status}: ${body}`);
+    throw new Error(`REAPI ${res.status}: ${await res.text()}`);
   }
   return res.json();
 }

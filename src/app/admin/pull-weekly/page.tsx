@@ -9,7 +9,6 @@ import {
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 
 interface WindowRow {
   label: string;
@@ -35,9 +34,6 @@ export default function WeeklyPullPage() {
   const [preview, setPreview] = useState<PullResult | null>(null);
   const [runResult, setRunResult] = useState<PullResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Set when REAPI reports an empty wallet, so the page can show a real message rather
-  // than the raw 402 JSON (Frank Aug-2026).
-  const [outOfCredits, setOutOfCredits] = useState(false);
   // Renewal effective week to pull. Empty = today's auto-rolling window. The 60-day
   // lead offset is handled server-side (runDate = effDate − 60), so this is the
   // effective date the producer actually wants to work.
@@ -60,12 +56,11 @@ export default function WeeklyPullPage() {
     : 0;
 
   const runPreview = async () => {
-    setPreviewing(true); setError(null); setOutOfCredits(false); setRunResult(null); setPreview(null);
+    setPreviewing(true); setError(null); setRunResult(null); setPreview(null);
     try {
       const res = await fetch(`/api/admin/pull-weekly${pullQuery}`, { method: 'GET' });
       const json = await res.json();
       if (json.success) setPreview(json as PullResult);
-      else if (json.errorCode === 'REAPI_OUT_OF_CREDITS') setOutOfCredits(true);
       else setError(json.error || 'Preview failed');
     } catch { setError('Preview failed — try again'); }
     setPreviewing(false);
@@ -76,12 +71,11 @@ export default function WeeklyPullPage() {
       `This will spend ~${wouldSpend} credits — pulling full data for ${wouldSpend} brand-new ` +
       `properties (records already in the database are reused for free).\n\nProceed?`
     )) return;
-    setRunning(true); setError(null); setOutOfCredits(false);
+    setRunning(true); setError(null);
     try {
       const res = await fetch(`/api/admin/pull-weekly${pullQuery}`, { method: 'POST' });
       const json = await res.json();
       if (json.success) { setRunResult(json as PullResult); setPreview(null); }
-      else if (json.errorCode === 'REAPI_OUT_OF_CREDITS') setOutOfCredits(true);
       else setError(json.error || 'Pull failed');
     } catch { setError('Pull failed — try again'); }
     setRunning(false);
@@ -179,43 +173,6 @@ export default function WeeklyPullPage() {
           {running ? 'Pulling…' : preview ? `Run Pull — ~${wouldSpend} credits` : 'Run Pull'}
         </Button>
       </Stack>
-
-      {/* Empty REAPI wallet — an operator problem with a clear fix, not a crash. Shown
-          as its own card because it also disables the free Preview, which is not
-          obvious from the raw 402 (Frank Aug-2026). */}
-      {outOfCredits && (
-        <Paper
-          variant="outlined"
-          sx={{ mb: 2, p: 2.5, borderRadius: 2, borderColor: '#f0c36d', bgcolor: '#fffaf0' }}
-        >
-          <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start' }}>
-            <AccountBalanceWalletIcon sx={{ color: '#b26a00', fontSize: 30, mt: 0.25 }} />
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#8a5200' }}>
-                Out of property-data credits
-              </Typography>
-              <Typography variant="body2" sx={{ mt: 0.5, color: 'text.secondary' }}>
-                The RealEstateAPI account has no balance left, so this week&apos;s pull is on hold.
-                Preview is free to run, but it still needs a funded account — which is why the
-                scan stops too.
-              </Typography>
-              <Typography variant="body2" sx={{ mt: 1, color: 'text.secondary' }}>
-                <strong>Nothing was pulled and no credits were spent.</strong> Your county and week
-                selection is still here — once the account is topped up, press Preview again.
-              </Typography>
-              <Typography variant="caption" sx={{ mt: 1, display: 'block', color: 'text.disabled' }}>
-                Skip tracing is unaffected — that bills Tracerfy, a separate account.
-              </Typography>
-              <Typography
-                variant="body2"
-                sx={{ mt: 1.75, fontWeight: 700, color: '#8a5200' }}
-              >
-                Please contact your manager to top up the account.
-              </Typography>
-            </Box>
-          </Stack>
-        </Paper>
-      )}
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 

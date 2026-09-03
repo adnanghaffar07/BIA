@@ -27,15 +27,6 @@ function parseCounty(req: NextRequest): PullCounty {
  *        If both are supplied, effDate wins.
  */
 
-/**
- * Extra fields the page uses to swap the raw error for a real message when the REAPI
- * wallet is empty. Everything else keeps the plain `error` string it already had.
- */
-function creditsPayload(err: unknown): Record<string, string> {
-  const code = (err as { code?: string })?.code;
-  if (code !== 'REAPI_OUT_OF_CREDITS') return {};
-  return { errorCode: code };
-}
 
 function parseRunDate(req: NextRequest): Date | undefined {
   const sp = req.nextUrl.searchParams;
@@ -64,7 +55,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: true, ...result });
   } catch (err: any) {
     return NextResponse.json(
-      { success: false, error: err?.message || 'Weekly pull dry-run failed', ...creditsPayload(err) },
+      { success: false, error: err?.message || 'Weekly pull dry-run failed' },
       { status: 500 },
     );
   }
@@ -76,7 +67,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, ...result });
   } catch (err: any) {
     return NextResponse.json(
-      { success: false, error: err?.message || 'Weekly pull failed', ...creditsPayload(err) },
+      { success: false, error: err?.message || 'Weekly pull failed' },
       { status: 500 },
     );
   }
