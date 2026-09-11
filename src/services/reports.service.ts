@@ -8,7 +8,7 @@ import { compareOwnerNames } from './ownerNameMatch.service';
  * let Frank/Ruben pull that data back out to spot trends without cross-referencing
  * the Travelers portal by hand.
  */
-export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch';
+export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace';
 
 export interface QcRow {
   propertyId: string;
@@ -31,6 +31,12 @@ export interface QcRow {
   hasEmail?: boolean;
   hasDob?: boolean;
   isCondo?: boolean;
+  // Blast report only — groups the rows of one run.
+  runId?: string | null;
+  /** Whether Tracerfy matched. Credits are deliberately NOT reported here
+   *  (Frank Sep-2026): QC is for data quality, and a per-lead price turns a
+   *  coverage review into a spend review. Low balance is surfaced instead. */
+  matched?: boolean;
 }
 
 export interface QcReportParams {
@@ -49,7 +55,32 @@ export interface QcReportParams {
 }
 
 const nm = (r: any) => `${String(r.owner1FirstName ?? '').replace('null', '').trim()} ${String(r.owner1LastName ?? '').trim()}`.trim();
-const iso = (d: any) => (d ? String(d).slice(0, 10) : null);
+/**
+ * Date columns come back in two shapes: effectiveDate and friends are TEXT
+ * ('2026-09-11'), while real timestamps (gradeOverrideAt, ownerVerifyAt,
+ * blastSkipTracedAt, Activity.createdAt) come back as Date objects. Slicing
+ * String(date) yielded 'Fri Sep 11' — wrong, and unsortable. Nobody noticed
+ * because the QC table never rendered the "at" column until Sep-2026.
+ *
+ * Those columns are "timestamp WITHOUT time zone", so the driver hands back a
+ * Date already in local terms. toISOString() would re-interpret it as UTC and
+ * shift it — an evening run would be reported as the next day. Read the local
+ * parts instead.
+ */
+const iso = (d: any): string | null => {
+  if (!d) return null;
+  const local = (x: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`;
+  };
+  if (d instanceof Date) {
+    return Number.isNaN(d.getTime()) ? null : local(d);
+  }
+  const s = String(d);
+  if (/^d{4}-d{2}-d{2}/.test(s)) return s.slice(0, 10); // already ISO text
+  const parsed = new Date(s);
+  return Number.isNaN(parsed.getTime()) ? null : local(parsed);
+};
 const eligLabel = (v: any) => (v === 'review' ? 'Referral' : v === 'ineligible' ? 'Non-eligible' : v === 'eligible' ? 'Eligible' : (v ?? '—'));
 
 /** Apply an optional effective-date range in JS (row counts are small). */
@@ -188,6 +219,41 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
       })
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => rowOf(r, `On file "${nm(r) || '—'}" → skip trace "${r.skipTraceOwnerName}"`));
+  }
+
+  if (type === 'blast_skiptrace') {
+    // Frank Sep-2026: which leads were traced by a cohort BLAST rather than by a
+    // producer clicking the card, when, by whom, and what each one actually returned.
+    //
+    // blastSkipTracedAt is the whole definition — it is written only by the blast
+    // (migration 016), so the card button can never appear here. deepSkipTracedAt
+    // cannot answer this: both routes set it.
+    rows = await sql`SELECT * FROM "Lead" WHERE "blastSkipTracedAt" IS NOT NULL ORDER BY "blastSkipTracedAt" DESC`;
+    return rows
+      .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
+      .map((r: any) => {
+        const hasPhone = !!(String(r.phone1 ?? '').trim() || String(r.phone2 ?? '').trim());
+        const hasEmail = !!(String(r.email1 ?? '').trim() || String(r.email2 ?? '').trim());
+        const coInsured = [r.owner2FirstName, r.owner2LastName].filter(Boolean).join(' ');
+        // A stored payload with hit=true is the only honest record of a charge: the
+        // blast bills 15 on a match and nothing on a miss.
+        const matched = (r.skipTraceData as any)?.hit === true;
+        const got = [hasPhone ? 'phone' : null, hasEmail ? 'email' : null, coInsured ? `co-insured ${coInsured}` : null]
+          .filter(Boolean).join(' + ');
+        const context = matched
+          ? `Matched — ${got || 'no contact returned'}`
+          : 'No match';
+        const row = rowOf(r, context, r.blastSkipTracedBy ?? null, iso(r.blastSkipTracedAt));
+        return {
+          ...row,
+          // Short, stable label so rows from one run read as one run in the table.
+          reason: r.blastRunId ? `Run ${String(r.blastRunId).slice(0, 8)}` : null,
+          runId: r.blastRunId ?? null,
+          hasPhone,
+          hasEmail,
+          matched,
+        };
+      });
   }
 
   if (type === 'contact_coverage') {

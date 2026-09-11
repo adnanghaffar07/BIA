@@ -3,14 +3,52 @@
  * src/services/grade.service.ts (roof >20 yr unconfirmed, carrier both-ineligible
  * → D, flood SFHA → D / shaded-X → C, missing pertinent fields). Uses STORED
  * carrier-eligibility + flood data (no FEMA/REAPI calls, no credits). Honors
- * manual grade overrides. Mirrors grade.service so the app + DB agree.
+ * manual grade overrides.
  *
- * Usage:  node scripts/regrade.mjs [--dry-run]
+ * ⚠  QUARANTINED — Frank Sep-2026, pre-launch checklist Tier 3. DO NOT RUN.
+ *
+ * It no longer mirrors grade.service. That service exempts condos from the
+ * roof-age field (CONDO_EXEMPT_FIELDS, grade.service.ts) because a condo owner
+ * does not insure the roof; this script has no such notion. 1,200 of the 1,449
+ * Grade A leads are condos, so a write pass moves Grade A from 1,449 to 448 —
+ * 769 leads out of A, including most of the Grade-A-with-email set the 9/14
+ * pilot sends to. Measured 09 Sep 2026 by dry run.
+ *
+ * The app re-grades on every enrichment pass, so this script is not needed to
+ * keep the DB correct. Reconcile it against grade.service (condo exemption
+ * first) or delete it. Until then a write pass requires an explicit override
+ * flag so it cannot be run from muscle memory.
+ *
+ * Usage:  node scripts/regrade.mjs --dry-run          (safe, reports only)
+ *         node scripts/regrade.mjs --force-write-i-have-reconciled-condos
  */
 import { neon, Pool } from '@neondatabase/serverless';
 import { readFileSync } from 'fs';
 
 const DRY = process.argv.includes('--dry-run');
+const OVERRIDE = process.argv.includes('--force-write-i-have-reconciled-condos');
+const EOL = String.fromCharCode(10);
+
+// Refuse to write without the override. See the quarantine note above: this
+// script downgrades every condo it touches, and the pilot list is 80% condo.
+if (!DRY && !OVERRIDE) {
+  console.error([
+    '',
+    '  ⛔  regrade.mjs is quarantined and will not write.',
+    '',
+    '  It downgrades every condo it touches — a write pass takes Grade A from',
+    '  1,449 to 448 and would gut the 9/14 pilot list. The live app already',
+    '  re-grades on enrichment, so this script is not needed.',
+    '',
+    '  Report only:  node scripts/regrade.mjs --dry-run',
+    '',
+    '  If you have genuinely reconciled it against grade.service.ts (start with',
+    '  the condo exemption in CONDO_EXEMPT_FIELDS), re-run with',
+    '  --force-write-i-have-reconciled-condos',
+    '',
+  ].join(EOL));
+  process.exit(1);
+}
 const url = readFileSync('.env', 'utf-8').match(/DATABASE_URL=([^\n]+)/)[1].trim().replace(/^["']|["']$/g, '');
 const sql = neon(url);
 const pool = new Pool({ connectionString: url });

@@ -8,7 +8,10 @@ import {
 import HomeWorkIcon from '@mui/icons-material/HomeWork';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
 import AllInboxIcon from '@mui/icons-material/AllInbox';
+import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import SearchForm from '@/components/SearchForm';
+import SkipTraceBlastDialog from '@/components/SkipTraceBlastDialog';
+import { useAuth } from '@/context/AuthContext';
 import LeadsTable from '@/components/LeadsTable';
 import { LeadFilters } from '@/types/lead';
 import { ERROR_MESSAGES, REAPI_TARGET_ZIPS } from '@/lib/constants';
@@ -26,6 +29,8 @@ export default function LeadsPage() {
 
   const engineForTab = (t: TabValue): 1 | 2 | undefined => (t === 'engine1' ? 1 : t === 'engine2' ? 2 : undefined);
   const [restoreKey, setRestoreKey] = useState(0);
+  const [blastOpen, setBlastOpen] = useState(false);
+  const { user } = useAuth();
   // Stale-response guard: a broad fetch (e.g. "All" rows) can outlive a newer, narrower one
   // and overwrite it. Only the newest request writes state (Frank Aug-2026).
   const reqSeq = useRef(0);
@@ -121,6 +126,14 @@ export default function LeadsPage() {
     setFilters(f);
     fetchLeads(activeTab, f);
   };
+
+  // Deep Skip Trace Blast (Frank Sep-2026). Deliberately narrow: it appears only
+  // when the view is already scoped to Grade A over a from/to effective-date range,
+  // because those two filters are what make the cohort small and intentional enough
+  // to spend credits on. Admin-only for the same reason.
+  const canBlast =
+    (user?.role === 'admin' || user?.role === 'superadmin') &&
+    filters.grade === 'A' && !!filters.effectiveDate && !!filters.effectiveTo;
 
   const displayLeads = allLeads;
   const viewTotal =
@@ -265,6 +278,18 @@ export default function LeadsPage() {
             {loading ? 'Loading…' : `Load all ${viewTotal.toLocaleString()}`}
           </Button>
         )}
+        {canBlast && (
+          <Button
+            size="small"
+            variant="outlined"
+            color="warning"
+            startIcon={<PersonSearchIcon />}
+            onClick={() => setBlastOpen(true)}
+            disabled={loading}
+          >
+            Deep Skip Trace Blast
+          </Button>
+        )}
       </Box>
 
       {loading && allLeads.length === 0 ? (
@@ -294,6 +319,33 @@ export default function LeadsPage() {
             },
           }}
         />
+      )}
+
+      {/* Mounted only while open so each run starts from clean state. */}
+      {blastOpen && (
+      <SkipTraceBlastDialog
+        open
+        onClose={() => setBlastOpen(false)}
+        filters={{
+          grade: filters.grade,
+          status: filters.status,
+          carrier: filters.carrier,
+          propertyType: filters.propertyType,
+          county: filters.county,
+          zip: filters.zip,
+          engine: engineForTab(activeTab) ?? undefined,
+          effectiveDate: filters.effectiveDate,
+          effectiveTo: filters.effectiveTo,
+        }}
+        onFinished={(t) => {
+          setSnackbar({
+            open: true,
+            message: `Traced ${t.processed} lead${t.processed === 1 ? '' : 's'} — ${t.hit} matched, ${t.creditsSpent} credits. Recovered ${t.phone} phone, ${t.email} email.`,
+            severity: 'success',
+          });
+          fetchLeads(activeTab, filters);
+        }}
+      />
       )}
 
       <Snackbar

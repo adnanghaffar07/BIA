@@ -11,21 +11,18 @@ import SwapVertIcon from '@mui/icons-material/SwapVert';
 import SearchIcon from '@mui/icons-material/Search';
 import RoofingIcon from '@mui/icons-material/Roofing';
 import ReportProblemIcon from '@mui/icons-material/ReportProblem';
+import BoltIcon from '@mui/icons-material/Bolt';
+// Type-only import: erased at build, so the server-side reports module never reaches
+// the browser bundle. One definition of a report row, shared by producer and consumer.
+import type { QcRow } from '@/services/reports.service';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import ContactPhoneIcon from '@mui/icons-material/ContactPhone';
 import DownloadIcon from '@mui/icons-material/Download';
 import Link from 'next/link';
 import { useStickyState } from '@/hooks/useStickyState';
 
-type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch';
+type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace';
 
-interface QcRow {
-  propertyId: string; owner: string; city: string | null; zip: string | null;
-  effectiveDate: string | null; grade: string | null; manualGrade: string | null;
-  propertyType: string | null; travelersEligible: string | null; plymouthEligible: string | null;
-  reason: string | null; context: string; by: string | null; at: string | null;
-  hasPhone?: boolean; hasEmail?: boolean; hasDob?: boolean; isCondo?: boolean;
-}
 
 const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: string }[] = [
   { key: 'referral', label: 'Referrals / Eligibility', icon: <FactCheckIcon />, blurb: 'Leads a carrier flagged Referral (or Non-eligible), with the reason entered.' },
@@ -36,6 +33,7 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
   { key: 'owner_verify', label: 'WIP Verify Fails', icon: <PersonSearchIcon />, blurb: 'Leads that failed tax-roll verification — not found on the roll, or the insured name disagrees with it. Review before outreach.' },
   { key: 'contact_coverage', label: 'Contact Coverage', icon: <ContactPhoneIcon />, blurb: 'Rated accounts by property type (Condo/SFH) and contact status (phone-only / email-only / both / neither) + DOB. The no-email rows drive the downgrade decision.' },
   { key: 'skiptrace_mismatch', label: 'Name Mismatch', icon: <ReportProblemIcon />, blurb: 'Leads where the skip-trace insured name disagrees with the name on file — override per-lead from the card, then fix the carrier portal.' },
+  { key: 'blast_skiptrace', label: 'Blast Skip Traces', icon: <BoltIcon />, blurb: 'Leads traced by a Grade-A cohort blast rather than by hand — when it ran, who ran it, what each lead returned and what it cost. Grouped by run.' },
 ];
 
 const gradeColor = (g: string | null) =>
@@ -54,9 +52,17 @@ export default function QcReportsPage() {
   // Contact-coverage drill-down: click a summary chip to filter the rows to that slice.
   const [covFilter, setCovFilter] = useState<'all' | 'sfh' | 'condo' | 'both' | 'phoneOnly' | 'emailOnly' | 'neither' | 'noEmail' | 'hasDob'>('all');
   const [rows, setRows] = useState<QcRow[]>([]);
+  // Credit status is shown as a warning only — never as a per-lead number
+  // (Frank Sep-2026). Null until loaded, or when no balance has been recorded.
+  const [credits, setCredits] = useState<{ known: boolean; low: boolean; remaining: number | null; matchesRemaining: number | null } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ran, setRan] = useState(false);
+  // Which report the rows in state actually came from. Switching reports keeps the
+  // old rows on screen until the new fetch lands, so a summary computed from "rows"
+  // would describe the previous report — the blast summary read 974 leads from the
+  // Referrals list. Summaries render only once this matches.
+  const [rowsReport, setRowsReport] = useState<ReportType | null>(null);
 
   const run = useCallback(async () => {
     setLoading(true); setError(null);
@@ -71,10 +77,12 @@ export default function QcReportsPage() {
       const json = await res.json();
       if (!json.success) throw new Error(json.error || 'Report failed');
       setRows(json.data || []);
+      setRowsReport(report);
       setRan(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Report failed');
       setRows([]);
+      setRowsReport(null);
     } finally {
       setLoading(false);
     }
@@ -83,7 +91,7 @@ export default function QcReportsPage() {
   // Auto-run on report switch (except keyword, which waits for a term).
   useEffect(() => {
     setCovFilter('all'); // reset the coverage drill-down on report change
-    if (report === 'keyword') { setRows([]); setRan(false); return; }
+    if (report === 'keyword') { setRows([]); setRowsReport(null); setRan(false); return; }
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report]);
@@ -100,10 +108,23 @@ export default function QcReportsPage() {
     a.click();
   };
 
+  // Only the blast report cares about credits, so only it pays for the lookup.
+  // Nothing is cleared on the way out: the warning's own render already checks the
+  // selected report, so a stale balance can never surface under a different one.
+  useEffect(() => {
+    if (report !== 'blast_skiptrace') return;
+    let cancelled = false;
+    fetch('/api/admin/credits')
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled && j.success) setCredits(j); })
+      .catch(() => { /* a missing balance is not an error worth shouting about */ });
+    return () => { cancelled = true; };
+  }, [report]);
+
   const active = REPORTS.find((r) => r.key === report)!;
 
   // Contact-coverage tallies (Frank's breakdown) — computed from the returned rows.
-  const coverage = report === 'contact_coverage' && rows.length ? (() => {
+  const coverage = report === 'contact_coverage' && rowsReport === report && rows.length ? (() => {
     const t = {
       total: rows.length, sfh: 0, condo: 0,
       both: 0, phoneOnly: 0, emailOnly: 0, neither: 0, noEmail: 0, hasDob: 0,
@@ -118,6 +139,24 @@ export default function QcReportsPage() {
       if (r.hasDob) t.hasDob++;
     }
     return t;
+  })() : null;
+
+  // Blast runs — one row per run, newest first. Match counts only: what the run
+  // recovered is a QC question, what it cost is not (Frank Sep-2026).
+  const blastRuns = report === 'blast_skiptrace' && rowsReport === report && rows.length ? (() => {
+    const byRun = new Map<string, { runId: string; when: string; by: string; leads: number; hits: number; phone: number; email: number }>();
+    for (const r of rows) {
+      const key = r.runId ?? 'unknown';
+      const cur = byRun.get(key) ?? { runId: key, when: r.at ?? '—', by: r.by ?? '—', leads: 0, hits: 0, phone: 0, email: 0 };
+      cur.leads++;
+      if (r.matched) cur.hits++;
+      if (r.hasPhone) cur.phone++;
+      if (r.hasEmail) cur.email++;
+      // Rows arrive newest-first, so the last one seen is the run's earliest stamp.
+      if (r.at && r.at < cur.when) cur.when = r.at;
+      byRun.set(key, cur);
+    }
+    return [...byRun.values()].sort((a, b) => (a.when < b.when ? 1 : -1));
   })() : null;
 
   // Rows actually shown in the table + exported: coverage drill-down filter applied.
@@ -245,6 +284,45 @@ export default function QcReportsPage() {
         );
       })()}
 
+      {/* Low balance is the one credit fact worth surfacing here: it changes whether
+          the next blast can run at all. The per-lead cost does not. */}
+      {report === 'blast_skiptrace' && credits?.known && credits.low && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <strong>Tracerfy credits are low.</strong> About {credits.remaining?.toLocaleString()} left
+          {credits.matchesRemaining != null ? ` — roughly ${credits.matchesRemaining.toLocaleString()} more matches` : ''}.
+          {' '}Ask your manager to top up before the next blast.
+        </Alert>
+      )}
+
+      {blastRuns && blastRuns.length > 0 && (
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+            {blastRuns.length} blast run{blastRuns.length === 1 ? '' : 's'} · {rows.length} lead{rows.length === 1 ? '' : 's'} traced
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+            What each run recovered. Leads that returned nothing are worth re-checking before they are written off.
+          </Typography>
+          <Stack spacing={1}>
+            {blastRuns.map((run) => (
+              <Stack
+                key={run.runId}
+                direction="row" spacing={1} useFlexGap
+                sx={{ alignItems: 'center', flexWrap: 'wrap', py: 0.75, borderTop: '1px solid', borderColor: 'divider' }}
+              >
+                <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 92, fontVariantNumeric: 'tabular-nums' }}>{run.when}</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ minWidth: 190 }}>{run.by}</Typography>
+                <Chip size="small" label={`${run.leads} leads`} sx={{ height: 20, fontSize: 11 }} />
+                <Chip size="small" label={`${run.hits} matched`} sx={{ height: 20, fontSize: 11, bgcolor: '#dcfce7', color: '#166534', fontWeight: 600 }} />
+                <Chip size="small" label={`${run.leads - run.hits} no match`} sx={{ height: 20, fontSize: 11 }} />
+                <Typography variant="caption" color="text.secondary">
+                  {run.phone} with phone · {run.email} with email
+                </Typography>
+              </Stack>
+            ))}
+          </Stack>
+        </Paper>
+      )}
+
       <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
         {loading ? <CircularProgress size={18} /> : <Typography variant="body2" color="text.secondary"><strong>{shownRows.length}</strong> record{shownRows.length === 1 ? '' : 's'}</Typography>}
       </Box>
@@ -253,7 +331,7 @@ export default function QcReportsPage() {
         <Table size="small" stickyHeader>
           <TableHead>
             <TableRow>
-              {['Owner', 'City / ZIP', 'Eff Date', 'Grade', 'Type', 'Travelers', 'Plymouth', 'Reason', 'Detail', 'By'].map((h) => (
+              {['Owner', 'City / ZIP', 'Eff Date', 'Grade', 'Type', 'Travelers', 'Plymouth', 'Reason', 'Detail', 'By', 'When'].map((h) => (
                 <TableCell key={h} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</TableCell>
               ))}
             </TableRow>
@@ -280,10 +358,11 @@ export default function QcReportsPage() {
                 </TableCell>
                 <TableCell sx={{ maxWidth: 380, fontSize: 12.5, color: '#3d4658' }}>{r.context}</TableCell>
                 <TableCell sx={{ whiteSpace: 'nowrap', fontSize: 12, color: '#616b7d' }}>{r.by ?? '—'}</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap', fontSize: 12, color: '#616b7d', fontVariantNumeric: 'tabular-nums' }}>{r.at ?? '—'}</TableCell>
               </TableRow>
             ))}
             {!loading && ran && shownRows.length === 0 && (
-              <TableRow><TableCell colSpan={9} sx={{ textAlign: 'center', py: 4, color: '#888' }}>No records match.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={11} sx={{ textAlign: 'center', py: 4, color: '#888' }}>No records match.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>

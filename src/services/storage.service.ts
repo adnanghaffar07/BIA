@@ -20,6 +20,7 @@ const LEAD_COLS = [
   'floodZone', 'floodZoneType', 'floodZoneSubtype', 'floodSfha', 'floodZoneManual', 'floodCheckedAt',
   'hoa', 'latitude', 'longitude', 'fips', 'apn',
   'recordingDate', 'lastUpdateDate', 'skipTraced', 'skipTracedAt', 'deepSkipTracedAt', 'skipTraceOwnerName',
+  'blastSkipTracedAt', 'blastSkipTracedBy', 'blastRunId',
   'phone1', 'phone2', 'email1', 'email2', 'engine', 'renewalTargetDate', 'grade',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'travelersEligibilityReason', 'plymouthEligibilityReason',
@@ -65,6 +66,7 @@ const LEAD_COLS_SQL = LEAD_COLS.map((c) => `"${c}"`).join(', ');
 /** CRM fields that must NOT be overwritten when re-ingesting API data */
 const CRM_ONLY_FIELDS = new Set([
   'status', 'grade', 'skipTraced', 'skipTracedAt', 'deepSkipTracedAt', 'skipTraceOwnerName',
+  'blastSkipTracedAt', 'blastSkipTracedBy', 'blastRunId',
   'owner1FirstName', 'owner1LastName',
   'phone1', 'phone2', 'email1', 'email2',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
@@ -531,6 +533,8 @@ export async function updateLead(
     ownerVerifyStatus: string; ownerVerifyName: string; ownerVerifySource: string; ownerVerifyAt: Date | string; ownerVerifyDetail: string;
     lowPremium: number; expectedPremium: number; highPremium: number; pricingConfidence: number;
     skipTraced: boolean; skipTracedAt: Date; deepSkipTracedAt: Date; skipTraceData: any; skipTraceOwnerName: string | null;
+    // Blast provenance (Frank Sep-2026) — set only by the cohort blast, never by the card.
+    blastSkipTracedAt: Date; blastSkipTracedBy: string | null; blastRunId: string | null;
     owner1FirstName: string; owner1LastName: string;
     phone1: string; phone2: string; email1: string; email2: string;
     producerEmail: string; posQuoteNumber: string; posCarrier: string;
