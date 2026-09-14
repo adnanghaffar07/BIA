@@ -397,3 +397,42 @@ export async function deleteCampaign(id: string): Promise<void> {
 export async function deleteLead(leadId: string): Promise<void> {
   await apiFetch(`/leads/${encodeURIComponent(leadId)}`, { method: 'DELETE' });
 }
+
+/**
+ * How many leads each campaign actually holds.
+ *
+ * Needed because /campaigns/analytics only contains campaigns that have SEND
+ * activity — a draft campaign is absent from the response entirely, not merely
+ * reported as zero. Defaulting a missing row to zero made a campaign holding 300
+ * leads read "0 leads", which looks exactly like a failed import.
+ *
+ * Counted with ONE pass over the workspace's leads, grouped by campaign locally,
+ * rather than a request per campaign: the overview always renders every campaign,
+ * so per-campaign counting would be N+1 by construction.
+ *
+ * `truncated` is true when the page ceiling was hit, so the caller can say "1000+"
+ * instead of quietly reporting a number it knows is short.
+ */
+export async function getLeadCountsByCampaign(
+  opts?: { maxPages?: number },
+): Promise<{ counts: Map<string, number>; truncated: boolean }> {
+  const maxPages = opts?.maxPages ?? 50; // 50 × 100 = 5,000 leads
+  const counts = new Map<string, number>();
+  let cursor: string | undefined;
+  let truncated = true;
+
+  for (let page = 0; page < maxPages; page++) {
+    const json = await postJson<{ items?: VendorLead[]; next_starting_after?: string }>(
+      '/leads/list',
+      { limit: PAGE_SIZE, ...(cursor ? { starting_after: cursor } : {}) },
+    );
+    for (const lead of json.items ?? []) {
+      const id = lead.campaign;
+      if (!id) continue;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    if (!json.next_starting_after) { truncated = false; break; }
+    cursor = json.next_starting_after;
+  }
+  return { counts, truncated };
+}

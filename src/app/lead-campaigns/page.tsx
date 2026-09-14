@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Container, Box, Typography, Paper, Tabs, Tab, Table, TableHead, TableRow, TableCell,
-  TableBody, Chip, CircularProgress, Alert, Stack, Button, Tooltip,
+  TableBody, Chip, CircularProgress, Alert, Stack, Button,
 } from '@mui/material';
 import CampaignIcon from '@mui/icons-material/Campaign';
 import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
@@ -28,15 +28,16 @@ type TabKey = 'campaigns' | 'mailboxes';
 
 type CampaignRow = {
   id: string; name: string; status: number; statusLabel: string;
-  leads: number; contacted: number; sent: number; opens: number; replies: number;
+  leads: number; leadsTruncated?: boolean; contacted: number; sent: number; opens: number; replies: number;
   clicks: number; bounced: number; unsubscribed: number;
   openRate: number | null; replyRate: number | null; bounceRate: number | null;
 };
 
-type DomainRow = {
-  domain: string; mailboxes: number; warmingUp: number; dailyCapacity: number;
-  trackingDomain: string | null; trackingActive: boolean; avgWarmupScore: number | null;
+type MailboxRow = {
+  email: string; domain: string; name: string | null; active: boolean;
+  warmingUp: boolean; warmupScore: number | null; dailyLimit: number; trackingDomain: string | null;
 };
+
 
 const statusColor = (status: number): { bg: string; fg: string } =>
   status === 1 ? { bg: '#dcfce7', fg: '#166534' }      // active
@@ -49,7 +50,7 @@ const pct = (v: number | null) => (v == null ? '—' : `${v}%`);
 export default function LeadCampaignsPage() {
   const [tab, setTab] = useState<TabKey>('campaigns');
   const [campaigns, setCampaigns] = useState<CampaignRow[]>([]);
-  const [domains, setDomains] = useState<DomainRow[]>([]);
+  const [mailboxes, setMailboxes] = useState<MailboxRow[]>([]);
   const [mailboxTotals, setMailboxTotals] = useState<{ totalMailboxes: number; totalDailyCapacity: number; missingTrackingDomain: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -69,7 +70,7 @@ export default function LeadCampaignsPage() {
         const res = await fetch('/api/lead-campaigns/accounts');
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || 'Could not load mailboxes');
-        setDomains(json.data ?? []);
+        setMailboxes(json.mailboxes ?? []);
         setMailboxTotals({
           totalMailboxes: json.totalMailboxes ?? 0,
           totalDailyCapacity: json.totalDailyCapacity ?? 0,
@@ -142,7 +143,9 @@ export default function LeadCampaignsPage() {
                     <TableCell>
                       <Chip label={c.statusLabel} size="small" sx={{ height: 20, fontSize: 11, bgcolor: sc.bg, color: sc.fg, fontWeight: 600 }} />
                     </TableCell>
-                    <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{c.leads.toLocaleString()}</TableCell>
+                    <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {c.leads.toLocaleString()}{c.leadsTruncated && c.leads > 0 ? '+' : ''}
+                    </TableCell>
                     <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{c.sent.toLocaleString()}</TableCell>
                     <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>
                       {c.opens.toLocaleString()} <span style={{ color: '#8a94a6', fontSize: 12 }}>{pct(c.openRate)}</span>
@@ -195,44 +198,44 @@ export default function LeadCampaignsPage() {
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
-                  {['Sending domain', 'Mailboxes', 'Warming', 'Warmup score', 'Sends/day', 'Tracking domain'].map((h) => (
+                  {['Mailbox', 'Name', 'Sending domain', 'Status', 'Warmup', 'Sends/day', 'Tracking domain'].map((h) => (
                     <TableCell key={h} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</TableCell>
                   ))}
                 </TableRow>
               </TableHead>
               <TableBody>
-                {domains.map((d) => (
-                  <TableRow key={d.domain} hover>
-                    <TableCell sx={{ fontWeight: 600 }}>{d.domain}</TableCell>
-                    <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{d.mailboxes}</TableCell>
-                    <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                      {d.warmingUp === d.mailboxes
-                        ? <Chip size="small" label="all" sx={{ height: 20, fontSize: 11, bgcolor: '#dcfce7', color: '#166534', fontWeight: 600 }} />
-                        : `${d.warmingUp} of ${d.mailboxes}`}
-                    </TableCell>
-                    <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{d.avgWarmupScore ?? '—'}</TableCell>
-                    <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{d.dailyCapacity}</TableCell>
-                    <TableCell>
-                      {d.trackingDomain ? (
-                        <Tooltip title={d.trackingActive ? 'Active' : 'Configured but not active'}>
-                          <Chip
-                            size="small" label={d.trackingDomain}
-                            sx={{
-                              height: 20, fontSize: 11, fontWeight: 600,
-                              bgcolor: d.trackingActive ? '#dcfce7' : '#fff3d6',
-                              color: d.trackingActive ? '#166534' : '#8a5a00',
-                            }}
-                          />
-                        </Tooltip>
-                      ) : (
-                        <Chip size="small" label="none — uses shared" sx={{ height: 20, fontSize: 11, bgcolor: '#fee2e2', color: '#b3261e', fontWeight: 600 }} />
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {!loading && domains.length === 0 && !error && (
+                {mailboxes.map((m, i) => {
+                  // A rule between domains: mailboxes on one domain share its reputation
+                  // and its tracking domain, so the grouping carries real meaning.
+                  const newDomain = i > 0 && mailboxes[i - 1].domain !== m.domain;
+                  return (
+                    <TableRow
+                      key={m.email} hover
+                      sx={newDomain ? { '& td': { borderTop: '2px solid', borderTopColor: 'divider' } } : undefined}
+                    >
+                      <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{m.email}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{m.name ?? '—'}</TableCell>
+                      <TableCell sx={{ color: '#5c6b78' }}>{m.domain}</TableCell>
+                      <TableCell>
+                        {m.active
+                          ? <Chip size="small" label="Active" sx={{ height: 20, fontSize: 11, bgcolor: '#dcfce7', color: '#166534', fontWeight: 600 }} />
+                          : <Chip size="small" label="Setting up" sx={{ height: 20, fontSize: 11, bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 }} />}
+                      </TableCell>
+                      <TableCell sx={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                        {m.warmingUp ? (m.warmupScore ?? '—') : <span style={{ color: '#b3261e' }}>off</span>}
+                      </TableCell>
+                      <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{m.dailyLimit}</TableCell>
+                      <TableCell>
+                        {m.trackingDomain
+                          ? <Chip size="small" label={m.trackingDomain} sx={{ height: 20, fontSize: 11, bgcolor: '#dcfce7', color: '#166534', fontWeight: 600 }} />
+                          : <Chip size="small" label="none — uses shared" sx={{ height: 20, fontSize: 11, bgcolor: '#fee2e2', color: '#b3261e', fontWeight: 600 }} />}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {!loading && mailboxes.length === 0 && !error && (
                   <TableRow>
-                    <TableCell colSpan={6} sx={{ textAlign: 'center', py: 4, color: '#888' }}>
+                    <TableCell colSpan={7} sx={{ textAlign: 'center', py: 4, color: '#888' }}>
                       No sending mailboxes configured.
                     </TableCell>
                   </TableRow>
