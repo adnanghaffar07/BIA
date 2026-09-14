@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCampaign, patchCampaign, deleteCampaign, CAMPAIGN_STATUS } from '@/lib/integrations/leadCampaign';
 import { requireCampaignAccess, vendorError } from '@/lib/integrations/campaignAccess';
+import { CAMPAIGN_TIMEZONES } from '@/lib/integrations/campaignTimezones';
 
 /**
  * One campaign: read, rename/reconfigure, delete.
@@ -16,6 +17,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     const { id } = await params;
     const c = await getCampaign(id);
     const step = c.sequences?.[0]?.steps?.[0];
+    const schedule = c.campaign_schedule?.schedules?.[0];
     return NextResponse.json({
       success: true,
       data: {
@@ -32,6 +34,21 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         steps: (c.sequences?.[0]?.steps ?? []).length,
         firstSubject: step?.variants?.[0]?.subject ?? null,
         firstBody: step?.variants?.[0]?.body ?? null,
+        // Everything the settings and sequence editors need, so the page never has to
+        // guess at current values or blank them by omission on save.
+        schedule: schedule
+          ? {
+              from: schedule.timing?.from ?? '09:00',
+              to: schedule.timing?.to ?? '17:00',
+              days: schedule.days ?? {},
+              timezone: schedule.timezone ?? null,
+            }
+          : null,
+        sequence: (c.sequences?.[0]?.steps ?? []).map((s) => ({
+          delay: s.delay ?? 0,
+          subject: s.variants?.[0]?.subject ?? '',
+          body: s.variants?.[0]?.body ?? '',
+        })),
       },
     });
   } catch (err) {
@@ -54,6 +71,38 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (typeof body?.openTracking === 'boolean') patch.open_tracking = body.openTracking;
     if (typeof body?.linkTracking === 'boolean') patch.link_tracking = body.linkTracking;
     if (Array.isArray(body?.mailboxes)) patch.email_list = body.mailboxes;
+
+    // Schedule. Sent whole because the platform replaces the array — patching one
+    // field would blank the others.
+    if (body?.schedule) {
+      const sc = body.schedule;
+      if (!CAMPAIGN_TIMEZONES.some((t) => t.value === sc.timezone)) {
+        return NextResponse.json(
+          { error: 'That timezone is not one the campaign platform accepts.' },
+          { status: 400 },
+        );
+      }
+      patch.campaign_schedule = {
+        schedules: [{
+          name: 'Default Schedule',
+          timing: { from: sc.from || '09:00', to: sc.to || '17:00' },
+          days: sc.days ?? {},
+          timezone: sc.timezone,
+        }],
+      };
+    }
+
+    // Sequence steps. Step 1 always sends immediately; later steps carry a delay in
+    // days from the previous one.
+    if (Array.isArray(body?.sequence)) {
+      patch.sequences = [{
+        steps: body.sequence.map((s: any, i: number) => ({
+          type: 'email',
+          delay: i === 0 ? 0 : Number(s?.delay ?? 3),
+          variants: [{ subject: String(s?.subject ?? ''), body: String(s?.body ?? '') }],
+        })),
+      }];
+    }
 
     if (!Object.keys(patch).length) {
       return NextResponse.json({ error: 'Nothing to change.' }, { status: 400 });

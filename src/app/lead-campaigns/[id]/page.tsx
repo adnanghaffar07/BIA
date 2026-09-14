@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   Container, Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
   Chip, CircularProgress, Alert, Stack, Button, TextField, Dialog, DialogTitle,
-  DialogContent, DialogActions, Tooltip, Divider,
+  DialogContent, DialogActions, Tooltip, Tabs, Tab, Badge,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -14,16 +14,25 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import OutboxIcon from '@mui/icons-material/Outbox';
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import CampaignPushDialog from '@/components/CampaignPushDialog';
 import CampaignCsvImportDialog from '@/components/CampaignCsvImportDialog';
-import CampaignMailboxDialog from '@/components/CampaignMailboxDialog';
+import CampaignMailboxPanel from '@/components/CampaignMailboxPanel';
+import CampaignSettingsPanel from '@/components/CampaignSettingsPanel';
+import CampaignSequencePanel from '@/components/CampaignSequencePanel';
+import CampaignAnalyticsPanel from '@/components/CampaignAnalyticsPanel';
 
 /**
- * One campaign, managed from the CRM: its settings, its leads, and every lifecycle
- * action. Each control calls exactly one narrow route.
+ * One campaign, managed from the CRM.
+ *
+ * The four working areas are tabs rather than dialogs: writing a sequence or picking
+ * mailboxes is editing the campaign, not a side errand, and a modal hides the campaign
+ * you are editing. Lifecycle actions that apply to the whole campaign — activate,
+ * duplicate, delete — stay above the tabs, because they are not one area's concern.
+ *
+ * The cost of inline editing is that there is no Cancel to bail out with, so each panel
+ * reports whether it holds unsaved edits and the tab switch is guarded.
  */
 
 type Detail = {
@@ -31,6 +40,8 @@ type Detail = {
   dailyLimit: number | null; stopOnReply: boolean | null; unsubscribeHeader: boolean | null;
   linkTracking: boolean | null; openTracking: boolean | null;
   mailboxes: string[]; steps: number; firstSubject: string | null;
+  schedule: { from: string; to: string; days: Record<string, boolean>; timezone: string | null } | null;
+  sequence: Array<{ delay: number; subject: string; body: string }>;
 };
 
 type LeadRow = {
@@ -40,6 +51,12 @@ type LeadRow = {
 };
 
 const ACTIVE = 1;
+
+const TAB_ANALYTICS = 0;
+const TAB_LEADS = 1;
+const TAB_SEQUENCE = 2;
+const TAB_MAILBOXES = 3;
+const TAB_SETTINGS = 4;
 
 export default function CampaignDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -53,9 +70,12 @@ export default function CampaignDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const [tab, setTab] = useState(TAB_ANALYTICS);
+  const [dirty, setDirty] = useState(false);
+  const [pendingTab, setPendingTab] = useState<number | null>(null);
+
   const [addOpen, setAddOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [mailboxOpen, setMailboxOpen] = useState(false);
   const [pushOpen, setPushOpen] = useState(false);
   const [csvOpen, setCsvOpen] = useState(false);
   const [confirmName, setConfirmName] = useState('');
@@ -85,6 +105,20 @@ export default function CampaignDetailPage() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // A panel with unsaved edits gets a confirmation before its state is thrown away;
+  // anything clean switches straight through.
+  const goToTab = (next: number) => {
+    if (next === tab) return;
+    if (dirty) { setPendingTab(next); return; }
+    setTab(next);
+  };
+
+  const discardAndGo = () => {
+    if (pendingTab != null) setTab(pendingTab);
+    setDirty(false);
+    setPendingTab(null);
+  };
 
   const act = async (action: 'pause' | 'activate' | 'duplicate') => {
     setBusy(action);
@@ -156,6 +190,14 @@ export default function CampaignDetailPage() {
   };
 
   const isActive = detail?.status === ACTIVE;
+  const noSteps = detail?.steps === 0;
+  const noMailboxes = detail?.mailboxes.length === 0;
+
+  /** A tab label that carries a red dot when that area is what blocks sending. */
+  const tabLabel = (text: string, flagged: boolean) =>
+    flagged
+      ? <Badge variant="dot" color="error" sx={{ '& .MuiBadge-badge': { right: -8, top: 4 } }}>{text}</Badge>
+      : text;
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
@@ -182,6 +224,7 @@ export default function CampaignDetailPage() {
             />
           </Stack>
 
+          {/* Lifecycle actions for the campaign as a whole — not the concern of any one tab. */}
           <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', mb: 3 }}>
             {isActive ? (
               <Button
@@ -193,8 +236,8 @@ export default function CampaignDetailPage() {
             ) : (
               <Tooltip
                 title={
-                  detail.steps === 0 ? 'This campaign has no email step yet — it cannot send.'
-                  : detail.mailboxes.length === 0 ? 'No sending mailbox is assigned.'
+                  noSteps ? 'This campaign has no email step yet — it cannot send.'
+                  : noMailboxes ? 'No sending mailbox is assigned.'
                   : ''
                 }
               >
@@ -202,7 +245,7 @@ export default function CampaignDetailPage() {
                   <Button
                     size="small" variant="contained" color="success" startIcon={<PlayArrowIcon />}
                     onClick={() => act('activate')}
-                    disabled={!!busy || detail.steps === 0 || detail.mailboxes.length === 0}
+                    disabled={!!busy || noSteps || noMailboxes}
                   >
                     {busy === 'activate' ? 'Activating…' : 'Activate'}
                   </Button>
@@ -211,18 +254,6 @@ export default function CampaignDetailPage() {
             )}
             <Button size="small" variant="outlined" startIcon={<ContentCopyIcon />} onClick={() => act('duplicate')} disabled={!!busy}>
               {busy === 'duplicate' ? 'Duplicating…' : 'Duplicate'}
-            </Button>
-            <Button size="small" variant="contained" startIcon={<GroupAddIcon />} onClick={() => setPushOpen(true)} disabled={!!busy}>
-              Add leads from CRM
-            </Button>
-            <Button size="small" variant="outlined" startIcon={<UploadFileIcon />} onClick={() => setCsvOpen(true)} disabled={!!busy}>
-              Import CSV
-            </Button>
-            <Button size="small" variant="outlined" startIcon={<PersonAddAlt1Icon />} onClick={() => setAddOpen(true)} disabled={!!busy}>
-              Add one lead
-            </Button>
-            <Button size="small" variant="outlined" startIcon={<OutboxIcon />} onClick={() => setMailboxOpen(true)} disabled={!!busy}>
-              Sending mailboxes
             </Button>
             <Button size="small" variant="outlined" startIcon={<RefreshIcon />} onClick={load} disabled={!!busy || loading}>
               Refresh
@@ -238,86 +269,155 @@ export default function CampaignDetailPage() {
               <Chip size="small" label={`${totals?.count ?? 0} leads`} sx={{ fontWeight: 600 }} />
               <Chip size="small" label={`${totals?.opened ?? 0} opened`} />
               <Chip size="small" label={`${totals?.replied ?? 0} replied`} sx={{ bgcolor: '#dcfce7', color: '#166534', fontWeight: 600 }} />
-              <Divider orientation="vertical" flexItem />
-              <Chip size="small" variant="outlined" label={`${detail.steps} step${detail.steps === 1 ? '' : 's'}`} />
-              <Chip
-                size="small" clickable onClick={() => setMailboxOpen(true)}
-                variant={detail.mailboxes.length === 0 ? 'filled' : 'outlined'}
-                label={`${detail.mailboxes.length} mailbox${detail.mailboxes.length === 1 ? '' : 'es'}`}
-                sx={detail.mailboxes.length === 0 ? { bgcolor: '#fee2e2', color: '#b3261e', fontWeight: 600 } : undefined}
-              />
-              {detail.dailyLimit != null && <Chip size="small" variant="outlined" label={`${detail.dailyLimit}/day`} />}
-              <Chip
-                size="small"
-                label={detail.unsubscribeHeader ? 'Unsubscribe header on' : 'No unsubscribe header'}
-                sx={{
-                  fontWeight: 600,
-                  bgcolor: detail.unsubscribeHeader ? '#dcfce7' : '#fee2e2',
-                  color: detail.unsubscribeHeader ? '#166534' : '#b3261e',
-                }}
-              />
             </Stack>
-            {detail.mailboxes.length === 0 && (
-              <Alert severity="warning" sx={{ mt: 1.5 }}>
-                No sending mailbox is assigned, so this campaign cannot send. Pick one before
-                activating it.
+
+            {noSteps && (
+              <Alert
+                severity="warning" sx={{ mt: 1.5 }}
+                action={<Button size="small" onClick={() => goToTab(TAB_SEQUENCE)}>Write it</Button>}
+              >
+                This campaign has no email written yet, so it cannot send.
+              </Alert>
+            )}
+            {noMailboxes && (
+              <Alert
+                severity="warning" sx={{ mt: 1.5 }}
+                action={<Button size="small" onClick={() => goToTab(TAB_MAILBOXES)}>Pick one</Button>}
+              >
+                No sending mailbox is assigned, so this campaign cannot send.
               </Alert>
             )}
             {!detail.unsubscribeHeader && (
-              <Alert severity="warning" sx={{ mt: 1.5 }}>
+              <Alert
+                severity="warning" sx={{ mt: 1.5 }}
+                action={<Button size="small" onClick={() => goToTab(TAB_SETTINGS)}>Turn it on</Button>}
+              >
                 This campaign sends without a one-click unsubscribe header. That is a
-                compliance and deliverability problem — turn it on before activating.
+                compliance and deliverability problem.
               </Alert>
-            )}
-            {detail.firstSubject && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
-                First subject: <strong>{detail.firstSubject}</strong>
-              </Typography>
             )}
           </Paper>
 
-          <Typography variant="h6" sx={{ mb: 1 }}>Leads</Typography>
-          <Paper variant="outlined" sx={{ overflowX: 'auto' }}>
-            <Table size="small" stickyHeader>
-              <TableHead>
-                <TableRow>
-                  {['Email', 'Name', 'Opens', 'Replies', 'Clicks', 'Last contact', 'CRM lead'].map((h) => (
-                    <TableCell key={h} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</TableCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {leads.map((l) => (
-                  <TableRow key={l.id} hover>
-                    <TableCell>{l.email}</TableCell>
-                    <TableCell>{[l.firstName, l.lastName].filter(Boolean).join(' ') || '—'}</TableCell>
-                    <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{l.opens}</TableCell>
-                    <TableCell sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: l.replies > 0 ? 700 : 400, color: l.replies > 0 ? '#166534' : undefined }}>
-                      {l.replies}
-                    </TableCell>
-                    <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{l.clicks}</TableCell>
-                    <TableCell sx={{ whiteSpace: 'nowrap', fontSize: 12.5 }}>
-                      {l.lastContact ? String(l.lastContact).slice(0, 10) : '—'}
-                    </TableCell>
-                    <TableCell>
-                      {l.propertyId
-                        ? <a href={`/leads/${l.propertyId}`} style={{ color: '#1565c0' }}>open</a>
-                        : <span style={{ color: '#b0b6c0' }}>—</span>}
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {!loading && leads.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={7} sx={{ textAlign: 'center', py: 4, color: '#888' }}>
-                      No leads in this campaign yet.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </Paper>
+          <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+            <Tabs value={tab} onChange={(_, v) => goToTab(v)}>
+              <Tab label="Analytics" />
+              <Tab label={`Leads${totals?.count ? ` (${totals.count})` : ''}`} />
+              <Tab label={tabLabel('Email sequence', !!noSteps)} />
+              <Tab label={tabLabel('Sending mailboxes', !!noMailboxes)} />
+              <Tab label={tabLabel('Settings', !detail.unsubscribeHeader)} />
+            </Tabs>
+          </Box>
+
+          {tab === TAB_ANALYTICS && <CampaignAnalyticsPanel campaignId={detail.id} />}
+
+          {tab === TAB_LEADS && (
+            <>
+              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', mb: 2 }}>
+                <Button size="small" variant="contained" startIcon={<GroupAddIcon />} onClick={() => setPushOpen(true)} disabled={!!busy}>
+                  Add leads from CRM
+                </Button>
+                <Button size="small" variant="outlined" startIcon={<UploadFileIcon />} onClick={() => setCsvOpen(true)} disabled={!!busy}>
+                  Import CSV
+                </Button>
+                <Button size="small" variant="outlined" startIcon={<PersonAddAlt1Icon />} onClick={() => setAddOpen(true)} disabled={!!busy}>
+                  Add one lead
+                </Button>
+              </Stack>
+
+              <Paper variant="outlined" sx={{ overflowX: 'auto' }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      {['Email', 'Name', 'Opens', 'Replies', 'Clicks', 'Last contact', 'CRM lead'].map((h) => (
+                        <TableCell key={h} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {leads.map((l) => (
+                      <TableRow key={l.id} hover>
+                        <TableCell>{l.email}</TableCell>
+                        <TableCell>{[l.firstName, l.lastName].filter(Boolean).join(' ') || '—'}</TableCell>
+                        <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{l.opens}</TableCell>
+                        <TableCell sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: l.replies > 0 ? 700 : 400, color: l.replies > 0 ? '#166534' : undefined }}>
+                          {l.replies}
+                        </TableCell>
+                        <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{l.clicks}</TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap', fontSize: 12.5 }}>
+                          {l.lastContact ? String(l.lastContact).slice(0, 10) : '—'}
+                        </TableCell>
+                        <TableCell>
+                          {l.propertyId
+                            ? <a href={`/leads/${l.propertyId}`} style={{ color: '#1565c0' }}>open</a>
+                            : <span style={{ color: '#b0b6c0' }}>—</span>}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {!loading && leads.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={7} sx={{ textAlign: 'center', py: 4, color: '#888' }}>
+                          No leads in this campaign yet.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </Paper>
+            </>
+          )}
+
+          {tab === TAB_SEQUENCE && (
+            <CampaignSequencePanel
+              campaignId={detail.id}
+              current={detail.sequence ?? []}
+              onDirtyChange={setDirty}
+              onSaved={() => { setNotice('Email sequence saved.'); load(); }}
+            />
+          )}
+
+          {tab === TAB_MAILBOXES && (
+            <CampaignMailboxPanel
+              campaignId={detail.id}
+              selected={detail.mailboxes}
+              onDirtyChange={setDirty}
+              onSaved={(mb) => {
+                setNotice(`Now sending from ${mb.length} mailbox${mb.length === 1 ? '' : 'es'}.`);
+                load();
+              }}
+            />
+          )}
+
+          {tab === TAB_SETTINGS && (
+            <CampaignSettingsPanel
+              campaignId={detail.id}
+              current={{
+                name: detail.name,
+                dailyLimit: detail.dailyLimit,
+                unsubscribeHeader: detail.unsubscribeHeader,
+                openTracking: detail.openTracking,
+                linkTracking: detail.linkTracking,
+                schedule: detail.schedule,
+              }}
+              onDirtyChange={setDirty}
+              onSaved={() => { setNotice('Settings saved.'); load(); }}
+            />
+          )}
         </>
       ) : null}
+
+      {/* Leaving a tab mid-edit would drop the work silently, so it is confirmed. */}
+      <Dialog open={pendingTab != null} onClose={() => setPendingTab(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Discard unsaved changes?</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2">
+            This tab has changes you have not saved. Leaving it now throws them away.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button onClick={() => setPendingTab(null)} color="inherit">Stay and keep editing</Button>
+          <Button variant="contained" color="error" onClick={discardAndGo}>Discard</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Add one lead by hand */}
       <Dialog open={addOpen} onClose={busy ? undefined : () => setAddOpen(false)} maxWidth="xs" fullWidth>
@@ -367,19 +467,6 @@ export default function CampaignDetailPage() {
           onClose={() => setPushOpen(false)}
           onFinished={(t) => {
             setNotice(`${t.pushed} lead${t.pushed === 1 ? '' : 's'} added from the CRM.`);
-            load();
-          }}
-        />
-      )}
-
-      {mailboxOpen && detail && (
-        <CampaignMailboxDialog
-          open
-          campaignId={detail.id}
-          selected={detail.mailboxes}
-          onClose={() => setMailboxOpen(false)}
-          onSaved={(mb) => {
-            setNotice(`Now sending from ${mb.length} mailbox${mb.length === 1 ? '' : 'es'}.`);
             load();
           }}
         />

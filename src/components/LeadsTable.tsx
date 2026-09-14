@@ -57,13 +57,53 @@ interface LeadsTableProps {
    * this own the values and refetch on change; pages that don't keep the old local
    * behaviour, which is still correct for a fully-loaded list (the Queue).
    */
+  /**
+   * Fetch the COMPLETE, CURRENT set for the applied filters, for export.
+   *
+   * Without this, Export writes whatever rows the browser happens to be holding —
+   * which is the first page only, and is as stale as the last fetch. A skip trace
+   * that ran since the page loaded would be missing from the file, and a filter
+   * typed but not applied would silently export the previous cohort.
+   */
+  fetchAllForExport?: () => Promise<any[]>;
   serverFilters?: {
     county: string;
     zip: string;
     propertyType: string;
+    contact: string;
     zipOptions: string[];
-    onChange: (next: { county?: string; zip?: string; propertyType?: string }) => void;
+    onChange: (next: { county?: string; zip?: string; propertyType?: string; contact?: string }) => void;
   };
+}
+
+/**
+ * Contact availability. Worth its own control because contact details only appear
+ * once a skip trace has run — an unfiltered export is mostly blank contact columns,
+ * which looks like a broken file rather than like leads nobody has worked.
+ * "Has email" includes the co-insured address: the household is reachable either way.
+ */
+const CONTACT_OPTIONS = [
+  { value: '', label: 'Any contact status' },
+  { value: 'email', label: 'Has email' },
+  { value: 'phone', label: 'Has phone' },
+  { value: 'either', label: 'Has email or phone' },
+  { value: 'none', label: 'No contact yet' },
+];
+
+/** Mirror of the server-side contact predicate, for fully-loaded lists (the Queue). */
+function matchesContact(lead: any, want: string): boolean {
+  if (!want) return true;
+  const has = (v: unknown) => !!String(v ?? '').trim();
+  // The co-insured counts: the household is reachable either way.
+  const email = has(lead?.email1) || has(lead?.owner2Email);
+  const phone = has(lead?.phone1) || has(lead?.owner2Phone);
+  switch (want) {
+    case 'email':  return email;
+    case 'phone':  return phone;
+    case 'either': return email || phone;
+    case 'none':   return !email && !phone;
+    default:       return true;
+  }
 }
 
 function getLeadRowKey(lead: any, index: number): string {
@@ -436,6 +476,7 @@ export default function LeadsTable({
   onPageChange,
   onRowsPerPageChange,
   extraFilters,
+  fetchAllForExport,
   serverFilters,
   totalAvailable,
 }: LeadsTableProps) {
@@ -454,6 +495,31 @@ export default function LeadsTable({
 
   // When the page filters server-side its values win and the local state is bypassed.
   const isServer = !!serverFilters;
+  const [filterContact, setFilterContact] = useStickyState(`lt:${pathname}:contact`, '');
+  const [exporting, setExporting] = useState(false);
+
+  /**
+   * Always export fresh. When the page can refetch, pull the whole filtered set from
+   * the server first; otherwise fall back to the rows already loaded (the Queue holds
+   * all of them, so that is complete too).
+   */
+  const handleExport = async () => {
+    if (!fetchAllForExport) { exportLeadsToCSV(filteredLeads); return; }
+    setExporting(true);
+    try {
+      const fresh = await fetchAllForExport();
+      exportLeadsToCSV(fresh as any);
+    } catch {
+      // Never silently export stale rows in place of the real answer.
+      alert('Could not refresh the leads for export. Nothing was downloaded — try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const contactValue = serverFilters ? serverFilters.contact : filterContact;
+  const setContactValue = (v: string) =>
+    (serverFilters ? serverFilters.onChange({ contact: v }) : setFilterContact(v));
   const countyValue = serverFilters ? serverFilters.county : filterCounty;
   const zipValue = serverFilters ? serverFilters.zip : filterZip;
   const setCountyValue = (v: string) => (serverFilters ? serverFilters.onChange({ county: v }) : setFilterCounty(v));
@@ -493,10 +559,11 @@ export default function LeadsTable({
         if (c !== filterCounty) return false;
       }
       if (!isServer && !matchesDwellingType(l, filterType)) return false;
+      if (!isServer && !matchesContact(l, filterContact)) return false;
       if (filterStatus && (l.status ?? 'new') !== filterStatus) return false;
       return true;
     });
-  }, [leads, search, filterZip, filterCounty, filterType, filterStatus, isServer]);
+  }, [leads, search, filterZip, filterCounty, filterType, filterStatus, filterContact, isServer]);
 
   const hasFilters = search || zipValue || countyValue || typeValue || filterStatus;
 
@@ -611,6 +678,12 @@ export default function LeadsTable({
               {DWELLING_TYPE_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
             </Select>
           </FormControl>
+          <FormControl size="small" sx={{ minWidth: 185 }}>
+            <InputLabel>Contact</InputLabel>
+            <Select value={contactValue} label="Contact" onChange={(e) => setContactValue(e.target.value)}>
+              {CONTACT_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+            </Select>
+          </FormControl>
           <FormControl size="small" sx={{ minWidth: 150 }}>
             <InputLabel>Status</InputLabel>
             <Select value={filterStatus} label="Status" onChange={(e) => setFilterStatus(e.target.value)}>
@@ -632,7 +705,13 @@ export default function LeadsTable({
             </Button>
           )}
           <Box sx={{ flex: 1 }} />
-          <Button variant="outlined" startIcon={<GetAppIcon />} onClick={() => exportLeadsToCSV(filteredLeads)} size="small">
+          <Button
+            variant="outlined"
+            startIcon={exporting ? <CircularProgress size={14} color="inherit" /> : <GetAppIcon />}
+            onClick={handleExport}
+            disabled={exporting}
+            size="small"
+          >
             Export CSV
           </Button>
         </Stack>

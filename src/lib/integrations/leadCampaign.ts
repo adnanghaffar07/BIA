@@ -101,7 +101,15 @@ export type Campaign = {
   link_tracking?: boolean;
   open_tracking?: boolean;
   email_list?: string[];
-  sequences?: Array<{ steps?: Array<{ delay?: number; variants?: Array<{ subject?: string; body?: string }> }> }>;
+  campaign_schedule?: {
+    schedules?: Array<{
+      name?: string;
+      timing?: { from?: string; to?: string };
+      days?: Record<string, boolean>;
+      timezone?: string;
+    }>;
+  };
+  sequences?: Array<{ steps?: Array<{ type?: string; delay?: number; variants?: Array<{ subject?: string; body?: string }> }> }>;
   timestamp_created?: string;
 };
 
@@ -182,6 +190,105 @@ export async function getCampaign(id: string): Promise<Campaign> {
  */
 export async function getAllCampaignAnalytics(): Promise<CampaignAnalytics[]> {
   const json = await getJson<CampaignAnalytics[]>('/campaigns/analytics');
+  return Array.isArray(json) ? json : [];
+}
+
+/**
+ * Whole-campaign counters. Distinguishes total from unique deliberately: a single
+ * recipient opening five times is five opens but one person, and only the unique
+ * figure divided by sends is a rate anyone should quote.
+ */
+export type CampaignOverview = {
+  emails_sent_count?: number;
+  contacted_count?: number;
+  open_count?: number;
+  open_count_unique?: number;
+  link_click_count?: number;
+  link_click_count_unique?: number;
+  reply_count?: number;
+  reply_count_unique?: number;
+  bounced_count?: number;
+  unsubscribed_count?: number;
+  completed_count?: number;
+  total_opportunities?: number;
+};
+
+export type CampaignDailyPoint = {
+  date: string;
+  sent: number;
+  contacted: number;
+  new_leads_contacted: number;
+  opened: number;
+  unique_opened: number;
+  replies: number;
+  unique_replies: number;
+  clicks: number;
+  unique_clicks: number;
+  opportunities: number;
+  unique_opportunities: number;
+};
+
+export type CampaignStepStat = {
+  step: string;
+  variant: string;
+  sent: number;
+  opened: number;
+  unique_opened: number;
+  replies: number;
+  unique_replies: number;
+  clicks: number;
+  unique_clicks: number;
+};
+
+/**
+ * ⚠ The three analytics endpoints do NOT share a filter parameter name.
+ *
+ *   /analytics/daily    and  /analytics/steps  →  campaign_id=<id>
+ *   /analytics/overview                        →  ids=<id>
+ *
+ * Verified by differential against the live API, Sep-2026, and the mismatch is a trap
+ * rather than a curiosity: an unrecognised parameter name is IGNORED, not rejected, so
+ * `overview?campaign_id=…` silently returns whole-workspace totals. Those totals then
+ * render on one campaign's page as if they were its own — a campaign that has never
+ * sent anything reporting the workspace's send count. Confirmed by passing a bogus
+ * campaign id: `?campaign_id=00000000-…` still returned the full workspace figures,
+ * whereas `?ids=00000000-…` returned zeroes.
+ *
+ * `ids` is genuinely parsed rather than coincidentally zeroing things out: a malformed
+ * value (`?ids=garbage`) errors instead of falling back to unfiltered.
+ *
+ * Not yet proven: that `ids` returns the right NON-ZERO figures for a campaign that has
+ * sent. No campaign in the workspace has sends yet, so only the zero case is covered.
+ * Re-check this against a live sending campaign before quoting these numbers to anyone.
+ *
+ * `start_date`/`end_date` are inclusive ISO dates, honoured on daily.
+ */
+function analyticsQuery(campaignId: string, range?: { start?: string; end?: string }): string {
+  const q = new URLSearchParams({ campaign_id: campaignId });
+  if (range?.start) q.set('start_date', range.start);
+  if (range?.end) q.set('end_date', range.end);
+  return q.toString();
+}
+
+export async function getCampaignOverview(
+  campaignId: string, range?: { start?: string; end?: string },
+): Promise<CampaignOverview> {
+  // `ids`, NOT `campaign_id` — see the note above before changing this.
+  const q = new URLSearchParams({ ids: campaignId });
+  if (range?.start) q.set('start_date', range.start);
+  if (range?.end) q.set('end_date', range.end);
+  return getJson<CampaignOverview>(`/campaigns/analytics/overview?${q.toString()}`);
+}
+
+export async function getCampaignDaily(
+  campaignId: string, range?: { start?: string; end?: string },
+): Promise<CampaignDailyPoint[]> {
+  const json = await getJson<CampaignDailyPoint[]>(`/campaigns/analytics/daily?${analyticsQuery(campaignId, range)}`);
+  return Array.isArray(json) ? json : [];
+}
+
+export async function getCampaignStepStats(campaignId: string): Promise<CampaignStepStat[]> {
+  const json = await getJson<CampaignStepStat[]>(`/campaigns/analytics/steps?${analyticsQuery(campaignId)}`);
   return Array.isArray(json) ? json : [];
 }
 

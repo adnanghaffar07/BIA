@@ -23,7 +23,7 @@ export default function LeadsPage() {
   const [counts, setCounts] = useState<{ total: number; engine1: number; engine2: number }>({ total: 0, engine1: 0, engine2: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<{ grade?: string; status?: string; size: number; effectiveDate?: string; effectiveTo?: string; carrier?: string; propertyType?: string; county?: string; zip?: string }>({ size: 100 });
+  const [filters, setFilters] = useState<{ grade?: string; status?: string; size: number; effectiveDate?: string; effectiveTo?: string; carrier?: string; propertyType?: string; county?: string; zip?: string; contact?: string }>({ size: 100 });
   const [activeTab, setActiveTab] = useState<TabValue>('all');
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
 
@@ -55,7 +55,7 @@ export default function LeadsPage() {
     try { sessionStorage.setItem('biaLeadsView', JSON.stringify({ filters, activeTab })); } catch { /* ignore */ }
   }, [filters, activeTab]);
 
-  const fetchLeads = async (tab: TabValue, f: { grade?: string; status?: string; size: number; effectiveDate?: string; effectiveTo?: string; carrier?: string; propertyType?: string; county?: string; zip?: string }) => {
+  const fetchLeads = async (tab: TabValue, f: { grade?: string; status?: string; size: number; effectiveDate?: string; effectiveTo?: string; carrier?: string; propertyType?: string; county?: string; zip?: string; contact?: string }) => {
     const seq = ++reqSeq.current;
     try {
       setLoading(true);
@@ -75,6 +75,9 @@ export default function LeadsPage() {
       // book rather than whichever rows this page happened to load.
       if (f.county) url.searchParams.set('county', f.county);
       if (f.zip) url.searchParams.set('zip', f.zip);
+      // Contact availability — leads only have an email or phone once a skip trace
+      // has run, so this is what makes an export usable for outreach.
+      if (f.contact) url.searchParams.set('contact', f.contact);
       if (f.effectiveDate) { url.searchParams.set('effectiveDate', f.effectiveDate); url.searchParams.set('orderBy', 'xdate'); }
       if (f.effectiveTo) url.searchParams.set('effectiveTo', f.effectiveTo);
 
@@ -107,7 +110,7 @@ export default function LeadsPage() {
       newFilters.engine === 2 ? 'engine2' : 'all';
     // Page size is no longer a form field — preserve the current size (100 default,
     // or "all" if the user picked All in the pagination) across filter changes.
-    const f = { grade: newFilters.grade, status: newFilters.status, size: filters.size ?? 100, effectiveDate: newFilters.effectiveDate, effectiveTo: newFilters.effectiveTo, carrier: newFilters.carrier, propertyType: filters.propertyType, county: filters.county, zip: filters.zip };
+    const f = { grade: newFilters.grade, status: newFilters.status, size: filters.size ?? 100, effectiveDate: newFilters.effectiveDate, effectiveTo: newFilters.effectiveTo, carrier: newFilters.carrier, propertyType: filters.propertyType, county: filters.county, zip: filters.zip, contact: filters.contact };
     setActiveTab(tab);
     setFilters(f);
     fetchLeads(tab, f);
@@ -134,6 +137,36 @@ export default function LeadsPage() {
   const canBlast =
     (user?.role === 'admin' || user?.role === 'superadmin') &&
     filters.grade === 'A' && !!filters.effectiveDate && !!filters.effectiveTo;
+
+  /**
+   * Everything matching the CURRENTLY APPLIED filters, straight from the server.
+   *
+   * Export uses this rather than the rows on screen, for two reasons that both bit us:
+   * the table holds only the first page, so an export silently covered 100 of 585; and
+   * the rows are as old as the last fetch, so a skip trace run since page load would
+   * be missing from the file. This always reflects the database now.
+   */
+  const fetchAllForExport = async (): Promise<any[]> => {
+    const url = new URL('/api/leads', window.location.origin);
+    url.searchParams.set('source', 'db');
+    url.searchParams.set('size', '100000');
+    const engine = engineForTab(activeTab);
+    if (engine) url.searchParams.set('engine', String(engine));
+    if (filters.grade) url.searchParams.set('grade', filters.grade);
+    if (filters.status) url.searchParams.set('status', filters.status);
+    if (filters.carrier) url.searchParams.set('carrier', filters.carrier);
+    if (filters.propertyType) url.searchParams.set('propertyType', filters.propertyType);
+    if (filters.county) url.searchParams.set('county', filters.county);
+    if (filters.zip) url.searchParams.set('zip', filters.zip);
+    if (filters.contact) url.searchParams.set('contact', filters.contact);
+    if (filters.effectiveDate) { url.searchParams.set('effectiveDate', filters.effectiveDate); url.searchParams.set('orderBy', 'xdate'); }
+    if (filters.effectiveTo) url.searchParams.set('effectiveTo', filters.effectiveTo);
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error('Could not load the leads for export');
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'Could not load the leads for export');
+    return json.data ?? [];
+  };
 
   const displayLeads = allLeads;
   const viewTotal =
@@ -302,6 +335,7 @@ export default function LeadsPage() {
           loading={loading}
           resetKey={activeTab}
           totalAvailable={viewTotal}
+          fetchAllForExport={fetchAllForExport}
           onRowsPerPageChange={(rpp) => {
             // -1 is "All". Any size larger than the rows currently loaded also needs a
             // server fetch, otherwise the footer says 250/page while only 100 exist.
@@ -311,6 +345,7 @@ export default function LeadsPage() {
             county: filters.county ?? '',
             zip: filters.zip ?? '',
             propertyType: filters.propertyType ?? '',
+            contact: filters.contact ?? '',
             zipOptions: [...REAPI_TARGET_ZIPS].sort(),
             onChange: (next) => {
               const f = { ...filters, ...next };

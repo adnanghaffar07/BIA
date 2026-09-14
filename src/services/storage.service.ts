@@ -379,6 +379,8 @@ export async function getLeadsFromDb(filters?: {
   propertyType?: string;
   /** Carrier filter: 'travelers' | 'plymouth' — leads strictly eligible for that carrier */
   carrier?: string;
+  /** Narrow to leads that actually have contact details — see contactCondition. */
+  contact?: string;
   /** Exclude leads with these statuses — e.g. ['bound','lost'] for the active queue */
   excludeStatuses?: string[];
   /** Only leads a producer has edited (lastEditedAt set) — Recently Edited tab */
@@ -421,6 +423,8 @@ export async function getLeadsFromDb(filters?: {
   }
   const carrierCol = carrierColumn(filters?.carrier);
   if (carrierCol) conditions.push(`"${carrierCol}" = 'eligible'`);
+  const contactCond = contactCondition(filters?.contact);
+  if (contactCond) conditions.push(contactCond);
   if (filters?.editedOnly) conditions.push(`"lastEditedAt" IS NOT NULL`);
   if (filters?.excludeStatuses?.length) {
     const placeholders = filters.excludeStatuses.map((_, i) => `$${params.length + i + 1}`).join(', ');
@@ -452,6 +456,33 @@ export async function getLeadsFromDb(filters?: {
   return rows;
 }
 
+/**
+ * Contact-availability filter (Frank Sep-2026).
+ *
+ * Contact details only exist on a lead once a skip trace has run — of the leads never
+ * traced, exactly one has an email. So an export taken from an unfiltered view is
+ * mostly blank contact columns, which reads like a broken export rather than like
+ * leads nobody has worked yet. This lets a view be narrowed to what is actually
+ * reachable before anyone exports it.
+ *
+ * "email" counts the co-insured address too: that household IS reachable, it is just
+ * the spouse who answers.
+ */
+export type ContactFilter = 'email' | 'phone' | 'either' | 'none';
+
+const HAS_EMAIL = `((email1 IS NOT NULL AND email1 <> '') OR ("owner2Email" IS NOT NULL AND "owner2Email" <> ''))`;
+const HAS_PHONE = `((phone1 IS NOT NULL AND phone1 <> '') OR ("owner2Phone" IS NOT NULL AND "owner2Phone" <> ''))`;
+
+function contactCondition(contact?: string): string | null {
+  switch (contact) {
+    case 'email':  return HAS_EMAIL;
+    case 'phone':  return HAS_PHONE;
+    case 'either': return `(${HAS_EMAIL} OR ${HAS_PHONE})`;
+    case 'none':   return `(NOT ${HAS_EMAIL} AND NOT ${HAS_PHONE})`;
+    default:       return null;
+  }
+}
+
 /** Given a set of candidate propertyIds, return those already stored (for credit de-dup). */
 export async function getExistingPropertyIds(ids: string[]): Promise<string[]> {
   if (!ids.length) return [];
@@ -476,6 +507,8 @@ export async function getLeadCounts(filters?: {
   propertyType?: string;
   county?: string;
   zip?: string;
+  /** Same contact predicate the rows query uses, so the header cannot disagree with the table. */
+  contact?: string;
 }): Promise<{ total: number; engine1: number; engine2: number }> {
   const conditions: string[] = [];
   const params: any[] = [];
@@ -485,6 +518,8 @@ export async function getLeadCounts(filters?: {
   if (filters?.propertyType) { params.push(String(filters.propertyType).toUpperCase()); conditions.push(`UPPER("propertyType") = $${params.length}`); }
   const cCol = carrierColumn(filters?.carrier);
   if (cCol) conditions.push(`"${cCol}" = 'eligible'`);
+  const cContact = contactCondition(filters?.contact);
+  if (cContact) conditions.push(cContact);
   if (filters?.effectiveDate) {
     if (filters.effectiveTo) {
       params.push(filters.effectiveDate, filters.effectiveTo);

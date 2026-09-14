@@ -61,6 +61,8 @@ export async function GET(request: NextRequest) {
     const propertyType  = searchParams.get('propertyType') || undefined;  // 'SFR' | 'CONDO'
     const county        = searchParams.get('county') || undefined;        // 'Middlesex' | 'Monmouth' | …
     const zip           = searchParams.get('zip') || undefined;
+    // 'email' | 'phone' | 'either' | 'none' — contact availability (Frank Sep-2026)
+    const contact       = searchParams.get('contact') || undefined;
 
     // Quarantined leads are parked by the appetite rules — never in the working queue.
     const excludeStatuses = active ? [...PARKED_STATUSES] : undefined;
@@ -71,7 +73,7 @@ export async function GET(request: NextRequest) {
       const leads = await getLeadsFromDb({
         engine, grade,
         status: closed ? undefined : (status || undefined),
-        effectiveDate, effectiveTo, carrier, propertyType, county, zip,
+        effectiveDate, effectiveTo, carrier, propertyType, county, zip, contact,
         excludeStatuses,
         editedOnly,
         orderBy,
@@ -82,7 +84,7 @@ export async function GET(request: NextRequest) {
         ? leads.filter((l) => l.status === 'bound' || l.status === 'lost')
         : leads;
       // DB-wide counts (per engine) so the UI can show totals + offer "load all"
-      const counts = await getLeadCounts({ grade, status: closed ? undefined : (status || undefined), effectiveDate, effectiveTo, carrier, propertyType, county, zip });
+      const counts = await getLeadCounts({ grade, status: closed ? undefined : (status || undefined), effectiveDate, effectiveTo, carrier, propertyType, county, zip, contact });
       return NextResponse.json({ success: true, data: result, total: result.length, counts, source: 'db' });
     }
 
