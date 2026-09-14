@@ -21,6 +21,13 @@ const LEAD_COLS = [
   'hoa', 'latitude', 'longitude', 'fips', 'apn',
   'recordingDate', 'lastUpdateDate', 'skipTraced', 'skipTracedAt', 'deepSkipTracedAt', 'skipTraceOwnerName',
   'blastSkipTracedAt', 'blastSkipTracedBy', 'blastRunId',
+  // Campaign state (migration 017). These MUST be selected: the campaign push reads
+  // them to decide who is suppressed, and a column that is not selected reads back
+  // undefined — which silently passes every suppression check and re-mails someone
+  // who hard-bounced or unsubscribed.
+  'campaignStatus', 'campaignCohort', 'currentEmailStep', 'campaignLastSentAt',
+  'campaignRepliedAt', 'campaignBouncedAt', 'campaignUnsubscribedAt', 'hardBounced',
+  'suppressedReason', 'holdoutFlag', 'vendorCampaignId', 'vendorLeadId',
   'phone1', 'phone2', 'email1', 'email2', 'engine', 'renewalTargetDate', 'grade',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'travelersEligibilityReason', 'plymouthEligibilityReason',
@@ -67,6 +74,13 @@ const LEAD_COLS_SQL = LEAD_COLS.map((c) => `"${c}"`).join(', ');
 const CRM_ONLY_FIELDS = new Set([
   'status', 'grade', 'skipTraced', 'skipTracedAt', 'deepSkipTracedAt', 'skipTraceOwnerName',
   'blastSkipTracedAt', 'blastSkipTracedBy', 'blastRunId',
+  // Campaign state (migration 017). These MUST be selected: the campaign push reads
+  // them to decide who is suppressed, and a column that is not selected reads back
+  // undefined — which silently passes every suppression check and re-mails someone
+  // who hard-bounced or unsubscribed.
+  'campaignStatus', 'campaignCohort', 'currentEmailStep', 'campaignLastSentAt',
+  'campaignRepliedAt', 'campaignBouncedAt', 'campaignUnsubscribedAt', 'hardBounced',
+  'suppressedReason', 'holdoutFlag', 'vendorCampaignId', 'vendorLeadId',
   'owner1FirstName', 'owner1LastName',
   'phone1', 'phone2', 'email1', 'email2',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',

@@ -5,7 +5,11 @@ const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || 'bia-crm-secret-change-in-production-2026'
 );
 
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/enrich'];
+// '/api/webhooks/campaign' is public by necessity — the campaign platform cannot
+// authenticate as a CRM user. It carries its own auth instead: a shared secret on
+// the x-bia-campaign-key header, compared in constant time, failing closed in
+// production. Nothing else should be added here without an equivalent check.
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/enrich', '/api/webhooks/campaign'];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

@@ -37,8 +37,14 @@ import { getCreditStatus } from '@/services/credits.service';
 
 /** Blast is Grade A only — Frank's request, and the guard against a mis-click over the book. */
 const BLAST_GRADES = ['A'];
-const DEFAULT_CHUNK = 25;
-const MAX_CHUNK = 50;
+// Serverless budget: a Tracerfy lookup plus the courtesy gap runs ~600ms+, so 25
+// leads exceeds every Vercel function limit. Five keeps a chunk near 4s. A timeout
+// here is worse than elsewhere — credits are spent but the caller never learns which
+// leads were charged.
+export const maxDuration = 10;
+
+const DEFAULT_CHUNK = 5;
+const MAX_CHUNK = 10;
 /** Courtesy gap between vendor calls, matching the existing batch route. */
 const GAP_MS = 200;
 const CREDITS_PER_HIT = 15;

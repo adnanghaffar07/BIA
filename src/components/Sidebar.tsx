@@ -10,6 +10,7 @@ import { usePathname } from 'next/navigation';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import PeopleIcon from '@mui/icons-material/People';
 import QueueIcon from '@mui/icons-material/PlaylistAddCheck';
+import CampaignIcon from '@mui/icons-material/Campaign';
 import LogoutIcon from '@mui/icons-material/Logout';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import EventRepeatIcon from '@mui/icons-material/EventRepeat';
@@ -61,6 +62,7 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
     ] : []),
     // Admin + super-admin: data operations
     ...(user?.role === 'superadmin' || user?.role === 'admin' ? [
+      { label: 'Campaigns',   icon: <CampaignIcon />,        path: '/lead-campaigns' },
       { label: 'QC Reports',  icon: <AssessmentIcon />,      path: '/admin/qc' },
       { label: 'Weekly Pull', icon: <EventRepeatIcon />,     path: '/admin/pull-weekly' },
     ] : []),

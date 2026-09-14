@@ -129,7 +129,7 @@ export default function SkipTraceBlastDialog({
       // Each pass is a self-contained, already-committed unit of work.
       for (;;) {
         if (stopRef.current) break;
-        const res = await fetch(`/api/admin/skiptrace-blast?${queryFrom(filters)}&chunk=25&runId=${runId}`, { method: 'POST' });
+        const res = await fetch(`/api/admin/skiptrace-blast?${queryFrom(filters)}&chunk=5&runId=${runId}`, { method: 'POST' });
         const json = await res.json();
         if (!json.success) throw new Error(json.error || 'Blast failed');
 
