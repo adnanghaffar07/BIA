@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/neon';
 import { updateLead } from '@/services/storage.service';
 import { runTracerfy } from '@/services/tracerfy.service';
+import { buildTraceUpdate } from '@/services/skipTraceApply.service';
 import { compareOwnerNames } from '@/services/ownerNameMatch.service';
 
 /**
@@ -79,16 +80,10 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Contacts — fill empty slots only (the book was purged of REAPI contacts, so mostly empty).
-      const update: Record<string, any> = {
-        skipTraced: true, skipTracedAt: new Date(), deepSkipTracedAt: new Date(), skipTraceData: result.raw,
-        skipTraceOwnerName: result.ownerName ?? null,
-        ...result.insuredPatch,
-      };
-      if (result.phones[0] && !lead.phone1) update.phone1 = result.phones[0];
-      if (result.phones[1] && !lead.phone2) update.phone2 = result.phones[1];
-      if (result.emails[0] && !lead.email1) update.email1 = result.emails[0];
-      if (result.emails[1] && !lead.email2) update.email2 = result.emails[1];
+      // Built by the SAME function the card and the blast use. This route used to build
+      // its own equivalent, which is how it ended up persisting two contacts per lead
+      // after the other paths had moved to storing every one the trace returned.
+      const update = buildTraceUpdate(lead, result, new Date());
 
       await updateLead(lead.propertyId, update);
 

@@ -64,6 +64,105 @@ export type SkipTraceOutcome = {
  * Found contacts fill EMPTY slots only — a producer-entered phone or email is
  * never overwritten by vendor data.
  */
+/**
+ * Union of what this run found and what was already on file, newest first, de-duplicated
+ * case-insensitively — vendors return the same address in varying case and a duplicate
+ * would become a duplicate column in the export.
+ */
+function mergeContacts(fresh: string[], existing?: string[] | null): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of [...fresh, ...(Array.isArray(existing) ? existing : [])]) {
+    const s = String(v ?? '').trim();
+    if (!s) continue;
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Build the column patch for one trace result. THE only place a trace turns into
+ * columns.
+ *
+ * It exists because there were two: this service and the admin batch route each built
+ * their own update object, so a fix applied here silently missed every lead traced by
+ * the batch. That is exactly how the full contact lists came to be stored on one path
+ * and dropped on the other. Any new field a trace should persist goes here and both
+ * callers get it.
+ *
+ * Found contacts fill EMPTY slots only — a producer-entered phone or email is never
+ * overwritten by vendor data.
+ */
+export function buildTraceUpdate(
+  lead: {
+    phone1?: string | null; phone2?: string | null;
+    email1?: string | null; email2?: string | null;
+    /** What earlier traces already found, so a re-trace adds rather than replaces. */
+    emailsAll?: string[] | null; phonesAll?: string[] | null;
+  },
+  result: {
+    matched: boolean;
+    emails?: string[]; phones?: string[];
+    raw?: unknown; ownerName?: string | null;
+    insuredPatch?: Record<string, unknown>;
+  },
+  now: Date,
+  blast?: { runId: string; createdBy: string | null },
+): Record<string, any> {
+  const update: Record<string, any> = {
+    skipTraced: true,
+    skipTracedAt: now,
+    deepSkipTracedAt: now,
+    // The whole response, so the card can surface DNC / TCPA / carrier / rank per number.
+    skipTraceData: result.raw ?? null,
+    // The name Tracerfy returned. Shown next to the on-file name with an override
+    // button; never applied automatically.
+    skipTraceOwnerName: result.ownerName ?? null,
+    ...(blast ? {
+      blastSkipTracedAt: now,
+      blastSkipTracedBy: blast.createdBy,
+      blastRunId: blast.runId,
+    } : {}),
+  };
+
+  if (result.phones?.[0] && !lead.phone1) update.phone1 = result.phones[0];
+  if (result.phones?.[1] && !lead.phone2) update.phone2 = result.phones[1];
+  if (result.emails?.[0] && !lead.email1) update.email1 = result.emails[0];
+  if (result.emails?.[1] && !lead.email2) update.email2 = result.emails[1];
+
+  // EVERYTHING the trace returned, not just the two that fit the primary slots.
+  //
+  // phone1/2 and email1/2 are the insured's own contacts and stay the producer's
+  // working numbers; these carry the full list so a trace that found six emails keeps
+  // six. Before this, four of them were paid for at 15 credits and then thrown away —
+  // 43% of traces in this database returned more than two.
+  //
+  // Only written on a match: a miss returns empty arrays, and overwriting a populated
+  // list with [] would destroy what an earlier successful trace found.
+  //
+  // MERGED, not replaced. The vendor's answer for the same address genuinely changes
+  // between runs — an address that returned five emails in August returned three
+  // different ones in September, and one that matched then misses now. Replacing would
+  // discard addresses this CRM already paid for and may already be emailing, and
+  // absence from one run is weak evidence an address is dead. Newest first, since the
+  // current run's ordering puts the named insured's own addresses at the front.
+  if (result.matched) {
+    if (result.emails?.length) update.emailsAll = mergeContacts(result.emails, lead.emailsAll);
+    if (result.phones?.length) update.phonesAll = mergeContacts(result.phones, lead.phonesAll);
+  }
+
+  Object.assign(update, result.insuredPatch ?? {});
+  return update;
+}
+
+/**
+ * Run the deep trace for one lead and persist the result.
+ * Found contacts fill EMPTY slots only — a producer-entered phone or email is
+ * never overwritten by vendor data.
+ */
 export async function traceAndApply(
   lead: any,
   createdBy: string | null,
@@ -78,31 +177,17 @@ export async function traceAndApply(
   const result = await runTracerfy(lead as any);
   const now = new Date();
 
-  const update: Record<string, any> = {
-    skipTraced: true,
-    skipTracedAt: now,
-    deepSkipTracedAt: now,
-    // The whole response, so the card can surface DNC / TCPA / carrier / rank per number.
-    skipTraceData: result.raw ?? null,
-    // The name Tracerfy returned. Shown next to the on-file name with an override
-    // button; never applied automatically.
-    skipTraceOwnerName: result.ownerName ?? null,
-    ...(blast ? {
-      blastSkipTracedAt: now,
-      blastSkipTracedBy: createdBy,
-      blastRunId: blast.runId,
-    } : {}),
-  };
-
   const recoveredPhone = Boolean(result.phones[0] && !lead.phone1);
   const recoveredEmail = Boolean(result.emails[0] && !lead.email1);
-  if (result.phones[0] && !lead.phone1) update.phone1 = result.phones[0];
-  if (result.phones[1] && !lead.phone2) update.phone2 = result.phones[1];
-  if (result.emails[0] && !lead.email1) update.email1 = result.emails[0];
-  if (result.emails[1] && !lead.email2) update.email2 = result.emails[1];
 
+  const update = buildTraceUpdate(
+    lead, result, now,
+    blast ? { runId: blast.runId, createdBy } : undefined,
+  );
+
+  // buildTraceUpdate has already folded insuredPatch into `update`; this local is only
+  // for the co-insured name reported back to the caller.
   const insuredPatch = result.insuredPatch ?? {};
-  Object.assign(update, insuredPatch);
 
   await updateLead(lead.propertyId, update);
 

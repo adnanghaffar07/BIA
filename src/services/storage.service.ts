@@ -28,7 +28,7 @@ const LEAD_COLS = [
   'campaignStatus', 'campaignCohort', 'currentEmailStep', 'campaignLastSentAt',
   'campaignRepliedAt', 'campaignBouncedAt', 'campaignUnsubscribedAt', 'hardBounced',
   'suppressedReason', 'holdoutFlag', 'vendorCampaignId', 'vendorLeadId',
-  'phone1', 'phone2', 'email1', 'email2', 'engine', 'renewalTargetDate', 'grade',
+  'phone1', 'phone2', 'email1', 'email2', 'emailsAll', 'phonesAll', 'engine', 'renewalTargetDate', 'grade',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'travelersEligibilityReason', 'plymouthEligibilityReason',
   'travelersEligibilityDetail', 'plymouthEligibilityDetail',
@@ -82,7 +82,7 @@ const CRM_ONLY_FIELDS = new Set([
   'campaignRepliedAt', 'campaignBouncedAt', 'campaignUnsubscribedAt', 'hardBounced',
   'suppressedReason', 'holdoutFlag', 'vendorCampaignId', 'vendorLeadId',
   'owner1FirstName', 'owner1LastName',
-  'phone1', 'phone2', 'email1', 'email2',
+  'phone1', 'phone2', 'email1', 'email2', 'emailsAll', 'phonesAll',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'travelersEligibilityReason', 'plymouthEligibilityReason',
   'travelersEligibilityDetail', 'plymouthEligibilityDetail',
@@ -586,6 +586,9 @@ export async function updateLead(
     blastSkipTracedAt: Date; blastSkipTracedBy: string | null; blastRunId: string | null;
     owner1FirstName: string; owner1LastName: string;
     phone1: string; phone2: string; email1: string; email2: string;
+    // Every contact the trace returned, not just the two that fit the primary slots.
+    // JSONB — toSql JSON-stringifies the array, which Postgres casts on the way in.
+    emailsAll: string[]; phonesAll: string[];
     producerEmail: string; posQuoteNumber: string; posCarrier: string;
     boundPremium: number; boundDate: Date; authorizationDate: Date;
     coastDistanceMiles: number; coastExposure: string;
