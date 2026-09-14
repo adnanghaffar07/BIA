@@ -20,6 +20,10 @@ import { requireCampaignAccess, vendorError } from '@/lib/integrations/campaignA
  * operator thinks the whole cohort went out and never learns which leads were
  * dropped. Refusing forces them to narrow the filter instead.
  */
+// Explicit, like the push route: the client sends eight leads per request (~5.8s at
+// the measured 720-830ms each), so this ceiling is never the binding constraint.
+export const maxDuration = 10;
+
 const MAX_LEADS_PER_REQUEST = 300;
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

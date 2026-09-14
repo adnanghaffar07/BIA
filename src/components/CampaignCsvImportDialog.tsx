@@ -5,6 +5,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Typography, Box, Stack,
   TextField, MenuItem, Chip, Alert, Divider, Table, TableHead, TableRow, TableCell,
   TableBody, CircularProgress, ListItemIcon, ListItemText, FormControlLabel, Switch,
+  LinearProgress,
 } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -120,6 +121,11 @@ export default function CampaignCsvImportDialog({
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Tally | null>(null);
+  /** Leads the server has confirmed so far, and the running outcome behind the bar. */
+  const [done, setDone] = useState(0);
+  const [live, setLive] = useState({ added: 0, failed: 0, skipped: 0 });
+  /** Set by Stop; checked between chunks, so a half-finished run ends cleanly. */
+  const stopRef = useRef(false);
 
   const pickFile = () => fileRef.current?.click();
 
@@ -204,22 +210,59 @@ export default function CampaignCsvImportDialog({
   const overCap = valid.length > MAX_ROWS;
   const extraLeads = valid.length - rows.length;
 
+  /**
+   * Import in chunks so the progress shown is real.
+   *
+   * The platform has no bulk endpoint — the route creates leads one at a time — so a
+   * single request for the whole file would sit silently for minutes and risk the
+   * function timeout. Measured at 720-830ms per lead, so eight per request lands around
+   * 5.8s, inside the 10s ceiling with room for a slow one.
+   *
+   * Each chunk's result is folded in as it lands, which is what makes the bar
+   * meaningful: it tracks leads the server has actually confirmed, not an animation.
+   * A chunk that fails stops the run and keeps what already succeeded, because the
+   * leads before it are genuinely in the campaign and pretending otherwise would send
+   * the operator looking for them.
+   */
+  const CHUNK = 8;
+
   const runImport = async () => {
+    stopRef.current = false;
     setImporting(true);
     setError(null);
+    setDone(0);
+
+    const tally: Tally = { added: 0, failed: 0, skipped: [] };
+    let processed = 0;
+
     try {
-      const res = await fetch(`/api/lead-campaigns/${campaignId}/leads`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ leads: valid }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Import failed');
-      const t: Tally = { added: json.added ?? 0, failed: json.failed ?? 0, skipped: json.skipped ?? [] };
-      setResult(t);
-      onFinished(t);
+      for (let i = 0; i < valid.length; i += CHUNK) {
+        if (stopRef.current) break;
+        const slice = valid.slice(i, i + CHUNK);
+        const res = await fetch(`/api/lead-campaigns/${campaignId}/leads`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ leads: slice }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Import failed');
+
+        tally.added += json.added ?? 0;
+        tally.failed += json.failed ?? 0;
+        tally.skipped.push(...(json.skipped ?? []));
+        processed += slice.length;
+        setDone(processed);
+        setLive({ added: tally.added, failed: tally.failed, skipped: tally.skipped.length });
+      }
+      setResult({ ...tally });
+      onFinished({ ...tally });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import failed');
+      // Whatever landed before the failure is really in the campaign; report it.
+      if (tally.added > 0) {
+        setResult({ ...tally });
+        onFinished({ ...tally });
+      }
     } finally {
       setImporting(false);
     }
@@ -239,7 +282,35 @@ export default function CampaignCsvImportDialog({
       <DialogContent dividers>
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-        {!result && (
+        {/* Progress replaces the mapping table while a run is in flight — the table is
+            no longer actionable and the numbers are what matters. */}
+        {importing && !result && (
+          <Box sx={{ py: 1 }}>
+            <Stack direction="row" sx={{ justifyContent: 'space-between', mb: 0.75 }}>
+              <Typography variant="body2">
+                Adding… {done.toLocaleString()} of {valid.length.toLocaleString()}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {Math.max(valid.length - done, 0).toLocaleString()} left
+              </Typography>
+            </Stack>
+            <LinearProgress
+              variant="determinate"
+              value={valid.length > 0 ? Math.min((done / valid.length) * 100, 100) : 0}
+              sx={{ height: 7, borderRadius: 1, mb: 2 }}
+            />
+            <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
+              <Chip size="small" sx={{ bgcolor: '#dcfce7', color: '#166534', fontWeight: 600 }} label={`${live.added} added`} />
+              {live.skipped > 0 && <Chip size="small" variant="outlined" label={`${live.skipped} not added`} />}
+              {live.failed > 0 && <Chip size="small" sx={{ bgcolor: '#fee2e2', color: '#b3261e', fontWeight: 600 }} label={`${live.failed} failed`} />}
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5 }}>
+              Leads already added stay in the campaign if you stop.
+            </Typography>
+          </Box>
+        )}
+
+        {!result && !importing && (
           <>
             <Box sx={{ mb: headers.length ? 2.5 : 0 }}>
               <input
@@ -407,9 +478,17 @@ export default function CampaignCsvImportDialog({
       </DialogContent>
 
       <DialogActions sx={{ px: 3, py: 2 }}>
-        <Button onClick={onClose} color="inherit" disabled={importing}>
-          {result ? 'Close' : 'Cancel'}
-        </Button>
+        {importing ? (
+          // Stop rather than Cancel: the run is partly done and cannot be undone, so the
+          // wording must not suggest it will be rolled back.
+          <Button onClick={() => { stopRef.current = true; }} color="warning">
+            Stop after this batch
+          </Button>
+        ) : (
+          <Button onClick={onClose} color="inherit">
+            {result ? 'Close' : 'Cancel'}
+          </Button>
+        )}
         {!result && (
           <Button
             variant="contained" onClick={runImport} disabled={!canImport}
