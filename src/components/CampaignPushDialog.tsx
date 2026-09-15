@@ -4,8 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Typography, Box, Stack,
   TextField, MenuItem, Chip, CircularProgress, Alert, LinearProgress, Divider,
-  FormControlLabel, Switch,
-} from '@mui/material';
+  } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import { COUNTY_FILTER_OPTIONS } from '@/lib/constants';
 
@@ -49,7 +48,6 @@ export default function CampaignPushDialog({
   const [propertyType, setPropertyType] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
   const [effectiveTo, setEffectiveTo] = useState('');
-  const [includeCoInsured, setIncludeCoInsured] = useState(false);
 
   const [preview, setPreview] = useState<Preview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -68,9 +66,8 @@ export default function CampaignPushDialog({
     if (propertyType) q.set('propertyType', propertyType);
     if (effectiveDate) q.set('effectiveDate', effectiveDate);
     if (effectiveTo) q.set('effectiveTo', effectiveTo);
-    if (includeCoInsured) q.set('includeCoInsured', '1');
     return q.toString();
-  }, [grade, county, propertyType, effectiveDate, effectiveTo, includeCoInsured]);
+  }, [grade, county, propertyType, effectiveDate, effectiveTo]);
 
   const loadPreview = useCallback(async () => {
     setLoading(true);
@@ -162,20 +159,6 @@ export default function CampaignPushDialog({
                   onChange={(e) => setEffectiveTo(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} fullWidth
                 />
               </Stack>
-              <FormControlLabel
-                control={<Switch size="small" checked={includeCoInsured} onChange={(e) => setIncludeCoInsured(e.target.checked)} />}
-                label={
-                  <Typography variant="body2">
-                    Also mail the co-insured at their own address
-                  </Typography>
-                }
-              />
-              {includeCoInsured && (
-                <Alert severity="info">
-                  This mails two people per household. It roughly doubles the send volume and
-                  the suppression surface — a reply from either one should stop both.
-                </Alert>
-              )}
             </Stack>
 
             <Divider sx={{ mb: 2 }} />
@@ -220,7 +203,7 @@ export default function CampaignPushDialog({
                     <Typography variant="caption" color="text.secondary">First few:</Typography>
                     {preview.sample.map((s) => (
                       <Typography key={s.email} variant="caption" sx={{ display: 'block', color: '#5c6b78' }}>
-                        {s.email} — {s.address}{s.role === 'co_insured' ? ' (co-insured)' : ''}
+                        {s.email} — {s.address}
                       </Typography>
                     ))}
                   </Box>

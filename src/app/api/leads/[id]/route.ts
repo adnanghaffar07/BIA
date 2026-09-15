@@ -207,6 +207,23 @@ export async function PUT(
     if (_activityNote || changes.length) {
       const grade = changeDetails.some((d) => d.field === 'Grade');
       const statusC = changeDetails.some((d) => d.field === 'Status');
+      /**
+       * ── The `changes` array is the record. The activity TYPE is not. ──────────
+       *
+       * A caller-supplied _activityType wins over the derived one, so a producer who
+       * downgrades a lead while leaving a note gets type 'note', not 'grade_override' —
+       * which is how 244 of the 354 grade changes in this database came to be filed
+       * under 'note'. The QC Grade Changes report was written to join on
+       * type = 'grade_override' and therefore showed 5 of the 92 downgrades in a
+       * renewal week, making it look as though ~90 Grade A leads had vanished.
+       *
+       * That report now matches on `metadata -> 'changes'` containing a Grade entry,
+       * which is the only thing every path writes. So:
+       *   • Keep pushing {field, from, to} into changeDetails for anything worth
+       *     reporting on — that, not the type, is what makes a change findable.
+       *   • Do NOT "tidy" the metadata shape or move Grade out of `changes` without
+       *     updating reports.service.ts, or the report goes quietly blind again.
+       */
       await addActivity(
         existing.id,
         _activityType || (grade ? 'grade_override' : statusC ? 'status_change' : 'edit'),

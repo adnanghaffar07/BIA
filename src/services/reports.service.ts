@@ -8,7 +8,7 @@ import { compareOwnerNames } from './ownerNameMatch.service';
  * let Frank/Ruben pull that data back out to spot trends without cross-referencing
  * the Travelers portal by hand.
  */
-export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace';
+export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort';
 
 export interface QcRow {
   propertyId: string;
@@ -77,7 +77,13 @@ const iso = (d: any): string | null => {
     return Number.isNaN(d.getTime()) ? null : local(d);
   }
   const s = String(d);
-  if (/^d{4}-d{2}-d{2}/.test(s)) return s.slice(0, 10); // already ISO text
+  // NOTE the backslashes. This was /^d{4}-d{2}-d{2}/ — matching a literal "d" — so no
+  // real date ever took this branch. Every TEXT date fell through to `new Date(s)`,
+  // which reads a bare 'YYYY-MM-DD' as UTC midnight; local() then rendered it in local
+  // time and, west of UTC, handed back the PREVIOUS day. Effective dates were reported
+  // and range-filtered one day early in every report, which is invisible unless you
+  // reconcile a count against the database.
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10); // already ISO text
   const parsed = new Date(s);
   return Number.isNaN(parsed.getTime()) ? null : local(parsed);
 };
@@ -141,18 +147,60 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
   }
 
   if (type === 'grade_overrides') {
+    // BOTH sources: a producer's override and the rules re-grading on re-enrichment.
+    //
+    // Only the first was ever recorded, which made this report read as "grades barely
+    // change" when in truth every system regrade was invisible. grade_system rows are
+    // written from Sep-2026 onward; anything the rules changed before that left no
+    // trace and cannot be recovered — which is why the drift rows below matter.
+    /**
+     * Matched on the RECORDED CHANGE, not on the activity type.
+     *
+     * This used to join a."type" = 'grade_override' and missed most of the data. A
+     * grade edited from the lead card is written as a `note` carrying a changes array,
+     * and only the dedicated override dialog writes 'grade_override' — so 243 of the
+     * 283 A-downgrades in this database were invisible, and the report read as though
+     * producers almost never regrade. That is what made a renewal week look like it had
+     * lost ~90 Grade A leads: they had been deliberately downgraded, and the evidence
+     * was in a row type nobody was looking at.
+     *
+     * Keying off the metadata means any future writer that records a Grade change shows
+     * up here without this query needing to learn its name.
+     */
     rows = await sql`
-      SELECT l.*, a."metadata" AS a_meta, a."content" AS a_content, a."createdBy" AS a_by, a."createdAt" AS a_at
-      FROM "Lead" l JOIN "Activity" a ON a."leadId" = l."id" AND a."type" = 'grade_override'
+      SELECT l.*, a."metadata" AS a_meta, a."content" AS a_content, a."createdBy" AS a_by,
+             a."createdAt" AS a_at, a."type" AS a_type
+      FROM "Lead" l
+      JOIN "Activity" a ON a."leadId" = l."id"
+      WHERE a."metadata" -> 'changes' @> '[{"field":"Grade"}]'::jsonb
+         OR a."type" = 'grade_system'
       ORDER BY a."createdAt" DESC`;
-    return rows
+    const recorded: QcRow[] = rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => {
         const ch = (r.a_meta?.changes ?? []).find((c: any) => c.field === 'Grade');
         const transition = ch ? `${ch.from} → ${ch.to}` : (r.manualGrade ? `→ ${r.manualGrade}` : 'override');
-        const reason = r.gradeOverrideReason || r.a_content || '';
-        return rowOf(r, `${transition}${reason ? ` — ${reason}` : ''}`, r.a_by, iso(r.a_at));
+        // Authorship decides the sub-tab, and it comes from the row rather than its
+        // type: a `note` written by a producer is their change, a grade_system row has
+        // no author because the rules made it.
+        const system = r.a_type === 'grade_system' || !r.a_by;
+        const reason = system ? '' : (r.gradeOverrideReason || r.a_content || '');
+        return {
+          ...rowOf(
+            r,
+            `${transition}${reason ? ` — ${reason}` : ''}`,
+            system ? 'system (rules)' : r.a_by,
+            iso(r.a_at),
+          ),
+          // The note path records its reason as free text rather than a dropdown code,
+          // so fall back to it — otherwise most rows would show no reason at all.
+          reason: system
+            ? 'System regrade'
+            : (r.gradeOverrideReason || (r.a_content ? String(r.a_content).slice(0, 80) : null)),
+        };
       });
+
+    return recorded;
   }
 
   if (type === 'keyword') {
@@ -252,6 +300,48 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
           hasPhone,
           hasEmail,
           matched,
+        };
+      });
+  }
+
+  if (type === 'cohort') {
+    // Every lead whose renewal falls in the window, graded or not.
+    //
+    // Deliberately unfiltered by status or grade: this answers "what is actually in
+    // this week" before any decision has been taken about it. The other reports all
+    // start from a judgement already made (a producer flagged it, a blast traced it);
+    // this one is the denominator those are a subset of, which is why the ungraded
+    // leads have to be in it rather than quietly dropped.
+    //
+    // Contactability is carried on every row because the cohort question is always
+    // followed by "and how many can we actually email".
+    rows = await sql`
+      SELECT * FROM "Lead"
+      WHERE "effectiveDate" IS NOT NULL
+      ORDER BY "effectiveDate", "addressCity", "owner1LastName"`;
+    return rows
+      .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
+      .map((r: any) => {
+        const emails = Array.isArray(r.emailsAll) ? r.emailsAll.length : 0;
+        const phones = Array.isArray(r.phonesAll) ? r.phonesAll.length : 0;
+        const hasEmail = emails > 0
+          || !!String(r.email1 ?? '').trim() || !!String(r.owner2Email ?? '').trim();
+        const hasPhone = phones > 0 || !!String(r.phone1 ?? '').trim();
+        const traced = !!r.deepSkipTracedAt;
+
+        const context = [
+          traced ? 'traced' : 'not traced',
+          hasEmail ? `${Math.max(emails, hasEmail ? 1 : 0)} email${emails === 1 ? '' : 's'}` : 'no email',
+          hasPhone ? `${Math.max(phones, hasPhone ? 1 : 0)} phone${phones === 1 ? '' : 's'}` : 'no phone',
+        ].join(' · ');
+
+        return {
+          ...rowOf(r, context, null, iso(r.deepSkipTracedAt)),
+          // The status is what splits new / quarantine / rated, and the UI tallies on it.
+          reason: r.status ?? null,
+          hasEmail,
+          hasPhone,
+          matched: traced,
         };
       });
   }

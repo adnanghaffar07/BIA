@@ -5,6 +5,7 @@ import {
   Container, Box, Typography, Paper, ToggleButton, ToggleButtonGroup, TextField,
   FormControl, InputLabel, Select, MenuItem, Button, Chip, Table, TableHead, TableRow,
   TableCell, TableBody, CircularProgress, Alert, Stack, Tooltip,
+  Divider,
 } from '@mui/material';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
 import SwapVertIcon from '@mui/icons-material/SwapVert';
@@ -12,6 +13,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import RoofingIcon from '@mui/icons-material/Roofing';
 import ReportProblemIcon from '@mui/icons-material/ReportProblem';
 import BoltIcon from '@mui/icons-material/Bolt';
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 // Type-only import: erased at build, so the server-side reports module never reaches
 // the browser bundle. One definition of a report row, shared by producer and consumer.
 import type { QcRow } from '@/services/reports.service';
@@ -21,12 +23,13 @@ import DownloadIcon from '@mui/icons-material/Download';
 import Link from 'next/link';
 import { useStickyState } from '@/hooks/useStickyState';
 
-type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace';
+type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort';
 
 
 const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: string }[] = [
+  { key: 'cohort', label: 'Renewal Week', icon: <CalendarMonthIcon />, blurb: 'Every lead whose renewal falls in the chosen effective-date range — the whole cohort, graded or not, with grade, status and how many are actually reachable.' },
   { key: 'referral', label: 'Referrals / Eligibility', icon: <FactCheckIcon />, blurb: 'Leads a carrier flagged Referral (or Non-eligible), with the reason entered.' },
-  { key: 'grade_overrides', label: 'Grade Changes', icon: <SwapVertIcon />, blurb: 'Every manual grade change (B→A, A→D, …) with who/why — override validation.' },
+  { key: 'grade_overrides', label: 'Grade Changes', icon: <SwapVertIcon />, blurb: 'Grade changes from both sides — a producer overriding with a reason, and the rules re-grading a lead. The system tab also flags leads whose stored grade no longer agrees with the rules.' },
   { key: 'keyword', label: 'Keyword Search', icon: <SearchIcon />, blurb: 'Search producer + variance notes and eligibility reasons for a keyword to spot trends.' },
   { key: 'roof_b', label: 'Grade-B: Roof Only', icon: <RoofingIcon />, blurb: 'Grade-B leads whose only knock is an unconfirmed roof (20+ yr home).' },
   { key: 'type_mismatch', label: 'Type Mismatch', icon: <ReportProblemIcon />, blurb: 'Leads a producer flagged where the REAPI property type looks wrong (e.g. condo that’s really a home).' },
@@ -50,6 +53,8 @@ export default function QcReportsPage() {
   const [effFrom, setEffFrom] = useStickyState('qc:effFrom', '');
   const [effTo, setEffTo] = useStickyState('qc:effTo', '');
   // Contact-coverage drill-down: click a summary chip to filter the rows to that slice.
+  /** Drill-down on the Renewal Week summary: click a chip to filter, click again to clear. */
+  const [cohortFilter, setCohortFilter] = useState<{ kind: 'grade' | 'status' | 'trait'; value: string } | null>(null);
   const [covFilter, setCovFilter] = useState<'all' | 'sfh' | 'condo' | 'both' | 'phoneOnly' | 'emailOnly' | 'neither' | 'noEmail' | 'hasDob'>('all');
   const [rows, setRows] = useState<QcRow[]>([]);
   // Credit status is shown as a warning only — never as a per-lead number
@@ -91,7 +96,13 @@ export default function QcReportsPage() {
   // Auto-run on report switch (except keyword, which waits for a term).
   useEffect(() => {
     setCovFilter('all'); // reset the coverage drill-down on report change
-    if (report === 'keyword') { setRows([]); setRowsReport(null); setRan(false); return; }
+    setCohortFilter(null);
+    // Renewal Week without a range means the entire book — nearly 10,000 rows over the
+    // wire for a report whose whole point is one week. It waits for dates, the same way
+    // keyword waits for a term.
+    if (report === 'keyword' || (report === 'cohort' && !effFrom && !effTo)) {
+      setRows([]); setRowsReport(null); setRan(false); return;
+    }
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report]);
@@ -124,6 +135,27 @@ export default function QcReportsPage() {
   const active = REPORTS.find((r) => r.key === report)!;
 
   // Contact-coverage tallies (Frank's breakdown) — computed from the returned rows.
+  /**
+   * Renewal-week tallies. Counted from the rows rather than fetched separately, so the
+   * summary can never disagree with the table underneath it — the two are the same data.
+   * manualGrade wins over grade because an override is the grade a producer stands behind.
+   */
+  const cohort = report === 'cohort' && rowsReport === report && rows.length ? (() => {
+    const grades: Record<string, number> = {};
+    const statuses: Record<string, number> = {};
+    let traced = 0, withEmail = 0, withPhone = 0;
+    for (const r of rows) {
+      const g = r.manualGrade || r.grade || 'ungraded';
+      grades[g] = (grades[g] ?? 0) + 1;
+      const s = r.reason || '(none)';
+      statuses[s] = (statuses[s] ?? 0) + 1;
+      if (r.matched) traced++;
+      if (r.hasEmail) withEmail++;
+      if (r.hasPhone) withPhone++;
+    }
+    return { total: rows.length, grades, statuses, traced, withEmail, withPhone };
+  })() : null;
+
   const coverage = report === 'contact_coverage' && rowsReport === report && rows.length ? (() => {
     const t = {
       total: rows.length, sfh: 0, condo: 0,
@@ -160,7 +192,27 @@ export default function QcReportsPage() {
   })() : null;
 
   // Rows actually shown in the table + exported: coverage drill-down filter applied.
+/**
+ * Rows rendered at once. A renewal-week cohort is ~1,500 leads and rendering every one
+ * as a MUI TableRow locks the page for seconds — the summary above already carries the
+ * totals, and Export CSV still writes the COMPLETE set, so the table only has to be
+ * enough to eyeball.
+ */
+const MAX_RENDERED = 300;
+
   const shownRows = useMemo(() => {
+    if (report === 'cohort') {
+      if (!cohortFilter) return rows;
+      const { kind, value } = cohortFilter;
+      return rows.filter((r) => {
+        if (kind === 'grade') return (r.manualGrade || r.grade || 'ungraded') === value;
+        if (kind === 'status') return (r.reason || '(none)') === value;
+        if (value === 'traced') return !!r.matched;
+        if (value === 'email') return !!r.hasEmail;
+        if (value === 'phone') return !!r.hasPhone;
+        return true;
+      });
+    }
     if (report !== 'contact_coverage' || covFilter === 'all') return rows;
     return rows.filter((r) => {
       switch (covFilter) {
@@ -175,7 +227,7 @@ export default function QcReportsPage() {
         default: return true;
       }
     });
-  }, [rows, report, covFilter]);
+  }, [rows, report, covFilter, cohortFilter]);
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
@@ -200,7 +252,7 @@ export default function QcReportsPage() {
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>{active.blurb}</Typography>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ alignItems: { md: 'center' }, flexWrap: 'wrap' }}>
-          {report === 'referral' && (
+                    {report === 'referral' && (
             <>
               <FormControl size="small" sx={{ minWidth: 150 }}>
                 <InputLabel>Carrier</InputLabel>
@@ -244,6 +296,75 @@ export default function QcReportsPage() {
       </Paper>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+      {cohort && (() => {
+        // Every chip is a filter. Clicking the active one clears it, so there is no
+        // separate "reset" to hunt for — the way out is the way in.
+        const chip = (
+          kind: 'grade' | 'status' | 'trait',
+          value: string,
+          label: string,
+          sx: Record<string, unknown> = {},
+        ) => {
+          const active = cohortFilter?.kind === kind && cohortFilter?.value === value;
+          return (
+            <Chip
+              key={`${kind}:${value}`} size="small" label={label} clickable
+              onClick={() => setCohortFilter(active ? null : { kind, value })}
+              sx={{
+                ...sx,
+                cursor: 'pointer',
+                outline: active ? '2px solid #1565c0' : 'none',
+                outlineOffset: 1,
+              }}
+            />
+          );
+        };
+
+        return (
+          <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+            <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center', mb: 1.5 }}>
+              <Typography variant="h6" sx={{ mr: 1 }}>{cohort.total.toLocaleString()} leads</Typography>
+              {['A', 'B', 'C', 'D', 'ungraded'].filter((g) => cohort.grades[g]).map((g) => chip(
+                'grade', g, `${g}: ${cohort.grades[g].toLocaleString()}`,
+                {
+                  fontWeight: 600,
+                  ...(g === 'A' ? { bgcolor: '#dcfce7', color: '#166534' }
+                    : g === 'ungraded' ? { bgcolor: '#fff3d6', color: '#8a5a00' } : {}),
+                },
+              ))}
+            </Stack>
+
+            <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
+              {Object.entries(cohort.statuses).sort((a, b) => b[1] - a[1]).map(([s, n]) => chip(
+                'status', s, `${s}: ${n.toLocaleString()}`, { variant: 'outlined' },
+              ))}
+            </Stack>
+
+            <Divider sx={{ my: 1.5 }} />
+
+            {/* The numbers that decide whether this cohort can be emailed at all. */}
+            <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
+              {chip('trait', 'traced', `${cohort.traced.toLocaleString()} deep skip traced`)}
+              {chip('trait', 'email', `${cohort.withEmail.toLocaleString()} reachable by email`, {
+                fontWeight: 600,
+                ...(cohort.withEmail / cohort.total < 0.5
+                  ? { bgcolor: '#fee2e2', color: '#b3261e' }
+                  : { bgcolor: '#dcfce7', color: '#166534' }),
+              })}
+              {chip('trait', 'phone', `${cohort.withPhone.toLocaleString()} reachable by phone`)}
+              <Typography variant="caption" color="text.secondary">
+                {Math.round((cohort.withEmail / cohort.total) * 100)}% of this cohort has an email address
+              </Typography>
+              {cohortFilter && (
+                <Typography variant="caption" sx={{ color: '#1565c0', fontWeight: 600 }}>
+                  · showing {shownRows.length.toLocaleString()} — click the chip again to clear
+                </Typography>
+              )}
+            </Stack>
+          </Paper>
+        );
+      })()}
 
       {coverage && (() => {
         // Clickable chip → filter the table to that slice. Clicking the active one clears it.
@@ -337,7 +458,7 @@ export default function QcReportsPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {shownRows.map((r) => (
+            {shownRows.slice(0, MAX_RENDERED).map((r) => (
               <TableRow key={r.propertyId + r.context} hover>
                 <TableCell sx={{ whiteSpace: 'nowrap' }}>
                   <Link href={`/leads/${r.propertyId}`} style={{ color: '#1565c0', textDecoration: 'none' }}>{r.owner}</Link>
@@ -361,6 +482,13 @@ export default function QcReportsPage() {
                 <TableCell sx={{ whiteSpace: 'nowrap', fontSize: 12, color: '#616b7d', fontVariantNumeric: 'tabular-nums' }}>{r.at ?? '—'}</TableCell>
               </TableRow>
             ))}
+            {shownRows.length > MAX_RENDERED && (
+              <TableRow>
+                <TableCell colSpan={11} sx={{ textAlign: 'center', py: 2, color: '#8a5a00', bgcolor: '#fff8e8', fontSize: 12.5 }}>
+                  Showing the first {MAX_RENDERED} of {shownRows.length.toLocaleString()} — Export CSV gives you all of them.
+                </TableCell>
+              </TableRow>
+            )}
             {!loading && ran && shownRows.length === 0 && (
               <TableRow><TableCell colSpan={11} sx={{ textAlign: 'center', py: 4, color: '#888' }}>No records match.</TableCell></TableRow>
             )}

@@ -5,7 +5,7 @@ import { calculateLeadGrade } from './grade.service';
 import { calculateIndicativePremium } from './pricing.service';
 import { getFemaFloodZone } from './femaFlood.service';
 import { getEffectiveDate } from './pipeline.service';
-import { updateLead } from './storage.service';
+import { updateLead, addActivity } from './storage.service';
 
 /**
  * Run the full enrichment pipeline on a single lead:
@@ -68,6 +68,20 @@ export async function enrichLead(lead: any): Promise<void> {
     // computed grade on re-enrichment (§2/§11 real-time upgrade/downgrade).
     const computedGrade = calculateLeadGrade(mappedLead, eligibility);
     const grade = (mappedLead as any).manualGrade || computedGrade;
+
+    /**
+     * A system regrade is a real event and has to leave a trace.
+     *
+     * Until now only PRODUCER overrides were recorded, so the Grade Changes report
+     * showed a handful of manual edits and nothing else — a lead that the rules moved
+     * from A to D on re-enrichment changed silently, and there was no way to answer
+     * "why is this a D when the pull said A". Recorded with the before/after and the
+     * carrier verdicts that decided it, in the same shape a manual override uses so
+     * one report can show both.
+     */
+    const previousGrade = lead.grade ?? null;
+    const gradeChangedBySystem =
+      !(mappedLead as any).manualGrade && previousGrade && previousGrade !== computedGrade;
     const pricing = calculateIndicativePremium(mappedLead);
     const coast = calculateCoastDistance(mappedLead.latitude, mappedLead.longitude);
 
@@ -108,6 +122,23 @@ export async function enrichLead(lead: any): Promise<void> {
       ...effPatch,
       ...quarantinePatch,
     });
+
+    if (gradeChangedBySystem) {
+      // Same metadata shape as a producer override, so the Grade Changes report reads
+      // both from one place. `createdBy` stays null — that is what marks it as the
+      // rules acting rather than a person.
+      await addActivity(
+        (lead as any).id,
+        'grade_system',
+        `Grade ${previousGrade} → ${computedGrade} (re-graded by the rules)`,
+        {
+          changes: [{ field: 'Grade', from: previousGrade, to: computedGrade }],
+          travelers: eligibility.travelers.status,
+          plymouth: eligibility.plymouthRock.status,
+        },
+        undefined,
+      );
+    }
   } catch (err) {
     console.error(`[enrichment] Failed to enrich lead ${lead.propertyId}:`, err);
   }

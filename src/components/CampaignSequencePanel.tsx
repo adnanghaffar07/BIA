@@ -6,6 +6,10 @@ import {
   CircularProgress, Divider, Tooltip, Box,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import LibraryBooksIcon from '@mui/icons-material/LibraryBooksOutlined';
+import BookmarkAddIcon from '@mui/icons-material/BookmarkAddOutlined';
+import MergeFieldPalette, { MERGE_FIELDS } from '@/components/MergeFieldPalette';
+import { TemplateLoadDialog, TemplateSaveDialog } from '@/components/TemplatePicker';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 
 /**
@@ -22,8 +26,6 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 
 export type SequenceStep = { delay: number; subject: string; body: string };
 
-const MERGE_FIELDS = ['{{firstName}}', '{{lastName}}', '{{property_address}}', '{{renewal_date}}'];
-
 export default function CampaignSequencePanel({
   campaignId, current, onSaved, onDirtyChange,
 }: {
@@ -36,9 +38,73 @@ export default function CampaignSequencePanel({
   const [steps, setSteps] = useState<SequenceStep[]>(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadInto, setLoadInto] = useState<number | null>(null);
+  const [saveFrom, setSaveFrom] = useState<number | null>(null);
 
   const update = (i: number, patch: Partial<SequenceStep>) =>
     setSteps((prev) => prev.map((s, n) => (n === i ? { ...s, ...patch } : s)));
+
+  /**
+   * Click-to-insert, at the caret of whichever field is being edited.
+   *
+   * Reads document.activeElement rather than tracking focus in state. The palette's
+   * chips suppress mousedown, so focus never leaves the field and the caret is still
+   * live when the click lands — which means the token goes exactly where the cursor
+   * was, the same as a drop. Each field carries data-step / data-field so the element
+   * maps back to the step it belongs to without a lookup table.
+   *
+   * With nothing focused it falls back to appending to the first email's body, which is
+   * where someone who has not clicked anywhere yet would expect it to go.
+   */
+  const insertToken = (token: string) => {
+    const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+    const step = Number(el?.dataset?.step);
+    const field = el?.dataset?.field as 'subject' | 'body' | undefined;
+
+    if (!el || !Number.isInteger(step) || (field !== 'subject' && field !== 'body')) {
+      setSteps((prev) => prev.map((s, n) => (n === 0
+        ? { ...s, body: s.body && !/\s$/.test(s.body) ? `${s.body} ${token}` : `${s.body}${token}` }
+        : s)));
+      return;
+    }
+
+    const at = typeof el.selectionStart === 'number' ? el.selectionStart : el.value.length;
+    setSteps((prev) => prev.map((s, n) => {
+      if (n !== step) return s;
+      const value = field === 'subject' ? s.subject : s.body;
+      return { ...s, [field]: value.slice(0, at) + token + value.slice(at) };
+    }));
+  };
+
+  /**
+   * Drop a merge field into a subject or body at the caret.
+   *
+   * Handled explicitly rather than left to the browser's default text-drop. The default
+   * does work on a real drag, but it is only performed for TRUSTED events, which makes
+   * it impossible to test and leaves the feature resting on behaviour that cannot be
+   * checked. Doing it here is deterministic and exercisable.
+   *
+   * `selectionStart` is the drop point: the browser moves the caret to follow the
+   * pointer during dragover, so by the time drop fires it already sits where the token
+   * should land.
+   *
+   * Only OUR tokens are intercepted. Text dragged in from anywhere else falls through
+   * to the browser, so ordinary drag-and-drop of a sentence still behaves normally.
+   */
+  const handleDrop = (
+    i: number,
+    field: 'subject' | 'body',
+    e: React.DragEvent<HTMLDivElement>,
+  ) => {
+    const token = e.dataTransfer.getData('text/plain');
+    if (!MERGE_FIELDS.some((f) => f.token === token)) return;
+
+    e.preventDefault();
+    const el = e.target as HTMLInputElement | HTMLTextAreaElement;
+    const value = field === 'subject' ? steps[i].subject : steps[i].body;
+    const at = typeof el?.selectionStart === 'number' ? el.selectionStart : value.length;
+    update(i, { [field]: value.slice(0, at) + token + value.slice(at) });
+  };
 
   const addStep = () => setSteps((prev) => [...prev, { delay: 3, subject: '', body: '' }]);
   const removeStep = (i: number) => setSteps((prev) => prev.filter((_, n) => n !== i));
@@ -74,9 +140,9 @@ export default function CampaignSequencePanel({
     <Box>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Merge fields are filled per lead: {MERGE_FIELDS.join(', ')}
-      </Typography>
+      <Box sx={{ mb: 2, maxWidth: 860 }}>
+        <MergeFieldPalette onInsert={(token) => insertToken(token)} />
+      </Box>
 
       <Stack spacing={2} sx={{ maxWidth: 860 }}>
         {steps.map((s, i) => (
@@ -86,6 +152,12 @@ export default function CampaignSequencePanel({
                 {i === 0 ? 'Email 1 — sends immediately' : `Email ${i + 1}`}
               </Typography>
               <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Button size="small" startIcon={<LibraryBooksIcon />} onClick={() => setLoadInto(i)}>
+                  Use template
+                </Button>
+                <Button size="small" startIcon={<BookmarkAddIcon />} onClick={() => setSaveFrom(i)}>
+                  Save as template
+                </Button>
                 {i > 0 && (
                   <TextField
                     label="Days after previous" type="number" size="small"
@@ -108,12 +180,16 @@ export default function CampaignSequencePanel({
               <TextField
                 label="Subject" size="small" fullWidth value={s.subject}
                 onChange={(e) => update(i, { subject: e.target.value })}
+                slotProps={{ htmlInput: { 'data-step': i, 'data-field': 'subject' } }}
+                onDrop={(e) => handleDrop(i, 'subject', e)}
                 error={!s.subject.trim()}
                 placeholder="Your home insurance renews soon"
               />
               <TextField
                 label="Body" size="small" fullWidth multiline minRows={6} value={s.body}
                 onChange={(e) => update(i, { body: e.target.value })}
+                slotProps={{ htmlInput: { 'data-step': i, 'data-field': 'body' } }}
+                onDrop={(e) => handleDrop(i, 'body', e)}
                 error={!s.body.trim()}
                 placeholder={'Hi {{firstName}},\n\nYour policy on {{property_address}} renews on {{renewal_date}}…'}
               />
@@ -121,6 +197,25 @@ export default function CampaignSequencePanel({
           </Paper>
         ))}
       </Stack>
+
+      <TemplateLoadDialog
+        open={loadInto != null}
+        onClose={() => setLoadInto(null)}
+        onApply={(t) => {
+          if (loadInto == null) return;
+          // Copy, not a reference — editing the template later must not rewrite a
+          // campaign that is already sending.
+          update(loadInto, { subject: t.subject, body: t.body });
+        }}
+      />
+
+      <TemplateSaveDialog
+        open={saveFrom != null}
+        onClose={() => setSaveFrom(null)}
+        subject={saveFrom != null ? steps[saveFrom]?.subject ?? '' : ''}
+        body={saveFrom != null ? steps[saveFrom]?.body ?? '' : ''}
+        onSaved={() => setSaveFrom(null)}
+      />
 
       <Divider sx={{ my: 2, maxWidth: 860 }} />
 

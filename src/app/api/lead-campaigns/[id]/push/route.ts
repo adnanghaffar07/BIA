@@ -52,14 +52,13 @@ function parseFilters(req: NextRequest): PushFilters {
   };
 }
 
-const wantsCoInsured = (req: NextRequest) => req.nextUrl.searchParams.get('includeCoInsured') === '1';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireCampaignAccess(request);
   if ('response' in gate) return gate.response;
   try {
     const { id } = await params;
-    const t = await triagePush(id, parseFilters(request), { includeCoInsured: wantsCoInsured(request) });
+    const t = await triagePush(id, parseFilters(request), {});
     return NextResponse.json({
       success: true,
       matching: t.matching,
@@ -86,7 +85,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     const { id } = await params;
     const filters = parseFilters(request);
-    const opts = { includeCoInsured: wantsCoInsured(request) };
+    const opts = {};
 
     // Re-check the ceiling on every chunk, not just the first: the filter comes in on
     // each request and nothing stops a caller widening it mid-run.

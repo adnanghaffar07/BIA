@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { matchInsuredPerson } from './skipTrace.service';
 import { pool } from '@/lib/neon';
 import { getLeadsFromDb } from '@/services/storage.service';
 import { addLeadsToCampaign, findLeadsByEmail, LeadInput } from '@/lib/integrations/leadCampaign';
@@ -29,14 +30,16 @@ export type PushFilters = {
   effectiveTo?: string;
 };
 
-export type PushOptions = {
-  /** Also mail the co-insured at their own address, as a separate recipient. */
-  includeCoInsured?: boolean;
-};
+/**
+ * No options remain — campaigns go to the named insured only, which is a rule rather
+ * than a per-push choice. Kept as a type so the call signatures stay stable.
+ */
+export type PushOptions = Record<string, never>;
 
 export type Recipient = {
   lead: any;
-  personRole: 'insured' | 'co_insured';
+  /** Always the insured; the co-insured is never mailed. */
+  personRole: 'insured';
   email: string;
 };
 
@@ -64,6 +67,57 @@ function suppressionReason(lead: any): string | null {
 }
 
 /**
+ * Every address belonging to the NAMED INSURED — and nobody else.
+ *
+ * ── Why not emailsAll ────────────────────────────────────────────────────────
+ * emailsAll is everything the skip trace returned for the PROPERTY, which routinely
+ * includes relatives, prior owners and unrelated co-residents. One live example carries
+ * 16 addresses across six surnames. Mailing that pool would send insurance-renewal
+ * outreach to people who do not own the property — a complaint and bounce risk on
+ * domains that have to stay clean.
+ *
+ * The raw trace payload attributes emails PER PERSON, so the insured's own addresses
+ * can be picked out exactly. For the same lead that is 3 addresses, not 16.
+ *
+ * The co-insured is excluded outright: their address is a different person's, and the
+ * decision is that campaigns go to the named insured only.
+ */
+function insuredEmails(lead: any): string[] {
+  const raw = Array.isArray(lead?.skipTraceData?.persons) ? lead.skipTraceData.persons : [];
+  // The stored payload is the vendor's snake_case shape; matchInsuredPerson expects the
+  // REAPI camelCase one. Normalise rather than duplicating the name-matching rules.
+  const persons = raw.map((p: any) => ({
+    ...p,
+    firstName: p.firstName ?? p.first_name,
+    lastName: p.lastName ?? p.last_name,
+    emails: (Array.isArray(p.emails) ? p.emails : [])
+      .map((e: any) => (typeof e === 'string' ? e : e?.email))
+      .filter(Boolean),
+  }));
+
+  const insured = matchInsuredPerson(persons, lead);
+
+  // The numbered slots come first: they are the insured's working addresses, and one
+  // may have been typed in by a producer and never appear in any trace.
+  const ordered = [
+    lead.email1,
+    lead.email2,
+    ...(insured?.emails ?? []),
+  ];
+
+  const coInsured = String(lead.owner2Email ?? '').trim().toLowerCase();
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of ordered) {
+    const email = String(value ?? '').trim().toLowerCase();
+    if (!email || email === coInsured || seen.has(email)) continue;
+    seen.add(email);
+    out.push(email);
+  }
+  return out;
+}
+
+/**
  * Work out who would actually be mailed.
  *
  * Free — no vendor calls — so the UI can show the real number before anyone spends a
@@ -76,13 +130,15 @@ export async function triagePush(
 ): Promise<PushTriage> {
   const leads = await getLeadsFromDb({ ...filters, limit: 100000, orderBy: 'xdate' });
 
-  // Which (lead, role) pairs are already in THIS campaign. Pushing the same person
-  // twice is how somebody receives the sequence from the start a second time.
+  // Which ADDRESSES are already in THIS campaign. Pushing the same person twice is how
+  // somebody receives the sequence from the start a second time.
   const { rows: existing } = await pool.query(
-    `SELECT "leadId", "personRole" FROM "OutreachEvent" WHERE "vendorCampaignId" = $1`,
+    `SELECT "recipientEmail" FROM "OutreachEvent" WHERE "vendorCampaignId" = $1`,
     [campaignId],
   );
-  const already = new Set(existing.map((r) => `${r.leadId}::${r.personRole}`));
+  const alreadyEmails = new Set(
+    existing.map((r) => String(r.recipientEmail ?? '').trim().toLowerCase()).filter(Boolean),
+  );
 
   const skipped = { noEmail: 0, suppressed: 0, holdout: 0, alreadyInCampaign: 0, duplicateAddress: 0 };
   const eligible: Recipient[] = [];
@@ -95,21 +151,19 @@ export async function triagePush(
     if (suppress === 'holdout') { skipped.holdout++; continue; }
     if (suppress) { skipped.suppressed++; continue; }
 
-    const candidates: Array<{ role: 'insured' | 'co_insured'; email: string }> = [
-      { role: 'insured', email: String(lead.email1 ?? '').trim().toLowerCase() },
-    ];
-    if (opts.includeCoInsured) {
-      candidates.push({ role: 'co_insured', email: String(lead.owner2Email ?? '').trim().toLowerCase() });
-    }
+    const candidates = insuredEmails(lead);
 
     let gotOne = false;
-    for (const c of candidates) {
-      if (!c.email || !EMAIL_RE.test(c.email)) continue;
+    for (const email of candidates) {
+      if (!EMAIL_RE.test(email)) continue;
       gotOne = true;
-      if (already.has(`${lead.id}::${c.role}`)) { skipped.alreadyInCampaign++; continue; }
-      if (seenAddresses.has(c.email)) { skipped.duplicateAddress++; continue; }
-      seenAddresses.add(c.email);
-      eligible.push({ lead, personRole: c.role, email: c.email });
+      // Keyed by ADDRESS, not by role. One lead now contributes several insured
+      // addresses, so a role-only key would let the first one mask the rest and
+      // report them as "already in campaign".
+      if (alreadyEmails.has(email)) { skipped.alreadyInCampaign++; continue; }
+      if (seenAddresses.has(email)) { skipped.duplicateAddress++; continue; }
+      seenAddresses.add(email);
+      eligible.push({ lead, personRole: 'insured', email });
     }
     if (!gotOne) skipped.noEmail++;
   }
@@ -223,7 +277,7 @@ export async function pushChunk(
         await client.query(
           `INSERT INTO "Activity" ("id","leadId","type","content","createdBy","createdAt")
            VALUES (gen_random_uuid()::text, $1, 'campaign_event', $2, $3, NOW())`,
-          [r.lead.id, `Added to an email campaign as ${r.personRole === 'insured' ? 'the insured' : 'the co-insured'} (${r.email})`, actor ?? 'campaign push'],
+          [r.lead.id, `Added to an email campaign (${r.email})`, actor ?? 'campaign push'],
         );
         await client.query('COMMIT');
         pushed++;
