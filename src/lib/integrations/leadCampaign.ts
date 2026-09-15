@@ -41,13 +41,23 @@ export function isConfigured(): boolean {
 }
 
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  // content-type ONLY when there is a body to describe.
+  //
+  // The vendor's Fastify layer rejects a bodiless request that declares JSON with
+  // FST_ERR_CTP_EMPTY_JSON_BODY — "Body cannot be empty when content-type is set to
+  // 'application/json'". Sending it unconditionally made every DELETE /leads/{id} and
+  // DELETE /accounts/{email} fail with a 400, so those never worked. Inconsistently,
+  // the vendor accepts the same bodiless DELETE on /campaigns/{id}, which is why
+  // campaign deletion looked fine and hid this.
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey()}`,
+    ...(init.body != null ? { 'content-type': 'application/json' } : {}),
+    ...(init.headers as Record<string, string> ?? {}),
+  };
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: {
-      Authorization: `Bearer ${apiKey()}`,
-      'content-type': 'application/json',
-      ...(init.headers ?? {}),
-    },
+    headers,
     signal: AbortSignal.timeout(30000),
   });
   if (!res.ok) {
@@ -304,6 +314,126 @@ export async function activateCampaign(id: string): Promise<void> {
 
 export async function listEmailAccounts(): Promise<EmailAccount[]> {
   return paginate<EmailAccount>('/accounts');
+}
+
+/**
+ * Mailbox actions, verified against the live API Sep-2026.
+ *
+ * Route existence was established by probing with an address that does not exist: a
+ * missing ROUTE answers "Route POST:/api/v2/... not found", while a real route with a
+ * missing resource answers "Account not found". The two are easy to confuse and the
+ * difference is what tells you whether a feature exists at all.
+ *
+ *   warmup on/off   POST /accounts/warmup/enable | /disable   { emails: [...] }
+ *   pause / resume  POST /accounts/{email}/pause | /resume
+ *   clear error     POST /accounts/{email}/mark-fixed
+ *   delete          DELETE /accounts/{email}
+ *
+ * There is NO reconnect endpoint. /accounts/{email}/reconnect, /accounts/reconnect,
+ * /connect, /reauth and /accounts/enable all answer "Route ... not found". That is
+ * expected for OAuth mailboxes — re-consent has to happen in the vendor's own UI
+ * against Google, and no API key can perform it. mark-fixed clears the error flag on
+ * an account the platform has soft-failed; it does not re-authenticate one.
+ */
+
+/**
+ * One mailbox in full, including the settings the list endpoint omits.
+ *
+ * Field names were established by probing PATCH: the endpoint silently IGNORES keys it
+ * does not know and echoes back the ones it accepted, so a wrong guess looks exactly
+ * like success. Every field below was confirmed by sending it and reading it back.
+ * Notably `important_rate`, not `mark_important`, backs the "Mark important" slider —
+ * the obvious name is one of the ones that gets swallowed.
+ */
+export type AccountWarmupSettings = {
+  limit?: number;
+  increment?: string | number;
+  reply_rate?: number;
+  advanced?: {
+    warm_ctd?: boolean;
+    open_rate?: number;
+    spam_save_rate?: number;
+    important_rate?: number;
+    weekday_only?: boolean;
+    read_emulation?: boolean;
+  };
+};
+
+export type AccountDetail = EmailAccount & {
+  warmup?: AccountWarmupSettings;
+  sending_gap?: number;
+  enable_slow_ramp?: boolean;
+  inbox_placement_test_limit?: number;
+  reply_to?: string | null;
+  timestamp_warmup_start?: string | null;
+};
+
+export async function getEmailAccount(email: string): Promise<AccountDetail> {
+  return getJson<AccountDetail>(`/accounts/${encodeURIComponent(email)}`);
+}
+
+/** PATCH only what changed; unknown keys are dropped without complaint. */
+export async function updateEmailAccount(
+  email: string, patch: Record<string, unknown>,
+): Promise<AccountDetail> {
+  return (await apiFetch(`/accounts/${encodeURIComponent(email)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })).json() as Promise<AccountDetail>;
+}
+
+export type WarmupAnalytics = {
+  email_date_data?: Record<string, Record<string, { sent?: number; landed_inbox?: number; received?: number }>>;
+  aggregate_data?: Record<string, { sent?: number; received?: number; landed_inbox?: number; health_score?: number }>;
+};
+
+/** Per-day warmup activity. POST with { emails }, NOT a GET — /warmup/analytics 404s. */
+export async function getWarmupAnalytics(emails: string[]): Promise<WarmupAnalytics> {
+  return postJson<WarmupAnalytics>('/accounts/warmup-analytics', { emails });
+}
+
+/**
+ * Which campaigns send from this mailbox.
+ *
+ * Derived by scanning each campaign's email_list — there is no "campaigns for account"
+ * endpoint, and the assignment lives on the campaign rather than on the account.
+ */
+export async function campaignsUsingMailbox(
+  email: string,
+): Promise<Array<{ id: string; name: string; status: number }>> {
+  const all = await paginate<Campaign>('/campaigns');
+  const target = email.toLowerCase();
+  return all
+    .filter((c) => (c.email_list ?? []).some((e) => String(e).toLowerCase() === target))
+    .map((c) => ({ id: c.id, name: c.name, status: c.status }));
+}
+
+/** Warmup is a bulk, asynchronous job — the response is a job id, not the new state. */
+export async function setWarmup(emails: string[], on: boolean): Promise<void> {
+  if (!emails.length) return;
+  await apiFetch(`/accounts/warmup/${on ? 'enable' : 'disable'}`, {
+    method: 'POST',
+    body: JSON.stringify({ emails }),
+  });
+}
+
+export async function pauseEmailAccount(email: string): Promise<void> {
+  await apiFetch(`/accounts/${encodeURIComponent(email)}/pause`, { method: 'POST', body: '{}' });
+}
+
+export async function resumeEmailAccount(email: string): Promise<void> {
+  await apiFetch(`/accounts/${encodeURIComponent(email)}/resume`, { method: 'POST', body: '{}' });
+}
+
+/** Clears a soft error flag. NOT a re-authentication — see the note above. */
+export async function markEmailAccountFixed(email: string): Promise<void> {
+  await apiFetch(`/accounts/${encodeURIComponent(email)}/mark-fixed`, { method: 'POST', body: '{}' });
+}
+
+export async function deleteEmailAccount(email: string): Promise<void> {
+  // Bodiless by design — apiFetch omits content-type when there is no body, which is
+  // what this endpoint requires.
+  await apiFetch(`/accounts/${encodeURIComponent(email)}`, { method: 'DELETE' });
 }
 
 // ─── Leads ────────────────────────────────────────────────────────────────────

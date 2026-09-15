@@ -11,6 +11,8 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import AddIcon from '@mui/icons-material/Add';
 import { useRouter } from 'next/navigation';
 import CampaignCreateDialog from '@/components/CampaignCreateDialog';
+import MailboxRowActions from '@/components/MailboxRowActions';
+import MailboxDetailDrawer from '@/components/MailboxDetailDrawer';
 
 /**
  * Lead Campaigns — its own module.
@@ -36,6 +38,7 @@ type CampaignRow = {
 type MailboxRow = {
   email: string; domain: string; name: string | null; active: boolean;
   warmingUp: boolean; warmupScore: number | null; dailyLimit: number; trackingDomain: string | null;
+  status: number | null; setupPending: boolean; statusLabel: string;
 };
 
 
@@ -56,6 +59,7 @@ export default function LeadCampaignsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
+  const [openMailbox, setOpenMailbox] = useState<string | null>(null);
 
   const load = useCallback(async (which: TabKey) => {
     setLoading(true);
@@ -198,8 +202,8 @@ export default function LeadCampaignsPage() {
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
-                  {['Mailbox', 'Name', 'Sending domain', 'Status', 'Warmup', 'Sends/day', 'Tracking domain'].map((h) => (
-                    <TableCell key={h} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</TableCell>
+                  {['Mailbox', 'Name', 'Sending domain', 'Status', 'Warmup', 'Sends/day', 'Tracking domain', ''].map((h, n) => (
+                    <TableCell key={h || n} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</TableCell>
                   ))}
                 </TableRow>
               </TableHead>
@@ -213,13 +217,28 @@ export default function LeadCampaignsPage() {
                       key={m.email} hover
                       sx={newDomain ? { '& td': { borderTop: '2px solid', borderTopColor: 'divider' } } : undefined}
                     >
-                      <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{m.email}</TableCell>
+                      <TableCell
+                        sx={{ fontWeight: 600, whiteSpace: 'nowrap', color: '#1565c0', cursor: 'pointer' }}
+                        onClick={() => setOpenMailbox(m.email)}
+                      >
+                        {m.email}
+                      </TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>{m.name ?? '—'}</TableCell>
                       <TableCell sx={{ color: '#5c6b78' }}>{m.domain}</TableCell>
                       <TableCell>
-                        {m.active
-                          ? <Chip size="small" label="Active" sx={{ height: 20, fontSize: 11, bgcolor: '#dcfce7', color: '#166534', fontWeight: 600 }} />
-                          : <Chip size="small" label="Setting up" sx={{ height: 20, fontSize: 11, bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 }} />}
+                        {/* Paused and errored both mean "not sending", but only one is
+                            something to act on here, so they are not collapsed. */}
+                        <Chip
+                          size="small"
+                          label={m.statusLabel ?? (m.active ? 'Active' : 'Setting up')}
+                          sx={{
+                            height: 20, fontSize: 11, fontWeight: 600,
+                            ...(m.statusLabel === 'Active' ? { bgcolor: '#dcfce7', color: '#166534' }
+                              : m.statusLabel === 'Paused' ? { bgcolor: '#fff3d6', color: '#8a5a00' }
+                                : m.statusLabel === 'Error' ? { bgcolor: '#fee2e2', color: '#b3261e' }
+                                  : { bgcolor: '#e8eaed', color: '#5c6b78' }),
+                          }}
+                        />
                       </TableCell>
                       <TableCell sx={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                         {m.warmingUp ? (m.warmupScore ?? '—') : <span style={{ color: '#b3261e' }}>off</span>}
@@ -230,12 +249,18 @@ export default function LeadCampaignsPage() {
                           ? <Chip size="small" label={m.trackingDomain} sx={{ height: 20, fontSize: 11, bgcolor: '#dcfce7', color: '#166534', fontWeight: 600 }} />
                           : <Chip size="small" label="none — uses shared" sx={{ height: 20, fontSize: 11, bgcolor: '#fee2e2', color: '#b3261e', fontWeight: 600 }} />}
                       </TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                        <MailboxRowActions
+                          mailbox={m}
+                          onChanged={() => load('mailboxes')}
+                        />
+                      </TableCell>
                     </TableRow>
                   );
                 })}
                 {!loading && mailboxes.length === 0 && !error && (
                   <TableRow>
-                    <TableCell colSpan={7} sx={{ textAlign: 'center', py: 4, color: '#888' }}>
+                    <TableCell colSpan={8} sx={{ textAlign: 'center', py: 4, color: '#888' }}>
                       No sending mailboxes configured.
                     </TableCell>
                   </TableRow>
@@ -245,6 +270,14 @@ export default function LeadCampaignsPage() {
           </Paper>
         </>
       )}
+      <MailboxDetailDrawer
+        key={openMailbox ?? 'none'}
+        email={openMailbox}
+        open={!!openMailbox}
+        onClose={() => setOpenMailbox(null)}
+        onChanged={() => load('mailboxes')}
+      />
+
       {createOpen && (
         <CampaignCreateDialog
           open

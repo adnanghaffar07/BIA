@@ -157,14 +157,7 @@ export default function CampaignSettingsPanel({
             control={<Switch size="small" checked={linkTracking} onChange={(e) => setLinkTracking(e.target.checked)} />}
             label={<Typography variant="body2">Link tracking</Typography>}
           />
-          {(openTracking || linkTracking) && (
-            <Alert severity="info">
-              Tracking rewrites links through a tracking domain. Any mailbox without one of
-              its own falls back to the platform&apos;s shared domain, which carries other
-              senders&apos; reputation — check the Sending mailboxes tab.
-            </Alert>
-          )}
-        </Stack>
+          </Stack>
 
         <Divider />
         <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>

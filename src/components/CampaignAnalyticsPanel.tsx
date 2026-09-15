@@ -51,8 +51,10 @@ const isoDaysAgo = (n: number) => {
 
 const rate = (v: number | null) => (v == null ? '—' : `${v}%`);
 
-function Metric({ label, value, sub, tone }: {
+function Metric({ label, value, sub, tone, muted }: {
   label: string; value: string; sub?: string; tone?: 'good' | 'bad';
+  /** The figure cannot be trusted — greys it out and marks the reason underneath. */
+  muted?: boolean;
 }) {
   return (
     <Paper variant="outlined" sx={{ p: 2, minWidth: 132, flex: '1 1 132px' }}>
@@ -61,12 +63,17 @@ function Metric({ label, value, sub, tone }: {
         variant="h5"
         sx={{
           fontWeight: 700, fontVariantNumeric: 'tabular-nums',
-          color: tone === 'good' ? '#166534' : tone === 'bad' ? '#b3261e' : undefined,
+          color: muted ? '#b0b6c0'
+            : tone === 'good' ? '#166534' : tone === 'bad' ? '#b3261e' : undefined,
         }}
       >
         {value}
       </Typography>
-      {sub && <Typography variant="caption" color="text.secondary">{sub}</Typography>}
+      {sub && (
+        <Typography variant="caption" sx={{ color: muted ? '#8a5a00' : 'text.secondary' }}>
+          {sub}
+        </Typography>
+      )}
     </Paper>
   );
 }
@@ -222,7 +229,6 @@ export default function CampaignAnalyticsPanel({ campaignId }: { campaignId: str
   if (!data) return null;
 
   const t = data.totals;
-  const neverSent = t.sent === 0;
 
   return (
     <Stack spacing={3}>
@@ -236,31 +242,25 @@ export default function CampaignAnalyticsPanel({ campaignId }: { campaignId: str
         </ToggleButtonGroup>
       </Stack>
 
-      {neverSent && (
-        <Alert severity="info">
-          This campaign has not sent anything yet, so there is nothing to measure. Rates
-          show as — rather than 0% until the first email goes out.
-        </Alert>
-      )}
-
-      {data.caveats.includes('open-tracking-off') && (
-        <Alert severity="warning">
-          Open tracking is off for this campaign, so the open figures below will stay at
-          zero however well it performs. Turn it on under Settings if you want them — but
-          note every mailbox here falls back to the platform&apos;s shared tracking domain,
-          which carries other senders&apos; reputation.
-        </Alert>
-      )}
-      {data.caveats.includes('link-tracking-off') && (
-        <Alert severity="warning">
-          Link tracking is off, so clicks will read zero regardless of what recipients do.
-        </Alert>
-      )}
-
+      {/* A caveat belongs on the number it affects, not in a banner above it. A zero
+          open rate with tracking off is not a result, and the card says so in three
+          words; three stacked banners saying the same thing just get scrolled past. */}
       <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap' }}>
         <Metric label="Emails sent" value={t.sent.toLocaleString()} sub={`${t.contacted.toLocaleString()} leads contacted`} />
-        <Metric label="Open rate" value={rate(data.rates.open)} sub={`${t.uniqueOpens.toLocaleString()} openers · ${t.opens.toLocaleString()} opens`} />
-        <Metric label="Click rate" value={rate(data.rates.click)} sub={`${t.uniqueClicks.toLocaleString()} clickers`} />
+        <Metric
+          label="Open rate" value={rate(data.rates.open)}
+          sub={data.caveats.includes('open-tracking-off')
+            ? 'open tracking off'
+            : `${t.uniqueOpens.toLocaleString()} openers · ${t.opens.toLocaleString()} opens`}
+          muted={data.caveats.includes('open-tracking-off')}
+        />
+        <Metric
+          label="Click rate" value={rate(data.rates.click)}
+          sub={data.caveats.includes('link-tracking-off')
+            ? 'link tracking off'
+            : `${t.uniqueClicks.toLocaleString()} clickers`}
+          muted={data.caveats.includes('link-tracking-off')}
+        />
         <Metric
           label="Reply rate" value={rate(data.rates.reply)}
           sub={`${t.uniqueReplies.toLocaleString()} replied`}

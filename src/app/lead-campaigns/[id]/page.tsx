@@ -151,16 +151,13 @@ export default function CampaignDetailPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Could not add the lead');
-      // Skips are reported, never silent — a lead already in another campaign is the
-      // common case and the operator needs to know it did not land.
+      // A lead that landed needs no announcement — the row appears in the table. A lead
+      // that did NOT land is the case worth interrupting for: already in another
+      // campaign is the common reason, and silence there reads as success.
       const skipped = (json.skipped ?? [])[0];
-      setNotice(
-        json.added > 0
-          ? `Added ${newLead.email}.`
-          : skipped
-            ? `Not added — ${skipped.reason}.`
-            : 'Nothing was added.',
-      );
+      if (json.added === 0) {
+        setError(skipped ? `Not added — ${skipped.reason}.` : 'Nothing was added.');
+      }
       setNewLead({ email: '', firstName: '', lastName: '' });
       setAddOpen(false);
       await load();
@@ -191,6 +188,12 @@ export default function CampaignDetailPage() {
 
   const isActive = detail?.status === ACTIVE;
   const noSteps = detail?.steps === 0;
+  /** Everything standing between this campaign and a first send, each with its tab. */
+  const blockers: Array<{ label: string; tab: number }> = [
+    ...(detail?.steps === 0 ? [{ label: 'no email written', tab: TAB_SEQUENCE }] : []),
+    ...(detail?.mailboxes.length === 0 ? [{ label: 'no sending mailbox', tab: TAB_MAILBOXES }] : []),
+    ...(detail && !detail.unsubscribeHeader ? [{ label: 'no unsubscribe header', tab: TAB_SETTINGS }] : []),
+  ];
   const noMailboxes = detail?.mailboxes.length === 0;
 
   /** A tab label that carries a red dot when that area is what blocks sending. */
@@ -236,9 +239,11 @@ export default function CampaignDetailPage() {
             ) : (
               <Tooltip
                 title={
-                  noSteps ? 'This campaign has no email step yet — it cannot send.'
-                  : noMailboxes ? 'No sending mailbox is assigned.'
-                  : ''
+                  // Every blocker, not just the first — fixing one and finding the button
+                  // still disabled with no new explanation is the worst version of this.
+                  blockers.length
+                    ? `Cannot send yet: ${blockers.map((b) => b.label).join(', ')}.`
+                    : ''
                 }
               >
                 <span>
@@ -271,31 +276,10 @@ export default function CampaignDetailPage() {
               <Chip size="small" label={`${totals?.replied ?? 0} replied`} sx={{ bgcolor: '#dcfce7', color: '#166534', fontWeight: 600 }} />
             </Stack>
 
-            {noSteps && (
-              <Alert
-                severity="warning" sx={{ mt: 1.5 }}
-                action={<Button size="small" onClick={() => goToTab(TAB_SEQUENCE)}>Write it</Button>}
-              >
-                This campaign has no email written yet, so it cannot send.
-              </Alert>
-            )}
-            {noMailboxes && (
-              <Alert
-                severity="warning" sx={{ mt: 1.5 }}
-                action={<Button size="small" onClick={() => goToTab(TAB_MAILBOXES)}>Pick one</Button>}
-              >
-                No sending mailbox is assigned, so this campaign cannot send.
-              </Alert>
-            )}
-            {!detail.unsubscribeHeader && (
-              <Alert
-                severity="warning" sx={{ mt: 1.5 }}
-                action={<Button size="small" onClick={() => goToTab(TAB_SETTINGS)}>Turn it on</Button>}
-              >
-                This campaign sends without a one-click unsubscribe header. That is a
-                compliance and deliverability problem.
-              </Alert>
-            )}
+            {/* No banner for "not ready to send". The state is already legible twice
+                over: the blocking tab carries a red dot, and Activate is disabled with a
+                tooltip naming what is missing. A third copy sitting on screen for the
+                whole life of a draft is noise, not a warning. */}
           </Paper>
 
           <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
@@ -371,7 +355,7 @@ export default function CampaignDetailPage() {
               campaignId={detail.id}
               current={detail.sequence ?? []}
               onDirtyChange={setDirty}
-              onSaved={() => { setNotice('Email sequence saved.'); load(); }}
+              onSaved={() => { load(); }}
             />
           )}
 
@@ -380,10 +364,7 @@ export default function CampaignDetailPage() {
               campaignId={detail.id}
               selected={detail.mailboxes}
               onDirtyChange={setDirty}
-              onSaved={(mb) => {
-                setNotice(`Now sending from ${mb.length} mailbox${mb.length === 1 ? '' : 'es'}.`);
-                load();
-              }}
+              onSaved={() => { load(); }}
             />
           )}
 
@@ -399,7 +380,7 @@ export default function CampaignDetailPage() {
                 schedule: detail.schedule,
               }}
               onDirtyChange={setDirty}
-              onSaved={() => { setNotice('Settings saved.'); load(); }}
+              onSaved={() => { load(); }}
             />
           )}
         </>
@@ -452,10 +433,7 @@ export default function CampaignDetailPage() {
           campaignId={detail.id}
           campaignName={detail.name}
           onClose={() => setCsvOpen(false)}
-          onFinished={(t) => {
-            setNotice(`${t.added} lead${t.added === 1 ? '' : 's'} imported from CSV.`);
-            load();
-          }}
+          onFinished={() => { load(); }}
         />
       )}
 
@@ -465,10 +443,7 @@ export default function CampaignDetailPage() {
           campaignId={detail.id}
           campaignName={detail.name}
           onClose={() => setPushOpen(false)}
-          onFinished={(t) => {
-            setNotice(`${t.pushed} lead${t.pushed === 1 ? '' : 's'} added from the CRM.`);
-            load();
-          }}
+          onFinished={() => { load(); }}
         />
       )}
 

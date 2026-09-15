@@ -69,6 +69,15 @@ export async function GET(request: NextRequest) {
         warmupScore: typeof a.stat_warmup_score === 'number' ? a.stat_warmup_score : null,
         dailyLimit: a.daily_limit ?? 0,
         trackingDomain: a.tracking_domain_name ?? null,
+        // Raw codes, so the UI can tell "paused by us" from "the platform has an error
+        // with it" — both look like "not sending" but only one is ours to fix here.
+        status: a.status ?? null,
+        setupPending: a.setup_pending === true,
+        statusLabel: a.setup_pending === true ? 'Setting up'
+          : a.status === 1 ? 'Active'
+            : a.status === 2 ? 'Paused'
+              : a.status === -1 ? 'Error'
+                : 'Inactive',
       }))
       .sort((x, y) => (x.domain === y.domain ? x.email.localeCompare(y.email) : x.domain.localeCompare(y.domain)));
 

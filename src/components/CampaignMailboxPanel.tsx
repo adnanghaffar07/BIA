@@ -156,18 +156,6 @@ export default function CampaignMailboxPanel({
           )}
         </Stack>
 
-        {picked.size === 0 && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            With no mailbox selected this campaign has nothing to send from.
-          </Alert>
-        )}
-        {missingTracking > 0 && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            Some selected mailboxes have no tracking domain of their own and will fall back
-            to the platform&apos;s shared one — a deliverability risk on a cold send.
-          </Alert>
-        )}
-
         {byDomain.map(([domain, list], i) => {
           const selectable = list.filter((m) => m.active);
           const allOn = selectable.length > 0 && selectable.every((m) => picked.has(m.email));
