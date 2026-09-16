@@ -1,5 +1,6 @@
 import crypto from 'crypto';
-import { matchInsuredPerson } from './skipTrace.service';
+import { insuredEmails, EMAIL_RE } from './recipients.service';
+import { cohortOf } from './cohort';
 import { pool } from '@/lib/neon';
 import { getLeadsFromDb } from '@/services/storage.service';
 import { addLeadsToCampaign, findLeadsByEmail, LeadInput } from '@/lib/integrations/leadCampaign';
@@ -55,8 +56,6 @@ export type PushTriage = {
   };
 };
 
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
 /** Why a lead must not be mailed, or null. */
 function suppressionReason(lead: any): string | null {
   if (lead.holdoutFlag === true) return 'holdout';
@@ -64,57 +63,6 @@ function suppressionReason(lead: any): string | null {
   if (lead.campaignUnsubscribedAt) return 'suppressed';
   if (String(lead.campaignStatus ?? '') === 'suppressed') return 'suppressed';
   return null;
-}
-
-/**
- * Every address belonging to the NAMED INSURED — and nobody else.
- *
- * ── Why not emailsAll ────────────────────────────────────────────────────────
- * emailsAll is everything the skip trace returned for the PROPERTY, which routinely
- * includes relatives, prior owners and unrelated co-residents. One live example carries
- * 16 addresses across six surnames. Mailing that pool would send insurance-renewal
- * outreach to people who do not own the property — a complaint and bounce risk on
- * domains that have to stay clean.
- *
- * The raw trace payload attributes emails PER PERSON, so the insured's own addresses
- * can be picked out exactly. For the same lead that is 3 addresses, not 16.
- *
- * The co-insured is excluded outright: their address is a different person's, and the
- * decision is that campaigns go to the named insured only.
- */
-function insuredEmails(lead: any): string[] {
-  const raw = Array.isArray(lead?.skipTraceData?.persons) ? lead.skipTraceData.persons : [];
-  // The stored payload is the vendor's snake_case shape; matchInsuredPerson expects the
-  // REAPI camelCase one. Normalise rather than duplicating the name-matching rules.
-  const persons = raw.map((p: any) => ({
-    ...p,
-    firstName: p.firstName ?? p.first_name,
-    lastName: p.lastName ?? p.last_name,
-    emails: (Array.isArray(p.emails) ? p.emails : [])
-      .map((e: any) => (typeof e === 'string' ? e : e?.email))
-      .filter(Boolean),
-  }));
-
-  const insured = matchInsuredPerson(persons, lead);
-
-  // The numbered slots come first: they are the insured's working addresses, and one
-  // may have been typed in by a producer and never appear in any trace.
-  const ordered = [
-    lead.email1,
-    lead.email2,
-    ...(insured?.emails ?? []),
-  ];
-
-  const coInsured = String(lead.owner2Email ?? '').trim().toLowerCase();
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const value of ordered) {
-    const email = String(value ?? '').trim().toLowerCase();
-    if (!email || email === coInsured || seen.has(email)) continue;
-    seen.add(email);
-    out.push(email);
-  }
-  return out;
 }
 
 /**
@@ -151,7 +99,22 @@ export async function triagePush(
     if (suppress === 'holdout') { skipped.holdout++; continue; }
     if (suppress) { skipped.suppressed++; continue; }
 
-    const candidates = insuredEmails(lead);
+    /**
+     * Once somebody has answered, they are the only address.
+     *
+     * A household that engaged has a primary contact recorded on the Lead, and from then
+     * on the conversation belongs to that person — including the next renewal cycle,
+     * which is why it is stored on the card rather than inferred from one campaign's
+     * events. Without this the household stop would only hold until the next campaign:
+     * the other addresses would be picked up again and mailed after their household had
+     * already replied.
+     *
+     * Applied HERE and not inside insuredEmails, because that function is shared with
+     * the reachability report — which has to count every address a household can be
+     * reached at, not the one address we would currently route to.
+     */
+    const primary = String(lead.primaryContactEmail ?? '').trim().toLowerCase();
+    const candidates = primary ? [primary] : insuredEmails(lead);
 
     let gotOne = false;
     for (const email of candidates) {
@@ -258,21 +221,32 @@ export async function pushChunk(
       // let the next push pick the same person up again.
       await client.query('BEGIN');
       try {
+        // The cohort is SNAPSHOT here, not joined from the lead at report time. A
+        // renewal date corrected next month moves the lead's cohort — correctly — but
+        // must not retroactively move a send that already happened into a different
+        // week's numbers.
         await client.query(
           `INSERT INTO "OutreachEvent"
-             ("id","leadId","propertyId","personRole","recipientEmail","channel","vendorLeadId","vendorCampaignId","sentAt","createdAt","updatedAt")
-           VALUES ($1,$2,$3,$4,$5,'campaign',$6,$7,NOW(),NOW(),NOW())`,
-          [crypto.randomUUID(), r.lead.id, r.lead.propertyId ?? null, r.personRole, r.email, outcome.leadId ?? null, campaignId],
+             ("id","leadId","propertyId","personRole","recipientEmail","channel","vendorLeadId","vendorCampaignId","cohort","sentAt","createdAt","updatedAt")
+           VALUES ($1,$2,$3,$4,$5,'campaign',$6,$7,$8,NOW(),NOW(),NOW())`,
+          [
+            crypto.randomUUID(), r.lead.id, r.lead.propertyId ?? null, r.personRole, r.email,
+            outcome.leadId ?? null, campaignId,
+            r.lead.cohort ?? cohortOf(r.lead.effectiveDate),
+          ],
         );
+        // "campaignCohort" is no longer written: it held the push FILTER
+        // ("2026-11-09..2026-11-16"), which described the query someone ran rather than
+        // the lead, and was only populated when that filter happened to carry both ends
+        // of a range. "Lead"."cohort" is the lead's own cohort and is always set.
         await client.query(
           `UPDATE "Lead"
               SET "campaignStatus" = COALESCE(NULLIF("campaignStatus",''), 'queued'),
                   "vendorCampaignId" = $2,
                   "vendorLeadId" = COALESCE("vendorLeadId", $3),
-                  "campaignCohort" = COALESCE("campaignCohort", $4),
                   "updatedAt" = NOW()
             WHERE "id" = $1`,
-          [r.lead.id, campaignId, outcome.leadId ?? null, filters.effectiveDate && filters.effectiveTo ? `${filters.effectiveDate}..${filters.effectiveTo}` : null],
+          [r.lead.id, campaignId, outcome.leadId ?? null],
         );
         await client.query(
           `INSERT INTO "Activity" ("id","leadId","type","content","createdBy","createdAt")

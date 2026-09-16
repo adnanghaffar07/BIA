@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { pool } from '@/lib/neon';
 import {
-  WEBHOOK_HEADER, verifyWebhookSecret, classifyEvent, readPayload, cleanReplyExcerpt,
+  WEBHOOK_HEADER, verifyWebhookSecret, classifyEvent, readPayload, cleanReplyExcerpt, htmlToText,
 } from '@/lib/integrations/campaignWebhook';
+import { stopHousehold, setPrimaryContact, type HouseholdStopResult } from '@/services/householdStop.service';
 
 /**
  * POST /api/webhooks/campaign — outcomes from the campaign platform.
@@ -56,7 +57,11 @@ export async function POST(request: NextRequest) {
 
   // Unrecognised event type: acknowledge, write nothing. The vendor sends types we
   // have no opinion on, and erroring on them would trigger pointless retries.
-  if (!kind || kind === 'sent') {
+  //
+  // 'sent' USED to be discarded here alongside them. It is now handled: it is the only
+  // event that carries which mailbox the platform chose and what the copy said, and a
+  // per-mailbox or per-content report has no other live source for either.
+  if (!kind) {
     return NextResponse.json({ ok: true, matched: false, event: p.eventType ?? null, handled: false });
   }
   if (!p.email) {
@@ -69,7 +74,7 @@ export async function POST(request: NextRequest) {
     // Campaign id narrows it when present, but is not required: a payload missing it
     // should still land on the right row rather than be discarded.
     const { rows: found } = await client.query(
-      `SELECT "id", "leadId", "openCount"
+      `SELECT "id", "leadId", "openCount", "personRole"
          FROM "OutreachEvent"
         WHERE lower("recipientEmail") = $1
           AND ($2::text IS NULL OR "vendorCampaignId" = $2)
@@ -163,6 +168,23 @@ export async function POST(request: NextRequest) {
           WHERE "id" = $1`,
         [row.id, now],
       );
+    } else if (kind === 'sent') {
+      // Nothing about the outcome — only the facts of the send itself. sentAt is already
+      // stamped by the push, so this confirms rather than creates.
+      await client.query(
+        `UPDATE "OutreachEvent"
+            SET "sentAt" = COALESCE("sentAt", $2), "emailStep" = COALESCE($3, "emailStep"), "updatedAt" = $2
+          WHERE "id" = $1`,
+        [row.id, now, p.step],
+      );
+      leadPatch = {
+        sql: `UPDATE "Lead"
+                 SET "campaignLastSentAt" = $2,
+                     "currentEmailStep" = COALESCE($3, "currentEmailStep"),
+                     "updatedAt" = $2
+               WHERE "id" = $1`,
+        params: [row.leadId, now, p.step],
+      };
     } else if (kind === 'click') {
       await client.query(
         `UPDATE "OutreachEvent"
@@ -179,8 +201,62 @@ export async function POST(request: NextRequest) {
 
     if (leadPatch) await client.query(leadPatch.sql, leadPatch.params);
 
+    /**
+     * ── What was sent, captured from whichever event happens to carry it ──────
+     * Tried on EVERY matched event, not only 'sent'. The vendor is inconsistent about
+     * which payloads include the sending mailbox and the copy, so taking it wherever it
+     * appears is the difference between a populated column and an empty one.
+     *
+     * COALESCE throughout: first write wins. The campaign's sequence can be edited after
+     * the fact, so a later event carrying today's copy must not overwrite the copy this
+     * person actually received.
+     */
+    if (p.sendingMailbox || p.subject || p.bodyHtml) {
+      await client.query(
+        `UPDATE "OutreachEvent"
+            SET "sendingMailbox"    = COALESCE("sendingMailbox", $2),
+                "emailSubject"      = COALESCE("emailSubject", $3),
+                "emailBody"         = COALESCE("emailBody", $4),
+                "contentCapturedAt" = COALESCE("contentCapturedAt", $5),
+                "updatedAt" = $5
+          WHERE "id" = $1`,
+        [row.id, p.sendingMailbox, p.subject, htmlToText(p.bodyHtml), now],
+      );
+    }
+
+    /**
+     * ── Household stop ────────────────────────────────────────────────────────
+     * One answer ends the conversation for the whole card. A reply, a click on a CTA
+     * or an unsubscribe/complaint from ANY address means every other address on that
+     * property stops receiving the sequence, in the same transaction as the event that
+     * caused it.
+     *
+     * Whoever engaged becomes the primary contact — the rule runs both ways, so a
+     * co-insured who replies owns the conversation and the insured's addresses go
+     * quiet, exactly as it would in reverse.
+     *
+     * An open is deliberately NOT a stop. Opens fire from scanners and prefetchers and
+     * are the least trustworthy signal there is; stopping a household on one would
+     * silently kill live outreach on a false positive.
+     */
+    let household: HouseholdStopResult | null = null;
+    if (kind === 'reply' || kind === 'click' || kind === 'unsubscribe' || kind === 'complaint') {
+      household = await stopHousehold(client, row.leadId, row.id, kind, p.email);
+
+      // Only a positive signal makes someone the contact. An unsubscribe or a complaint
+      // stops the household but must never mark that address as who to talk to.
+      if (kind === 'reply' || kind === 'click') {
+        await setPrimaryContact(client, row.leadId, p.email, row.personRole ?? 'insured', now);
+      }
+    }
+
     // Activity feed: vendor-sourced activity reads the same as anything else.
-    await client.query(
+    //
+    // A 'sent' gets no entry. Every recipient on every step fires one, so on a 300-lead
+    // cohort with a four-step sequence that is 1,200 rows of "we emailed them" burying
+    // the handful of entries a producer actually needs to see. The send is already
+    // recorded on the OutreachEvent, which is where a report reads it from.
+    if (kind !== 'sent') await client.query(
       `INSERT INTO "Activity" ("id","leadId","type","content","createdBy","createdAt")
        VALUES (gen_random_uuid()::text, $1, 'campaign_event', $2, 'campaign platform', $3)`,
       [
@@ -200,8 +276,31 @@ export async function POST(request: NextRequest) {
       ],
     );
 
+    // A stop is a thing that happened to the household, so it gets its own entry
+    // rather than being buried inside the reply's. Someone reading the card needs to
+    // see that the other addresses were cut off, and why.
+    if (household && household.stopped > 0) {
+      await client.query(
+        `INSERT INTO "Activity" ("id","leadId","type","content","metadata","createdBy","createdAt")
+         VALUES (gen_random_uuid()::text, $1, 'campaign_event', $2, $3, 'campaign platform', $4)`,
+        [
+          row.leadId,
+          `Outreach stopped to ${household.stopped} other address${household.stopped === 1 ? '' : 'es'} on this household`
+            + ` after ${p.email} ${kind === 'reply' ? 'replied' : kind === 'click' ? 'clicked' : kind === 'unsubscribe' ? 'unsubscribed' : 'complained'}`
+            + (household.failedOnPlatform.length
+              ? ` — ${household.failedOnPlatform.length} could not be removed from the campaign and may still send`
+              : ''),
+          JSON.stringify(household),
+          now,
+        ],
+      );
+    }
+
     await client.query('COMMIT');
-    return NextResponse.json({ ok: true, matched: true, event: p.eventType, kind, leadId: row.leadId });
+    return NextResponse.json({
+      ok: true, matched: true, event: p.eventType, kind, leadId: row.leadId,
+      household: household ?? undefined,
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('POST /api/webhooks/campaign error:', err);

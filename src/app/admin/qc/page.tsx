@@ -23,10 +23,11 @@ import DownloadIcon from '@mui/icons-material/Download';
 import Link from 'next/link';
 import { useStickyState } from '@/hooks/useStickyState';
 
-type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort';
+type ReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability';
 
 
 const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: string }[] = [
+  { key: 'reachability', label: 'Reachability', icon: <ContactPhoneIcon />, blurb: 'Per renewal week: how many households we can reach at the named insured, how many only at the co-insured, and what the insured-only rule costs us in reach.' },
   { key: 'cohort', label: 'Renewal Week', icon: <CalendarMonthIcon />, blurb: 'Every lead whose renewal falls in the chosen effective-date range — the whole cohort, graded or not, with grade, status and how many are actually reachable.' },
   { key: 'referral', label: 'Referrals / Eligibility', icon: <FactCheckIcon />, blurb: 'Leads a carrier flagged Referral (or Non-eligible), with the reason entered.' },
   { key: 'grade_overrides', label: 'Grade Changes', icon: <SwapVertIcon />, blurb: 'Grade changes from both sides — a producer overriding with a reason, and the rules re-grading a lead. The system tab also flags leads whose stored grade no longer agrees with the rules.' },
@@ -55,6 +56,8 @@ export default function QcReportsPage() {
   // Contact-coverage drill-down: click a summary chip to filter the rows to that slice.
   /** Drill-down on the Renewal Week summary: click a chip to filter, click again to clear. */
   const [cohortFilter, setCohortFilter] = useState<{ kind: 'grade' | 'status' | 'trait'; value: string } | null>(null);
+  /** Reachability drill-down: which slice of the population the table is narrowed to. */
+  const [reachFilter, setReachFilter] = useState<'all' | 'insured' | 'coOnly' | 'unreachable'>('all');
   const [covFilter, setCovFilter] = useState<'all' | 'sfh' | 'condo' | 'both' | 'phoneOnly' | 'emailOnly' | 'neither' | 'noEmail' | 'hasDob'>('all');
   const [rows, setRows] = useState<QcRow[]>([]);
   // Credit status is shown as a warning only — never as a per-lead number
@@ -97,6 +100,7 @@ export default function QcReportsPage() {
   useEffect(() => {
     setCovFilter('all'); // reset the coverage drill-down on report change
     setCohortFilter(null);
+    setReachFilter('all'); // reset the reachability drill-down on report change
     // Renewal Week without a range means the entire book — nearly 10,000 rows over the
     // wire for a report whose whole point is one week. It waits for dates, the same way
     // keyword waits for a term.
@@ -108,10 +112,21 @@ export default function QcReportsPage() {
   }, [report]);
 
   const exportCsv = () => {
-    const cols = ['Owner', 'City', 'ZIP', 'Eff Date', 'Grade', 'Manual', 'Type', 'Travelers', 'Plymouth', 'Reason', 'Detail', 'By', 'At'];
+    const reachCols = report === 'reachability';
+    const cols = reachCols
+      ? ['Owner', 'City', 'ZIP', 'Eff Date', 'Renewal Week', 'Grade', 'Insured Emails', 'Co-Insured Only', 'Reachable', 'Detail']
+      : ['Owner', 'City', 'ZIP', 'Eff Date', 'Grade', 'Manual', 'Type', 'Travelers', 'Plymouth', 'Reason', 'Detail', 'By', 'At'];
     const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const lines = [cols.join(',')];
-    for (const r of shownRows) lines.push([r.owner, r.city, r.zip, r.effectiveDate, r.grade, r.manualGrade, r.propertyType, eligLabel(r.travelersEligible), eligLabel(r.plymouthEligible), r.reason, r.context, r.by, r.at].map(esc).join(','));
+    for (const r of shownRows) {
+      lines.push((reachCols
+        ? [r.owner, r.city, r.zip, r.effectiveDate, r.reason, r.grade,
+           r.insuredEmailCount ?? 0, r.coInsuredOnly ? 'yes' : 'no',
+           ((r.insuredEmailCount ?? 0) > 0 || r.coInsuredOnly) ? 'yes' : 'no', r.context]
+        : [r.owner, r.city, r.zip, r.effectiveDate, r.grade, r.manualGrade, r.propertyType,
+           eligLabel(r.travelersEligible), eligLabel(r.plymouthEligible), r.reason, r.context, r.by, r.at]
+      ).map(esc).join(','));
+    }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -154,6 +169,30 @@ export default function QcReportsPage() {
       if (r.hasPhone) withPhone++;
     }
     return { total: rows.length, grades, statuses, traced, withEmail, withPhone };
+  })() : null;
+
+  /**
+   * Reachability per renewal week.
+   *
+   * Computed from the same rows the table shows, so the summary can never disagree with
+   * what is underneath it. "Co-insured only" is the number that matters: those households
+   * are unreachable today purely because of the insured-only rule.
+   */
+  const reach = report === 'reachability' && rowsReport === report && rows.length ? (() => {
+    const byCohort = new Map<string, { cohort: string; label: string; total: number; insured: number; coOnly: number }>();
+    for (const r of rows) {
+      const key = r.cohort ?? 'untagged';
+      const cur = byCohort.get(key) ?? { cohort: key, label: r.reason ?? '—', total: 0, insured: 0, coOnly: 0 };
+      cur.total++;
+      if ((r.insuredEmailCount ?? 0) > 0) cur.insured++;
+      else if (r.coInsuredOnly) cur.coOnly++;
+      byCohort.set(key, cur);
+    }
+    const weeks = [...byCohort.values()].sort((a, b) => (a.cohort < b.cohort ? -1 : 1));
+    const t = weeks.reduce((a, w) => ({
+      total: a.total + w.total, insured: a.insured + w.insured, coOnly: a.coOnly + w.coOnly,
+    }), { total: 0, insured: 0, coOnly: 0 });
+    return { weeks, ...t };
   })() : null;
 
   const coverage = report === 'contact_coverage' && rowsReport === report && rows.length ? (() => {
@@ -213,6 +252,15 @@ const MAX_RENDERED = 300;
         return true;
       });
     }
+    if (report === 'reachability') {
+      if (reachFilter === 'all') return rows;
+      return rows.filter((r) => {
+        const ins = (r.insuredEmailCount ?? 0) > 0;
+        if (reachFilter === 'insured') return ins;
+        if (reachFilter === 'coOnly') return !ins && !!r.coInsuredOnly;
+        return !ins && !r.coInsuredOnly;
+      });
+    }
     if (report !== 'contact_coverage' || covFilter === 'all') return rows;
     return rows.filter((r) => {
       switch (covFilter) {
@@ -227,7 +275,7 @@ const MAX_RENDERED = 300;
         default: return true;
       }
     });
-  }, [rows, report, covFilter, cohortFilter]);
+  }, [rows, report, covFilter, cohortFilter, reachFilter]);
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
@@ -362,6 +410,87 @@ const MAX_RENDERED = 300;
                 </Typography>
               )}
             </Stack>
+          </Paper>
+        );
+      })()}
+
+      {reach && (() => {
+        const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : '—');
+        // Every chip filters the table. Clicking the active one clears it, so the way out
+        // is the way in — no separate reset to hunt for.
+        const slice = (key: typeof reachFilter, label: string, sx: Record<string, unknown> = {}) => (
+          <Chip
+            key={key} size="small" label={label} clickable
+            onClick={() => setReachFilter(reachFilter === key ? 'all' : key)}
+            sx={{
+              ...sx, cursor: 'pointer',
+              outline: reachFilter === key ? '2px solid #1565c0' : 'none', outlineOffset: 1,
+            }}
+          />
+        );
+        const combined = reach.insured + reach.coOnly;
+        const unreachable = reach.total - combined;
+
+        return (
+          <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+            <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center', mb: 1.5 }}>
+              <Typography variant="h6" sx={{ mr: 1 }}>{reach.total.toLocaleString()} leads</Typography>
+              {slice('insured', `${reach.insured.toLocaleString()} reachable at the insured (${pct(reach.insured, reach.total)})`, {
+                fontWeight: 600, bgcolor: '#dcfce7', color: '#166534',
+              })}
+              {slice('coOnly', `${reach.coOnly.toLocaleString()} only at the co-insured`, {
+                fontWeight: 600, bgcolor: '#fff3d6', color: '#8a5a00',
+              })}
+              {slice('unreachable', `${unreachable.toLocaleString()} unreachable`, {
+                bgcolor: '#fee2e2', color: '#b3261e',
+              })}
+              {reachFilter !== 'all' && (
+                <Typography variant="caption" sx={{ color: '#1565c0', fontWeight: 600 }}>
+                  · showing {shownRows.length.toLocaleString()} — click the chip again to clear
+                </Typography>
+              )}
+            </Stack>
+
+            {/* The point of the report: what the insured-only rule costs in reach. */}
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+              Combined reach would be <strong>{combined.toLocaleString()}</strong> ({pct(combined, reach.total)}) if
+              co-insured addresses were mailed — <strong>{reach.coOnly.toLocaleString()}</strong> households
+              {' '}({pct(reach.coOnly, reach.total)}) are reachable no other way. Campaigns currently go to the named insured only.
+            </Typography>
+
+            <Divider sx={{ my: 1.5 }} />
+
+            <Box sx={{ overflowX: 'auto' }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Renewal week</TableCell>
+                    <TableCell align="right">Leads</TableCell>
+                    <TableCell align="right">Insured</TableCell>
+                    <TableCell align="right">Co-insured only</TableCell>
+                    <TableCell align="right">Combined</TableCell>
+                    <TableCell align="right">Reach</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {reach.weeks.map((w) => {
+                    const c = w.insured + w.coOnly;
+                    return (
+                      <TableRow key={w.cohort} hover>
+                        <TableCell>{w.label}</TableCell>
+                        <TableCell align="right">{w.total.toLocaleString()}</TableCell>
+                        <TableCell align="right">{w.insured.toLocaleString()}</TableCell>
+                        <TableCell align="right" sx={{ color: w.coOnly ? '#8a5a00' : 'inherit', fontWeight: w.coOnly ? 600 : 400 }}>
+                          {w.coOnly.toLocaleString()}
+                        </TableCell>
+                        <TableCell align="right">{c.toLocaleString()}</TableCell>
+                        <TableCell align="right">{pct(c, w.total)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </Box>
           </Paper>
         );
       })()}

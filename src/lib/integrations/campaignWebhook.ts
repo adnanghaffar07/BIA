@@ -79,7 +79,50 @@ export function readPayload(body: any) {
     replyText: pick('reply_text', 'reply_text_snippet', 'body.text', 'text', 'message', 'reply_html'),
     bounceReason: pick('bounce_reason', 'reason', 'error', 'detail'),
     bounceType: pick('bounce_type', 'bounceType'),
+
+    /**
+     * Which mailbox actually sent it. Not our choice at push time — the platform picks
+     * from the campaign's pool at send time — so this is the only moment it is knowable
+     * from a webhook, and a per-mailbox report has no other source.
+     *
+     * Several spellings because the vendor is inconsistent about this field between its
+     * docs and its payloads, and the cost of missing it is a silently empty column. If
+     * none of these arrive the value is simply null and the /emails reconciliation fills
+     * it in later — see campaignContent.service.ts.
+     */
+    sendingMailbox: (pick(
+      'from_address_email', 'from_email', 'fromAddressEmail',
+      'email_account', 'account_email', 'sending_account', 'from',
+    ) ?? '').toLowerCase() || null,
+
+    /** The copy as delivered. The campaign's sequence can be edited afterwards, so the
+     *  live campaign is NOT a record of what this person received. */
+    subject: pick('email_subject', 'subject', 'title'),
+    bodyHtml: pick('email_body', 'body.html', 'body.text', 'html', 'content'),
   };
+}
+
+/**
+ * HTML → readable plain text. Nothing is removed except markup.
+ *
+ * This is what OUTBOUND copy gets. It deliberately does not run the reply trimming
+ * below: that cuts at a signature delimiter and at "From:" lines, which in an inbound
+ * reply is quoted history but in our own campaign copy is the copy — trimming it would
+ * silently store a truncated record of what the homeowner was sent.
+ */
+export function htmlToText(raw: string | null, max = 2000): string | null {
+  if (!raw) return null;
+  const text = raw
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (!text) return null;
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 /**

@@ -28,6 +28,15 @@ const LEAD_COLS = [
   'campaignStatus', 'campaignCohort', 'currentEmailStep', 'campaignLastSentAt',
   'campaignRepliedAt', 'campaignBouncedAt', 'campaignUnsubscribedAt', 'hardBounced',
   'suppressedReason', 'holdoutFlag', 'vendorCampaignId', 'vendorLeadId',
+  // Household stop (migration 020). Same rule as above and the same consequence: the
+  // push reads primaryContactEmail to mail the one person who answered instead of the
+  // whole household, and a re-import must never blank it — the stop would then hold
+  // only until the next refresh.
+  'primaryContactEmail', 'primaryContactRole', 'primaryContactAt',
+  // Cohort (migration 021) — the renewal week, maintained by the lead_cohort_trg
+  // trigger. Selected so the push can stamp it onto each send and the UI can show it;
+  // NOT in CRM_ONLY_FIELDS because the database owns the value, not the application.
+  'cohort',
   'phone1', 'phone2', 'email1', 'email2', 'emailsAll', 'phonesAll', 'engine', 'renewalTargetDate', 'grade',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
   'travelersEligibilityReason', 'plymouthEligibilityReason',
@@ -81,6 +90,11 @@ const CRM_ONLY_FIELDS = new Set([
   'campaignStatus', 'campaignCohort', 'currentEmailStep', 'campaignLastSentAt',
   'campaignRepliedAt', 'campaignBouncedAt', 'campaignUnsubscribedAt', 'hardBounced',
   'suppressedReason', 'holdoutFlag', 'vendorCampaignId', 'vendorLeadId',
+  // Household stop (migration 020). Same rule as above and the same consequence: the
+  // push reads primaryContactEmail to mail the one person who answered instead of the
+  // whole household, and a re-import must never blank it — the stop would then hold
+  // only until the next refresh.
+  'primaryContactEmail', 'primaryContactRole', 'primaryContactAt',
   'owner1FirstName', 'owner1LastName',
   'phone1', 'phone2', 'email1', 'email2', 'emailsAll', 'phonesAll',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
@@ -369,6 +383,9 @@ export async function getLeadsFromDb(filters?: {
   /** Effective-date filter (daily triage): single day, or a [from,to] range */
   effectiveDate?: string;
   effectiveTo?: string;
+  /** One whole renewal week, named by its Monday ('2026-11-09' = 09–15 Nov). The
+   *  non-overlapping alternative to an effectiveDate range — see src/services/cohort.ts. */
+  cohort?: string;
   /** County + ZIP (Frank Aug-2026). These used to be browser-side filters over only the
    *  rows already loaded, so a county count silently reflected a 100-row sample rather
    *  than the book. Server-side now, so every filter counts the same population. */
@@ -415,6 +432,14 @@ export async function getLeadsFromDb(filters?: {
       params.push(filters.effectiveDate);
       conditions.push(`"effectiveDate"::date = $${params.length}`);
     }
+  }
+  // Whole renewal weeks, by their Monday. Distinct from the effectiveDate range above:
+  // that takes any two dates and, used the way a weekly pull is usually described
+  // ("11/09 to 11/16"), includes the next week's first day — 149 leads on the live data.
+  // This one cannot overlap, which is what makes per-cohort totals add up.
+  if (filters?.cohort) {
+    params.push(filters.cohort);
+    conditions.push(`"cohort" = $${params.length}`);
   }
   applyCountyZip(filters, conditions, params);
   if (filters?.propertyType) {
@@ -503,6 +528,8 @@ export async function getLeadCounts(filters?: {
   status?: string;
   effectiveDate?: string;
   effectiveTo?: string;
+  /** One whole renewal week by its Monday — see src/services/cohort.ts. */
+  cohort?: string;
   carrier?: string;
   propertyType?: string;
   county?: string;
@@ -514,6 +541,10 @@ export async function getLeadCounts(filters?: {
   const params: any[] = [];
   if (filters?.grade) { params.push(filters.grade); conditions.push(`"grade" = $${params.length}`); }
   if (filters?.status) { params.push(filters.status); conditions.push(`"status" = $${params.length}`); }
+  // Must mirror the rows query exactly. A filter accepted in the type but missing from
+  // this predicate is worse than one that is not supported at all: the table narrows and
+  // the header keeps showing the unfiltered total, so the page quietly contradicts itself.
+  if (filters?.cohort) { params.push(filters.cohort); conditions.push(`"cohort" = $${params.length}`); }
   applyCountyZip(filters, conditions, params);
   if (filters?.propertyType) { params.push(String(filters.propertyType).toUpperCase()); conditions.push(`UPPER("propertyType") = $${params.length}`); }
   const cCol = carrierColumn(filters?.carrier);

@@ -537,11 +537,16 @@ export type VendorEmail = {
   subject?: string;
   body?: { text?: string; html?: string } | string;
   from_address_email?: string;
+  /** The sending mailbox, same value as from_address_email on every row observed. */
+  eaccount?: string;
   to_address_email_list?: string;
   timestamp_email?: string;
   is_unread?: boolean;
+  /** 1 = outbound (sent by us). Inbound replies carry a different value. */
   ue_type?: number;
   lead_id?: string;
+  /** Vendor's own sequence coordinate, e.g. "0_0_0". NOT a plain step number. */
+  step?: string;
 };
 
 /** Recent messages — the raw feed behind replies. */
@@ -550,6 +555,29 @@ export async function listEmails(opts?: { campaignId?: string; limit?: number })
   if (opts?.campaignId) params.set('campaign_id', opts.campaignId);
   const json = await getJson<{ items?: VendorEmail[] }>(`/emails?${params.toString()}`);
   return json.items ?? [];
+}
+
+/**
+ * One page of the message feed, with the cursor to continue from.
+ *
+ * `campaign_id` IS honoured here — verified by passing an id that exists nowhere and
+ * getting `items: []` back rather than the whole workspace. Worth stating because this
+ * vendor silently ignores parameters it does not recognise and answers 200, which has
+ * already produced one wrong number in this integration (campaign analytics reported
+ * workspace totals for a single campaign).
+ */
+export async function listEmailsPage(opts: {
+  campaignId?: string;
+  limit?: number;
+  startingAfter?: string;
+}): Promise<{ items: VendorEmail[]; nextCursor: string | null }> {
+  const params = new URLSearchParams({ limit: String(opts.limit ?? PAGE_SIZE) });
+  if (opts.campaignId) params.set('campaign_id', opts.campaignId);
+  if (opts.startingAfter) params.set('starting_after', opts.startingAfter);
+  const json = await getJson<{ items?: VendorEmail[]; next_starting_after?: string }>(
+    `/emails?${params.toString()}`,
+  );
+  return { items: json.items ?? [], nextCursor: json.next_starting_after ?? null };
 }
 
 // ─── Campaign lifecycle (verified: all of these routes exist) ─────────────────

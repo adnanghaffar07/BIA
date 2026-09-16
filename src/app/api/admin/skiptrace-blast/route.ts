@@ -3,6 +3,7 @@ import { getLeadsFromDb, getLeadByPropertyId } from '@/services/storage.service'
 import { getSessionUser, actorLabel } from '@/lib/auth';
 import { traceAndApply, skipTraceBlocker, effectiveGrade } from '@/services/skipTraceApply.service';
 import { getCreditStatus } from '@/services/credits.service';
+import { insuredEmails } from '@/services/recipients.service';
 
 /**
  * Deep Skip Trace Blast over an effective-date range (Frank Sep-2026).
@@ -70,6 +71,20 @@ function parseFilters(req: NextRequest) {
     engine: engineRaw ? Number(engineRaw) : undefined,
     effectiveDate: str('effectiveDate'),
     effectiveTo: str('effectiveTo'),
+    /**
+     * Opt-in: trace ONLY leads we currently hold no insured address for.
+     *
+     * Off by default, so the blast behaves exactly as it always has. On, it is the
+     * cheapest useful run there is — a lead that already has an address does not need
+     * one bought for it, and at 15 credits a hit that difference is most of the budget.
+     *
+     * "Has an address" uses the same rule the campaign push and the reachability report
+     * use, not a SQL "email1 is not null": the insured's addresses are attributed
+     * per-person inside the trace payload, and the SQL predicate both misses email2 and
+     * counts the CO-INSURED's address as if it were the insured's — which would skip a
+     * lead we cannot actually mail.
+     */
+    onlyMissingEmail: q.get('onlyMissingEmail') === 'true',
   };
 }
 
@@ -93,6 +108,8 @@ type Triage = {
   alreadyTraced: number;
   missingName: number;
   wrongGrade: number;
+  /** Skipped because we already hold an insured address — only when onlyMissingEmail. */
+  alreadyReachable: number;
 };
 
 /** Split the filtered population into what we would trace and what we would skip. */
@@ -100,7 +117,7 @@ async function triage(f: ReturnType<typeof parseFilters>): Promise<Triage> {
   // No practical cap: the blast must see the whole matching set, not a page of it.
   const candidates = await getLeadsFromDb({ ...f, limit: 100000, orderBy: 'xdate' });
   const eligible: any[] = [];
-  let alreadyTraced = 0, missingName = 0, wrongGrade = 0;
+  let alreadyTraced = 0, missingName = 0, wrongGrade = 0, alreadyReachable = 0;
 
   for (const lead of candidates) {
     if (!BLAST_GRADES.includes(effectiveGrade(lead))) { wrongGrade++; continue; }
@@ -108,9 +125,10 @@ async function triage(f: ReturnType<typeof parseFilters>): Promise<Triage> {
     if (!String(lead.owner1FirstName ?? '').trim() || !String(lead.owner1LastName ?? '').trim()) {
       missingName++; continue;
     }
+    if (f.onlyMissingEmail && insuredEmails(lead).length > 0) { alreadyReachable++; continue; }
     eligible.push(lead);
   }
-  return { candidates, eligible, alreadyTraced, missingName, wrongGrade };
+  return { candidates, eligible, alreadyTraced, missingName, wrongGrade, alreadyReachable };
 }
 
 /** FREE — what the blast would do, so nobody spends credits to find out. */
@@ -130,10 +148,12 @@ export async function GET(req: NextRequest) {
       range: { from: f.effectiveDate, to: f.effectiveTo },
       matching: t.candidates.length,
       eligible: t.eligible.length,
+      onlyMissingEmail: f.onlyMissingEmail,
       skipped: {
         alreadyTraced: t.alreadyTraced,
         missingName: t.missingName,
         wrongGrade: t.wrongGrade,
+        alreadyReachable: t.alreadyReachable,
       },
       // Ceiling, not a charge: a miss costs nothing, so real spend lands lower.
       maxCredits: t.eligible.length * CREDITS_PER_HIT,
@@ -173,6 +193,8 @@ export async function POST(req: NextRequest) {
     }> = [];
     let hit = 0, miss = 0, failed = 0, creditsSpent = 0;
     let recoveredPhone = 0, recoveredEmail = 0, coInsuredFound = 0;
+    /** The vendor refused for want of balance — end the run, do not retry into it. */
+    let outOfCredits = false;
 
     for (const candidate of batch) {
       // Re-read immediately before tracing: another admin's blast, or the card
@@ -202,11 +224,30 @@ export async function POST(req: NextRequest) {
         // One bad lead must not abandon the chunk — the rest are still worth tracing,
         // and a thrown vendor error has already cost nothing.
         failed++;
+        const message = err?.message || 'Trace failed';
         results.push({
           propertyId: lead.propertyId, address, owner,
           matched: false, phone: false, email: false, coInsured: null, credits: 0,
-          error: err?.message || 'Trace failed',
+          error: message,
         });
+
+        /**
+         * An empty balance is not a bad lead — it is the end of the run.
+         *
+         * A failed trace leaves deepSkipTracedAt unstamped, so the lead stays eligible
+         * and the next chunk picks it up again. With credits exhausted that is a spin:
+         * `remaining` never falls, `done` never becomes true, and a driver looping until
+         * done keeps calling the vendor for every lead in the cohort, forever. It
+         * happened on this cohort — roughly 290 pointless calls after the balance hit
+         * zero, none of them charged but none of them useful either.
+         *
+         * So: stop the whole run, and say why. Out of credits is the operator's problem
+         * to fix, not something to retry into.
+         */
+        if (/insufficient credits/i.test(message) || /\b402\b/.test(message)) {
+          outOfCredits = true;
+          break;
+        }
       }
       await new Promise((r) => setTimeout(r, GAP_MS));
     }
@@ -220,8 +261,14 @@ export async function POST(req: NextRequest) {
       processed, hit, miss, failed, creditsSpent,
       recovered: { phone: recoveredPhone, email: recoveredEmail, coInsured: coInsuredFound },
       remaining,
-      // Nothing left to trace, or nothing traceable this round — either way, stop.
-      done: remaining === 0 || processed === 0,
+      outOfCredits,
+      ...(outOfCredits
+        ? { error: `Out of skip-trace credits — ${remaining} leads in this cohort were not traced. Top up, then re-run: nothing already traced will be charged again.` }
+        : {}),
+      // Nothing left to trace, nothing traceable this round, or no balance to trace
+      // with — either way, stop. Without the last one a driver loops forever against a
+      // set that can never shrink.
+      done: remaining === 0 || processed === 0 || outOfCredits,
       results,
     });
   } catch (err: any) {

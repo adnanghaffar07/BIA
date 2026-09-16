@@ -57,6 +57,8 @@ export async function GET(request: NextRequest) {
     const editedOnly = searchParams.get('editedOnly') === 'true'; // Recently Edited tab
     const effectiveDate = searchParams.get('effectiveDate') || undefined; // daily triage filter
     const effectiveTo   = searchParams.get('effectiveTo') || undefined;   // optional range end
+    // A whole renewal week by its Monday — the non-overlapping alternative to the range above.
+    const cohort        = searchParams.get('cohort') || undefined;
     const carrier       = searchParams.get('carrier') || undefined;       // 'travelers' | 'plymouth'
     const propertyType  = searchParams.get('propertyType') || undefined;  // 'SFR' | 'CONDO'
     const county        = searchParams.get('county') || undefined;        // 'Middlesex' | 'Monmouth' | …
@@ -73,7 +75,7 @@ export async function GET(request: NextRequest) {
       const leads = await getLeadsFromDb({
         engine, grade,
         status: closed ? undefined : (status || undefined),
-        effectiveDate, effectiveTo, carrier, propertyType, county, zip, contact,
+        effectiveDate, effectiveTo, cohort, carrier, propertyType, county, zip, contact,
         excludeStatuses,
         editedOnly,
         orderBy,
@@ -84,7 +86,7 @@ export async function GET(request: NextRequest) {
         ? leads.filter((l) => l.status === 'bound' || l.status === 'lost')
         : leads;
       // DB-wide counts (per engine) so the UI can show totals + offer "load all"
-      const counts = await getLeadCounts({ grade, status: closed ? undefined : (status || undefined), effectiveDate, effectiveTo, carrier, propertyType, county, zip, contact });
+      const counts = await getLeadCounts({ grade, status: closed ? undefined : (status || undefined), effectiveDate, effectiveTo, cohort, carrier, propertyType, county, zip, contact });
       return NextResponse.json({ success: true, data: result, total: result.length, counts, source: 'db' });
     }
 

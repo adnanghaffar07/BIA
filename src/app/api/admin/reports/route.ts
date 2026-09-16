@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getQcReport, QcReportType } from '@/services/reports.service';
 
-const VALID: QcReportType[] = ['referral', 'grade_overrides', 'keyword', 'roof_b', 'type_mismatch', 'owner_verify', 'contact_coverage', 'skiptrace_mismatch', 'blast_skiptrace', 'cohort'];
+const VALID: QcReportType[] = ['referral', 'grade_overrides', 'keyword', 'roof_b', 'type_mismatch', 'owner_verify', 'contact_coverage', 'skiptrace_mismatch', 'blast_skiptrace', 'cohort', 'reachability'];
 
 /**
  * GET /api/admin/reports?report=referral|grade_overrides|keyword|roof_b

@@ -1140,6 +1140,22 @@ export default function LeadDetailPage() {
               <FeatureSelect label="Married / Single" value={extra.maritalStatus ?? ''} onChange={(v) => setEx('maritalStatus', v)}
                 options={[['married', 'Married (M)'], ['single', 'Single (S)']]} />
             </Box>
+            {/* A card can carry several of the insured's addresses, and outreach goes to all
+                of them until one answers. From that moment the household has a single
+                contact — shown here because a producer picking up the card needs to know
+                which address is live before they email a different one. */}
+            {lead.primaryContactEmail && (
+              <Box sx={{ mb: 1.7, p: 1.25, borderRadius: 1, border: '1px solid', borderColor: 'success.light', bgcolor: 'success.50' }}>
+                <Typography variant="caption" sx={{ display: 'block', fontWeight: 600 }}>
+                  Replied from {lead.primaryContactEmail}
+                  {lead.primaryContactRole ? ` (${lead.primaryContactRole})` : ''}
+                  {lead.primaryContactAt ? ` · ${new Date(lead.primaryContactAt).toLocaleDateString()}` : ''}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Outreach to this household&apos;s other addresses was stopped, and future campaigns go to this address only.
+                </Typography>
+              </Box>
+            )}
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 1.7 }}>
               <TextField label="Phone" size="small" fullWidth value={extra.phone1 ?? ''} onChange={(e) => setEx('phone1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} placeholder="skip-trace / call" />
               <TextField label="Email" size="small" fullWidth value={extra.email1 ?? ''} onChange={(e) => setEx('email1', e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />

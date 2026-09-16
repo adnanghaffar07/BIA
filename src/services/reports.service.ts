@@ -1,6 +1,8 @@
 import { sql } from '@/lib/neon';
 import { eligibilityReasonLabel } from '@/types/carrier';
 import { compareOwnerNames } from './ownerNameMatch.service';
+import { insuredEmails, coInsuredEmails } from './recipients.service';
+import { cohortLabel } from './cohort';
 
 /**
  * QC / data-validation reports (Frank Jul-2026). The CRM captures producer notes,
@@ -8,7 +10,7 @@ import { compareOwnerNames } from './ownerNameMatch.service';
  * let Frank/Ruben pull that data back out to spot trends without cross-referencing
  * the Travelers portal by hand.
  */
-export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort';
+export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability';
 
 export interface QcRow {
   propertyId: string;
@@ -31,6 +33,12 @@ export interface QcRow {
   hasEmail?: boolean;
   hasDob?: boolean;
   isCondo?: boolean;
+  // Reachability report only — the UI tallies the cohort summary from these.
+  cohort?: string | null;
+  /** Addresses belonging to the named insured — exactly what the push would mail. */
+  insuredEmailCount?: number;
+  /** A co-insured address we hold and do NOT mail, and which the insured set lacks. */
+  coInsuredOnly?: boolean;
   // Blast report only — groups the rows of one run.
   runId?: string | null;
   /** Whether Tracerfy matched. Credits are deliberately NOT reported here
@@ -300,6 +308,75 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
           hasPhone,
           hasEmail,
           matched,
+        };
+      });
+  }
+
+  if (type === 'reachability') {
+    /**
+     * Insured / co-insured / combined reachability, per cohort.
+     *
+     * The question behind it is a decision, not a statistic. Campaigns go to the named
+     * insured only — the co-insured is deliberately excluded — and this is what that rule
+     * costs: how many households we can reach at all, and how many we could reach ONLY by
+     * mailing the co-insured. Without the last number nobody can judge whether the rule is
+     * worth keeping.
+     *
+     * The insured count comes from the SAME function the push uses, so the report cannot
+     * promise reach the push would not use. It is deliberately not a SQL predicate: the
+     * insured's addresses are attributed per-person inside the trace payload, and the
+     * existing "has email" SQL both misses email2/emailsAll and counts owner2Email — the
+     * co-insured — as if it were the insured's.
+     *
+     * Every lead is a row, reachable or not. The denominator is the whole cohort; dropping
+     * the unreachable ones would turn "30% reachable" into "100% of the reachable ones".
+     */
+    /**
+     * Named columns, not SELECT *. This report reads the whole book rather than one
+     * week, and `SELECT *` drags rawData — a large JSONB blob on every one of ~10,000
+     * leads — over the wire for columns nothing here touches. Measured: 25s with the
+     * star, well past any serverless limit. skipTraceData IS needed: it carries the
+     * per-person attribution that decides which addresses are the insured's.
+     *
+     * The date range is pushed into SQL as well. inRange below still has the final say —
+     * it is the shared rule every report uses — but there is no reason to ship rows over
+     * the wire only to drop them in JS.
+     */
+    const from = effFrom || null;
+    const to = effTo || null;
+    rows = await sql`
+      SELECT "propertyId", "owner1FirstName", "owner1LastName", "addressCity", "addressZip",
+             "effectiveDate", "cohort", "grade", "manualGrade", "propertyType",
+             "travelersEligible", "plymouthEligible", "deepSkipTracedAt",
+             "email1", "email2", "owner2Email", "skipTraceData", "phone1", "phone2"
+        FROM "Lead"
+       WHERE "effectiveDate" IS NOT NULL
+         AND (${from}::text IS NULL OR left("effectiveDate", 10) >= ${from})
+         AND (${to}::text   IS NULL OR left("effectiveDate", 10) <= ${to})
+       ORDER BY "cohort", "addressCity", "owner1LastName"`;
+    return rows
+      .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
+      .map((r: any) => {
+        const insured = insuredEmails(r);
+        const coOnly = coInsuredEmails(r);
+
+        const context = insured.length
+          ? `${insured.length} insured address${insured.length === 1 ? '' : 'es'}`
+            + (coOnly.length ? ' · co-insured also held' : '')
+          : coOnly.length
+            ? 'NO insured address — reachable only via the co-insured'
+            : 'unreachable — no address for either party';
+
+        return {
+          ...rowOf(r, context, null, iso(r.deepSkipTracedAt)),
+          // Labelled, not the bare Monday: a column of dates gives no clue whether one
+          // means a single day's renewals or a week's.
+          reason: cohortLabel(r.cohort),
+          cohort: r.cohort ?? null,
+          insuredEmailCount: insured.length,
+          coInsuredOnly: coOnly.length > 0,
+          hasEmail: insured.length > 0 || coOnly.length > 0,
+          hasPhone: !!(String(r.phone1 ?? '').trim() || String(r.phone2 ?? '').trim()),
         };
       });
   }
