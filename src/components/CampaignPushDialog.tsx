@@ -23,7 +23,15 @@ type Preview = {
   overCap: boolean;
   maxPerPush: number;
   sample: Array<{ email: string; role: string; address: string }>;
+  /** Addresses each mode would add, all counted in one server-side pass. */
+  byMode: { insured: number; coinsured: number; both: number };
+  /** Leads (cards) each mode would touch — distinct from addresses, since one card can
+   *  contribute several. Shown so "208 addresses from 138 leads" reads honestly. */
+  leadsByMode: { insured: number; coinsured: number; both: number };
+  recipients: RecipientMode;
 };
+
+type RecipientMode = 'insured' | 'coinsured' | 'both';
 
 type Tally = { pushed: number; failed: number; skippedOnPlatform: number };
 
@@ -48,6 +56,11 @@ export default function CampaignPushDialog({
   const [propertyType, setPropertyType] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
   const [effectiveTo, setEffectiveTo] = useState('');
+  /**
+   * Who this push is addressed to. Defaults to the named insured — the standing rule —
+   * so a co-insured is only ever mailed when somebody deliberately picks it.
+   */
+  const [recipients, setRecipients] = useState<RecipientMode>('insured');
 
   const [preview, setPreview] = useState<Preview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -66,8 +79,9 @@ export default function CampaignPushDialog({
     if (propertyType) q.set('propertyType', propertyType);
     if (effectiveDate) q.set('effectiveDate', effectiveDate);
     if (effectiveTo) q.set('effectiveTo', effectiveTo);
+    q.set('recipients', recipients);
     return q.toString();
-  }, [grade, county, propertyType, effectiveDate, effectiveTo]);
+  }, [grade, county, propertyType, effectiveDate, effectiveTo, recipients]);
 
   const loadPreview = useCallback(async () => {
     setLoading(true);
@@ -172,10 +186,55 @@ export default function CampaignPushDialog({
               <Alert severity="error">{error}</Alert>
             ) : preview ? (
               <>
+                {/* "178 of 138 matching leads" read as nonsense, because the two numbers
+                    are not the same unit: a card can hold several addresses, so there are
+                    routinely MORE addresses than leads. Say which is which. */}
                 <Typography variant="body1" sx={{ mb: 1.5 }}>
-                  <strong>{preview.eligible.toLocaleString()}</strong> of {preview.matching.toLocaleString()} matching
-                  {' '}lead{preview.matching === 1 ? '' : 's'} would be added.
+                  <strong>{preview.eligible.toLocaleString()}</strong> email address{preview.eligible === 1 ? '' : 'es'}
+                  {' '}from {preview.matching.toLocaleString()} matching lead{preview.matching === 1 ? '' : 's'} would be added.
                 </Typography>
+
+                {/**
+                 * Who gets mailed. Exclusive, like the QC report's chips: 'co-insured'
+                 * means INSTEAD of the insured, not as well.
+                 *
+                 * Counts come from one server-side pass over the same cohort, so the three
+                 * numbers cannot disagree with each other or with what the button pushes.
+                 */}
+                <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center', mb: 1.5 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>Send to:</Typography>
+                  {([
+                    ['insured', 'insured', preview.byMode.insured, preview.leadsByMode.insured],
+                    ['coinsured', 'co-insured', preview.byMode.coinsured, preview.leadsByMode.coinsured],
+                    ['both', 'both', preview.byMode.both, preview.leadsByMode.both],
+                  ] as Array<[RecipientMode, string, number, number]>).map(([key, label, addresses, leads]) => (
+                    <Chip
+                      key={key}
+                      size="small"
+                      clickable
+                      disabled={running}
+                      onClick={() => setRecipients(key)}
+                      label={`${addresses.toLocaleString()} ${label}`}
+                      title={`${addresses.toLocaleString()} address${addresses === 1 ? '' : 'es'} across ${leads.toLocaleString()} lead${leads === 1 ? '' : 's'}`}
+                      sx={{
+                        fontWeight: recipients === key ? 700 : 400,
+                        bgcolor: recipients === key ? '#dbeafe' : undefined,
+                        color: recipients === key ? '#1565c0' : undefined,
+                        outline: recipients === key ? '2px solid #1565c0' : 'none',
+                        outlineOffset: 1,
+                      }}
+                      variant={recipients === key ? 'filled' : 'outlined'}
+                    />
+                  ))}
+                </Stack>
+
+                {recipients !== 'insured' && (
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    {recipients === 'coinsured'
+                      ? 'This mails the CO-INSURED instead of the named insured. The policyholder will not be contacted for these cards.'
+                      : 'This mails the co-insured as well as the named insured — two people per household where both addresses are known.'}
+                  </Alert>
+                )}
 
                 {preview.overCap && (
                   <Alert severity="warning" sx={{ mb: 2 }}>
@@ -190,8 +249,7 @@ export default function CampaignPushDialog({
                 )}
 
                 <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', mb: 1.5 }}>
-                  <Chip size="small" color="primary" variant="outlined" label={`${preview.eligible} to add`} />
-                  {preview.skipped.noEmail > 0 && <Chip size="small" variant="outlined" label={`${preview.skipped.noEmail} no email`} />}
+                  {preview.skipped.noEmail > 0 && <Chip size="small" variant="outlined" label={`${preview.skipped.noEmail} no ${recipients === 'coinsured' ? 'co-insured' : recipients === 'both' ? '' : 'insured '}email`} />}
                   {preview.skipped.alreadyInCampaign > 0 && <Chip size="small" variant="outlined" label={`${preview.skipped.alreadyInCampaign} already in this campaign`} />}
                   {preview.skipped.suppressed > 0 && <Chip size="small" sx={{ bgcolor: '#fee2e2', color: '#b3261e', fontWeight: 600 }} label={`${preview.skipped.suppressed} suppressed`} />}
                   {preview.skipped.holdout > 0 && <Chip size="small" variant="outlined" label={`${preview.skipped.holdout} holdout`} />}
@@ -268,7 +326,7 @@ export default function CampaignPushDialog({
             <Button onClick={onClose} color="inherit">{finished ? 'Close' : 'Cancel'}</Button>
             {canRun && (
               <Button variant="contained" startIcon={<SendIcon />} onClick={run}>
-                Add {preview!.eligible.toLocaleString()} lead{preview!.eligible === 1 ? '' : 's'}
+                Add {preview!.eligible.toLocaleString()} {recipients === 'insured' ? 'insured' : recipients === 'coinsured' ? 'co-insured' : ''} address{preview!.eligible === 1 ? '' : 'es'}
               </Button>
             )}
           </>

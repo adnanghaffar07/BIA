@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { triagePush, pushChunk, PushFilters } from '@/services/campaignPush.service';
+import { triagePush, pushChunk, PushFilters, RecipientMode, PushOptions } from '@/services/campaignPush.service';
 import { requireCampaignAccess, vendorError } from '@/lib/integrations/campaignAccess';
 
 /**
@@ -53,12 +53,24 @@ function parseFilters(req: NextRequest): PushFilters {
 }
 
 
+/**
+ * Who the push is addressed to.
+ *
+ * Anything unrecognised falls back to 'insured' — the long-standing rule. A typo in the
+ * query string must never be the reason a co-insured gets mailed.
+ */
+function parseOptions(req: NextRequest): PushOptions {
+  const v = req.nextUrl.searchParams.get('recipients');
+  const recipients: RecipientMode = v === 'coinsured' || v === 'both' ? v : 'insured';
+  return { recipients };
+}
+
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireCampaignAccess(request);
   if ('response' in gate) return gate.response;
   try {
     const { id } = await params;
-    const t = await triagePush(id, parseFilters(request), {});
+    const t = await triagePush(id, parseFilters(request), parseOptions(request));
     return NextResponse.json({
       success: true,
       matching: t.matching,
@@ -68,6 +80,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       maxPerPush: MAX_PER_PUSH,
       // A glance at who is actually going out, so the cohort can be sanity-checked
       // before anyone commits to mailing it.
+      // All three counts, from the one pass, so the dialog's chips agree with each other
+      // and with whatever the Add button actually pushes.
+      byMode: t.byMode,
+      leadsByMode: t.leadsByMode,
+      recipients: parseOptions(request).recipients,
       sample: t.eligible.slice(0, 5).map((r) => ({
         email: r.email,
         role: r.personRole,
@@ -85,7 +102,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     const { id } = await params;
     const filters = parseFilters(request);
-    const opts = {};
+    const opts = parseOptions(request);
 
     // Re-check the ceiling on every chunk, not just the first: the filter comes in on
     // each request and nothing stops a caller widening it mid-run.

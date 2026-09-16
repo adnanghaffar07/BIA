@@ -44,6 +44,121 @@ const gradeColor = (g: string | null) =>
   g === 'A' ? '#2e7d46' : g === 'B' ? '#c77a17' : g === 'C' ? '#c0522a' : '#6b7280';
 const eligLabel = (v: string | null) => (v === 'review' ? 'Referral' : v === 'ineligible' ? 'Non-eligible' : v === 'eligible' ? 'Eligible' : '—');
 
+const yn = (v: unknown) => (v ? 'Yes' : 'No');
+
+/**
+ * ONE column definition per report, used by BOTH the table and the CSV export.
+ *
+ * They used to be declared separately — eleven hardcoded <TableCell>s in the table and a
+ * different hand-written list in exportCsv. The two had already drifted: the CSV split
+ * City and ZIP, carried a "Manual" column the table showed only as a pencil icon, and on
+ * the Reachability tab wrote an entirely different set of ten columns from the eleven on
+ * screen. Anyone reconciling the file against the page would have found a different
+ * shape and reasonably concluded one of them was wrong.
+ *
+ * `value` is the exported string and the fallback rendering; `cell` is the richer
+ * on-screen version when one is wanted. The CSV therefore cannot say anything the table
+ * does not, and a new column appears in both or neither.
+ */
+type QcColumn = {
+  header: string;
+  value: (r: QcRow) => string;
+  cell?: (r: QcRow) => React.ReactNode;
+  /** Right-aligned in the table; numbers read better that way. */
+  numeric?: boolean;
+};
+
+function columnsFor(report: ReportType): QcColumn[] {
+  const base: QcColumn[] = [
+    {
+      header: 'Owner',
+      value: (r) => r.owner,
+      cell: (r) => (
+        <Link href={`/leads/${r.propertyId}`} style={{ color: '#1565c0', textDecoration: 'none' }}>{r.owner}</Link>
+      ),
+    },
+    {
+      header: 'City / ZIP',
+      value: (r) => [r.city, r.zip].filter(Boolean).join(' ') || '—',
+      cell: (r) => <>{r.city} <span style={{ color: '#9098a6', fontSize: 12 }}>{r.zip}</span></>,
+    },
+    { header: 'Eff Date', value: (r) => r.effectiveDate ?? '—' },
+    {
+      header: 'Grade',
+      /**
+       * The one cell that cannot be byte-identical to the table: on screen an override is
+       * a ✎ icon next to the chip, and an icon has no text form. The CSV says it in words
+       * instead, so the file carries the same FACT even though the characters differ.
+       *
+       * Two spellings because "A (manual: A)" is nonsense — when the override agrees with
+       * the grade the only thing worth saying is that a producer set it deliberately.
+       */
+      value: (r) => {
+        const g = r.grade ?? '?';
+        if (!r.manualGrade) return g;
+        return r.manualGrade === r.grade ? `${g} (manual override)` : `${g} (manual: ${r.manualGrade})`;
+      },
+      cell: (r) => (
+        <>
+          <Chip label={r.grade ?? '?'} size="small" sx={{ bgcolor: gradeColor(r.grade), color: '#fff', fontWeight: 700, height: 20 }} />
+          {r.manualGrade && <Tooltip title="Manual override"><span style={{ marginLeft: 4, fontSize: 11, color: '#8a5a00' }}>✎</span></Tooltip>}
+        </>
+      ),
+    },
+    { header: 'Type', value: (r) => r.propertyType ?? '—' },
+    { header: 'Travelers', value: (r) => eligLabel(r.travelersEligible) },
+    { header: 'Plymouth', value: (r) => eligLabel(r.plymouthEligible) },
+    {
+      // The `reason` field carries a different thing per report, so it gets the name of
+      // whatever it actually holds rather than a catch-all "Reason".
+      header: report === 'cohort' ? 'Status' : report === 'reachability' ? 'Renewal Week' : 'Reason',
+      value: (r) => r.reason ?? '—',
+      cell: (r) => (r.reason
+        ? <Chip label={r.reason} size="small" sx={{ height: 20, fontSize: 11, bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 }} />
+        : <span style={{ color: '#b0b6c0' }}>—</span>),
+    },
+  ];
+
+  // Per-report facts. These were previously visible only as prose inside Detail, which
+  // meant they could not be sorted or filtered in a spreadsheet.
+  const extras: QcColumn[] = report === 'cohort'
+    ? [
+        { header: 'Insured Email', value: (r) => yn(r.hasInsuredEmail) },
+        { header: 'Co-Insured Email', value: (r) => yn(r.hasCoInsuredEmail) },
+        { header: 'Insured Phone', value: (r) => yn(r.hasInsuredPhone) },
+        { header: 'Co-Insured Phone', value: (r) => yn(r.hasCoInsuredPhone) },
+        { header: 'Deep Traced', value: (r) => yn(r.matched) },
+      ]
+    : report === 'reachability'
+      ? [
+          { header: 'Insured Emails', value: (r) => String(r.insuredEmailCount ?? 0), numeric: true },
+          { header: 'Co-Insured Only', value: (r) => yn(r.coInsuredOnly) },
+          { header: 'Reachable', value: (r) => yn((r.insuredEmailCount ?? 0) > 0 || r.coInsuredOnly) },
+        ]
+      : report === 'contact_coverage'
+        ? [
+            { header: 'Phone', value: (r) => yn(r.hasPhone) },
+            { header: 'Email', value: (r) => yn(r.hasEmail) },
+            { header: 'DOB', value: (r) => yn(r.hasDob) },
+            { header: 'Condo', value: (r) => yn(r.isCondo) },
+          ]
+        : report === 'blast_skiptrace'
+          ? [
+              { header: 'Matched', value: (r) => yn(r.matched) },
+              { header: 'Phone Found', value: (r) => yn(r.hasPhone) },
+              { header: 'Email Found', value: (r) => yn(r.hasEmail) },
+            ]
+          : [];
+
+  return [
+    ...base,
+    ...extras,
+    { header: 'Detail', value: (r) => r.context },
+    { header: 'By', value: (r) => r.by ?? '—' },
+    { header: 'When', value: (r) => r.at ?? '—' },
+  ];
+}
+
 export default function QcReportsPage() {
   // Filters persist across navigation until reset (Frank Aug-2026).
   const [report, setReport] = useStickyState<ReportType>('qc:report', 'referral');
@@ -111,27 +226,44 @@ export default function QcReportsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report]);
 
+  /**
+   * Export exactly what is on screen.
+   *
+   * Columns come from columnsFor(report) — the same definition the table renders — so the
+   * file cannot have a different shape from the page. Rows come from `shownRows`, which is
+   * the filtered set, so whatever drill-down chip is active is what lands in the file.
+   *
+   * The table caps rendering at MAX_RENDERED for speed; the CSV deliberately writes every
+   * matching row, which is the one place the two differ and the only sane way round.
+   */
   const exportCsv = () => {
-    const reachCols = report === 'reachability';
-    const cols = reachCols
-      ? ['Owner', 'City', 'ZIP', 'Eff Date', 'Renewal Week', 'Grade', 'Insured Emails', 'Co-Insured Only', 'Reachable', 'Detail']
-      : ['Owner', 'City', 'ZIP', 'Eff Date', 'Grade', 'Manual', 'Type', 'Travelers', 'Plymouth', 'Reason', 'Detail', 'By', 'At'];
-    const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const lines = [cols.join(',')];
-    for (const r of shownRows) {
-      lines.push((reachCols
-        ? [r.owner, r.city, r.zip, r.effectiveDate, r.reason, r.grade,
-           r.insuredEmailCount ?? 0, r.coInsuredOnly ? 'yes' : 'no',
-           ((r.insuredEmailCount ?? 0) > 0 || r.coInsuredOnly) ? 'yes' : 'no', r.context]
-        : [r.owner, r.city, r.zip, r.effectiveDate, r.grade, r.manualGrade, r.propertyType,
-           eligLabel(r.travelersEligible), eligLabel(r.plymouthEligible), r.reason, r.context, r.by, r.at]
-      ).map(esc).join(','));
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const cols = tableColumns;
+
+    const esc = (v: string) => {
+      let s = String(v ?? '');
+      // A cell starting with = + - @ is executed as a formula by Excel and Sheets when
+      // the file is opened. These rows carry producer-typed notes, so that is a real
+      // risk rather than a theoretical one. Prefixing an apostrophe neutralises it.
+      if (/^[=+\-@]/.test(s)) s = `'${s}`;
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
+    const lines = [cols.map((c) => esc(c.header)).join(',')];
+    for (const r of shownRows) lines.push(cols.map((c) => esc(c.value(r))).join(','));
+
+    // CRLF and a UTF-8 BOM, both for Excel. Without the BOM it reads the file as ANSI and
+    // the em dashes and middot separators in Detail come out as mojibake — the export
+    // then visibly does NOT match the screen, which is the whole point of this function.
+    const blob = new Blob([`﻿${lines.join('\r\n')}`], { type: 'text/csv;charset=utf-8;' });
+
+    // Name says which report, and whether it is filtered — so a narrowed export is never
+    // mistaken later for the full set.
+    const filtered = shownRows.length !== rows.length ? '_filtered' : '';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `BIA_QC_${report}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `BIA_QC_${report}${filtered}_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
+    URL.revokeObjectURL(a.href);
   };
 
   // Only the blast report cares about credits, so only it pays for the lookup.
@@ -149,6 +281,17 @@ export default function QcReportsPage() {
 
   const active = REPORTS.find((r) => r.key === report)!;
 
+  /**
+   * The columns for whichever report is selected. Rebuilt only when the report changes,
+   * and shared by the table and Export CSV so the file always matches the page.
+   *
+   * Keyed off `rowsReport`, not `report`: switching tabs leaves the previous report's
+   * rows on screen until the new fetch lands, and drawing the NEW report's columns over
+   * the OLD report's rows would show empty cells for a moment and — worse — export them
+   * that way if someone clicked during the fetch.
+   */
+  const tableColumns = useMemo(() => columnsFor(rowsReport ?? report), [rowsReport, report]);
+
   // Contact-coverage tallies (Frank's breakdown) — computed from the returned rows.
   /**
    * Renewal-week tallies. Counted from the rows rather than fetched separately, so the
@@ -158,17 +301,21 @@ export default function QcReportsPage() {
   const cohort = report === 'cohort' && rowsReport === report && rows.length ? (() => {
     const grades: Record<string, number> = {};
     const statuses: Record<string, number> = {};
-    let traced = 0, withEmail = 0, withPhone = 0;
+    // Split by person. The insured is who campaigns actually mail; the co-insured is
+    // reach we hold but do not use, and rolling the two together hid that.
+    let traced = 0, insuredEmail = 0, coInsuredEmail = 0, insuredPhone = 0, coInsuredPhone = 0;
     for (const r of rows) {
       const g = r.manualGrade || r.grade || 'ungraded';
       grades[g] = (grades[g] ?? 0) + 1;
       const s = r.reason || '(none)';
       statuses[s] = (statuses[s] ?? 0) + 1;
       if (r.matched) traced++;
-      if (r.hasEmail) withEmail++;
-      if (r.hasPhone) withPhone++;
+      if (r.hasInsuredEmail) insuredEmail++;
+      if (r.hasCoInsuredEmail) coInsuredEmail++;
+      if (r.hasInsuredPhone) insuredPhone++;
+      if (r.hasCoInsuredPhone) coInsuredPhone++;
     }
-    return { total: rows.length, grades, statuses, traced, withEmail, withPhone };
+    return { total: rows.length, grades, statuses, traced, insuredEmail, coInsuredEmail, insuredPhone, coInsuredPhone };
   })() : null;
 
   /**
@@ -247,8 +394,10 @@ const MAX_RENDERED = 300;
         if (kind === 'grade') return (r.manualGrade || r.grade || 'ungraded') === value;
         if (kind === 'status') return (r.reason || '(none)') === value;
         if (value === 'traced') return !!r.matched;
-        if (value === 'email') return !!r.hasEmail;
-        if (value === 'phone') return !!r.hasPhone;
+        if (value === 'insuredEmail') return !!r.hasInsuredEmail;
+        if (value === 'coInsuredEmail') return !!r.hasCoInsuredEmail;
+        if (value === 'insuredPhone') return !!r.hasInsuredPhone;
+        if (value === 'coInsuredPhone') return !!r.hasCoInsuredPhone;
         return true;
       });
     }
@@ -394,15 +543,22 @@ const MAX_RENDERED = 300;
             {/* The numbers that decide whether this cohort can be emailed at all. */}
             <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
               {chip('trait', 'traced', `${cohort.traced.toLocaleString()} deep skip traced`)}
-              {chip('trait', 'email', `${cohort.withEmail.toLocaleString()} reachable by email`, {
+              {chip('trait', 'insuredEmail', `${cohort.insuredEmail.toLocaleString()} reachable by insured email`, {
                 fontWeight: 600,
-                ...(cohort.withEmail / cohort.total < 0.5
+                ...(cohort.insuredEmail / cohort.total < 0.5
                   ? { bgcolor: '#fee2e2', color: '#b3261e' }
                   : { bgcolor: '#dcfce7', color: '#166534' }),
               })}
-              {chip('trait', 'phone', `${cohort.withPhone.toLocaleString()} reachable by phone`)}
+              {chip('trait', 'coInsuredEmail', `${cohort.coInsuredEmail.toLocaleString()} reachable by co-insured email`, {
+                ...(cohort.coInsuredEmail ? { bgcolor: '#fff3d6', color: '#8a5a00' } : {}),
+              })}
+              {chip('trait', 'insuredPhone', `${cohort.insuredPhone.toLocaleString()} reachable by insured phone`)}
+              {chip('trait', 'coInsuredPhone', `${cohort.coInsuredPhone.toLocaleString()} reachable by co-insured phone`, {
+                ...(cohort.coInsuredPhone ? { bgcolor: '#fff3d6', color: '#8a5a00' } : {}),
+              })}
               <Typography variant="caption" color="text.secondary">
-                {Math.round((cohort.withEmail / cohort.total) * 100)}% of this cohort has an email address
+                {Math.round((cohort.insuredEmail / cohort.total) * 100)}% of this cohort has an insured email address
+                {' — campaigns mail the named insured only, so the co-insured counts are reach we hold but do not use.'}
               </Typography>
               {cohortFilter && (
                 <Typography variant="caption" sx={{ color: '#1565c0', fontWeight: 600 }}>
@@ -581,45 +737,38 @@ const MAX_RENDERED = 300;
         <Table size="small" stickyHeader>
           <TableHead>
             <TableRow>
-              {['Owner', 'City / ZIP', 'Eff Date', 'Grade', 'Type', 'Travelers', 'Plymouth', 'Reason', 'Detail', 'By', 'When'].map((h) => (
-                <TableCell key={h} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</TableCell>
+              {tableColumns.map((c) => (
+                <TableCell key={c.header} align={c.numeric ? 'right' : 'left'} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+                  {c.header}
+                </TableCell>
               ))}
             </TableRow>
           </TableHead>
           <TableBody>
             {shownRows.slice(0, MAX_RENDERED).map((r) => (
               <TableRow key={r.propertyId + r.context} hover>
-                <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                  <Link href={`/leads/${r.propertyId}`} style={{ color: '#1565c0', textDecoration: 'none' }}>{r.owner}</Link>
-                </TableCell>
-                <TableCell sx={{ whiteSpace: 'nowrap' }}>{r.city} <span style={{ color: '#9098a6', fontSize: 12 }}>{r.zip}</span></TableCell>
-                <TableCell sx={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{r.effectiveDate ?? '—'}</TableCell>
-                <TableCell>
-                  <Chip label={r.grade ?? '?'} size="small" sx={{ bgcolor: gradeColor(r.grade), color: '#fff', fontWeight: 700, height: 20 }} />
-                  {r.manualGrade && <Tooltip title="Manual override"><span style={{ marginLeft: 4, fontSize: 11, color: '#8a5a00' }}>✎</span></Tooltip>}
-                </TableCell>
-                <TableCell>{r.propertyType ?? '—'}</TableCell>
-                <TableCell>{eligLabel(r.travelersEligible)}</TableCell>
-                <TableCell>{eligLabel(r.plymouthEligible)}</TableCell>
-                <TableCell sx={{ fontSize: 12.5 }}>
-                  {r.reason
-                    ? <Chip label={r.reason} size="small" sx={{ height: 20, fontSize: 11, bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 }} />
-                    : <span style={{ color: '#b0b6c0' }}>—</span>}
-                </TableCell>
-                <TableCell sx={{ maxWidth: 380, fontSize: 12.5, color: '#3d4658' }}>{r.context}</TableCell>
-                <TableCell sx={{ whiteSpace: 'nowrap', fontSize: 12, color: '#616b7d' }}>{r.by ?? '—'}</TableCell>
-                <TableCell sx={{ whiteSpace: 'nowrap', fontSize: 12, color: '#616b7d', fontVariantNumeric: 'tabular-nums' }}>{r.at ?? '—'}</TableCell>
+                {tableColumns.map((c) => (
+                  <TableCell
+                    key={c.header}
+                    align={c.numeric ? 'right' : 'left'}
+                    sx={c.header === 'Detail'
+                      ? { maxWidth: 380, fontSize: 12.5, color: '#3d4658' }
+                      : { whiteSpace: 'nowrap', fontSize: 12.5 }}
+                  >
+                    {c.cell ? c.cell(r) : c.value(r)}
+                  </TableCell>
+                ))}
               </TableRow>
             ))}
             {shownRows.length > MAX_RENDERED && (
               <TableRow>
-                <TableCell colSpan={11} sx={{ textAlign: 'center', py: 2, color: '#8a5a00', bgcolor: '#fff8e8', fontSize: 12.5 }}>
+                <TableCell colSpan={tableColumns.length} sx={{ textAlign: 'center', py: 2, color: '#8a5a00', bgcolor: '#fff8e8', fontSize: 12.5 }}>
                   Showing the first {MAX_RENDERED} of {shownRows.length.toLocaleString()} — Export CSV gives you all of them.
                 </TableCell>
               </TableRow>
             )}
             {!loading && ran && shownRows.length === 0 && (
-              <TableRow><TableCell colSpan={11} sx={{ textAlign: 'center', py: 4, color: '#888' }}>No records match.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={tableColumns.length} sx={{ textAlign: 'center', py: 4, color: '#888' }}>No records match.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>

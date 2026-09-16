@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { insuredEmails, EMAIL_RE } from './recipients.service';
+import { insuredEmails, coInsuredEmails, EMAIL_RE } from './recipients.service';
 import { cohortOf } from './cohort';
 import { pool } from '@/lib/neon';
 import { getLeadsFromDb } from '@/services/storage.service';
@@ -32,15 +32,27 @@ export type PushFilters = {
 };
 
 /**
- * No options remain — campaigns go to the named insured only, which is a rule rather
- * than a per-push choice. Kept as a type so the call signatures stay stable.
+ * Who this push is addressed to.
+ *
+ * Campaigns went to the named insured ONLY, and that is still the default — nothing
+ * mails a co-insured unless it is chosen here deliberately. The reachability report is
+ * what made the choice worth having: a real share of households have no insured address
+ * and are contactable at the co-insured or not at all.
+ *
+ * The three modes are exclusive. 'coinsured' means the co-insured INSTEAD of the insured,
+ * not as well — picking it deliberately does not mail the policyholder.
  */
-export type PushOptions = Record<string, never>;
+export type RecipientMode = 'insured' | 'coinsured' | 'both';
+
+export type PushOptions = {
+  /** Defaults to 'insured' — the long-standing rule, kept as the safe default. */
+  recipients?: RecipientMode;
+};
 
 export type Recipient = {
   lead: any;
-  /** Always the insured; the co-insured is never mailed. */
-  personRole: 'insured';
+  /** Which person this address belongs to; stored on the OutreachEvent. */
+  personRole: 'insured' | 'coinsured';
   email: string;
 };
 
@@ -54,6 +66,16 @@ export type PushTriage = {
     alreadyInCampaign: number;
     duplicateAddress: number;
   };
+  /**
+   * How many addresses each mode would add, counted in the SAME pass.
+   *
+   * The dialog shows all three numbers at once, and recomputing them with three separate
+   * requests would be both slower and capable of disagreeing with each other if a trace
+   * landed in between.
+   */
+  byMode: { insured: number; coinsured: number; both: number };
+  /** Leads with an address for that person, as opposed to addresses. */
+  leadsByMode: { insured: number; coinsured: number; both: number };
 };
 
 /** Why a lead must not be mailed, or null. */
@@ -88,50 +110,78 @@ export async function triagePush(
     existing.map((r) => String(r.recipientEmail ?? '').trim().toLowerCase()).filter(Boolean),
   );
 
+  const mode: RecipientMode = opts.recipients ?? 'insured';
+
   const skipped = { noEmail: 0, suppressed: 0, holdout: 0, alreadyInCampaign: 0, duplicateAddress: 0 };
   const eligible: Recipient[] = [];
   // One address gets one send, even when two leads share it (a couple owning two
   // properties, or a landlord). The second occurrence is reported, not mailed.
   const seenAddresses = new Set<string>();
 
+  // Counted for all three modes in this one pass, so the dialog's chips agree with each
+  // other and with whatever is actually pushed.
+  const byMode = { insured: 0, coinsured: 0, both: 0 };
+  const leadsByMode = { insured: 0, coinsured: 0, both: 0 };
+
   for (const lead of leads) {
     const suppress = suppressionReason(lead);
     if (suppress === 'holdout') { skipped.holdout++; continue; }
     if (suppress) { skipped.suppressed++; continue; }
 
+    const ins = insuredEmails(lead);
+    const co = coInsuredEmails(lead);
+    byMode.insured += ins.length;
+    byMode.coinsured += co.length;
+    byMode.both += ins.length + co.length;
+    if (ins.length) leadsByMode.insured++;
+    if (co.length) leadsByMode.coinsured++;
+    if (ins.length || co.length) leadsByMode.both++;
+
+    // Whichever people this push is addressed to, tagged so the OutreachEvent records
+    // who each address actually belongs to.
+    //
+    // Role selection happens HERE rather than inside insuredEmails/coInsuredEmails,
+    // because those are shared with the reachability report — which has to count every
+    // address a household can be reached at, not the ones this push happens to want.
+    let candidates: Recipient[] = [
+      ...(mode !== 'coinsured' ? ins.map((email) => ({ lead, personRole: 'insured' as const, email })) : []),
+      ...(mode !== 'insured' ? co.map((email) => ({ lead, personRole: 'coinsured' as const, email })) : []),
+    ];
+
     /**
-     * Once somebody has answered, they are the only address.
+     * Once somebody has answered, they are the only address — whichever mode is chosen.
      *
      * A household that engaged has a primary contact recorded on the Lead, and from then
-     * on the conversation belongs to that person — including the next renewal cycle,
-     * which is why it is stored on the card rather than inferred from one campaign's
-     * events. Without this the household stop would only hold until the next campaign:
-     * the other addresses would be picked up again and mailed after their household had
-     * already replied.
+     * on the conversation belongs to that person, including into the next renewal cycle.
+     * Without this the household stop would only hold until the next campaign: the other
+     * addresses would be picked up again and mailed after their household had replied.
      *
-     * Applied HERE and not inside insuredEmails, because that function is shared with
-     * the reachability report — which has to count every address a household can be
-     * reached at, not the one address we would currently route to.
+     * If the person who answered is not in the selected set — asking for co-insured on a
+     * card where the INSURED replied — the card is skipped rather than silently mailing
+     * somebody else. Writing to a different member of a household that is already in
+     * conversation with us is worse than not writing at all.
      */
     const primary = String(lead.primaryContactEmail ?? '').trim().toLowerCase();
-    const candidates = primary ? [primary] : insuredEmails(lead);
+    if (primary) candidates = candidates.filter((c) => c.email === primary);
 
     let gotOne = false;
-    for (const email of candidates) {
-      if (!EMAIL_RE.test(email)) continue;
+    for (const c of candidates) {
+      if (!EMAIL_RE.test(c.email)) continue;
       gotOne = true;
-      // Keyed by ADDRESS, not by role. One lead now contributes several insured
-      // addresses, so a role-only key would let the first one mask the rest and
-      // report them as "already in campaign".
-      if (alreadyEmails.has(email)) { skipped.alreadyInCampaign++; continue; }
-      if (seenAddresses.has(email)) { skipped.duplicateAddress++; continue; }
-      seenAddresses.add(email);
-      eligible.push({ lead, personRole: 'insured', email });
+      // Keyed by ADDRESS, not by role. One lead now contributes several addresses, so a
+      // role-only key would let the first one mask the rest and report them as "already
+      // in campaign".
+      if (alreadyEmails.has(c.email)) { skipped.alreadyInCampaign++; continue; }
+      if (seenAddresses.has(c.email)) { skipped.duplicateAddress++; continue; }
+      seenAddresses.add(c.email);
+      eligible.push(c);
     }
+    // "No email" means no address FOR THE SELECTED PEOPLE — a card with only a
+    // co-insured address genuinely has nothing to send to under an insured-only push.
     if (!gotOne) skipped.noEmail++;
   }
 
-  return { matching: leads.length, eligible, skipped };
+  return { matching: leads.length, eligible, skipped, byMode, leadsByMode };
 }
 
 export type PushResult = {

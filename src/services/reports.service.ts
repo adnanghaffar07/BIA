@@ -1,7 +1,7 @@
 import { sql } from '@/lib/neon';
 import { eligibilityReasonLabel } from '@/types/carrier';
 import { compareOwnerNames } from './ownerNameMatch.service';
-import { insuredEmails, coInsuredEmails } from './recipients.service';
+import { insuredEmails, coInsuredEmails, insuredPhones, coInsuredPhones } from './recipients.service';
 import { cohortLabel } from './cohort';
 
 /**
@@ -29,10 +29,22 @@ export interface QcRow {
   by: string | null;
   at: string | null;
   // Contact-coverage report only — lets the UI tally the breakdown.
+  // On the Renewal Week report these two mean the INSURED's contact details.
   hasPhone?: boolean;
   hasEmail?: boolean;
   hasDob?: boolean;
   isCondo?: boolean;
+  /**
+   * Renewal Week report — reach split by PERSON.
+   *
+   * Kept apart because they are not interchangeable: campaigns go to the named insured
+   * only, so a co-insured address is reach we hold but do not use. One combined "has
+   * email" number hid that entirely.
+   */
+  hasInsuredEmail?: boolean;
+  hasCoInsuredEmail?: boolean;
+  hasInsuredPhone?: boolean;
+  hasCoInsuredPhone?: boolean;
   // Reachability report only — the UI tallies the cohort summary from these.
   cohort?: string | null;
   /** Addresses belonging to the named insured — exactly what the push would mail. */
@@ -399,25 +411,52 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     return rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => {
-        const emails = Array.isArray(r.emailsAll) ? r.emailsAll.length : 0;
-        const phones = Array.isArray(r.phonesAll) ? r.phonesAll.length : 0;
-        const hasEmail = emails > 0
-          || !!String(r.email1 ?? '').trim() || !!String(r.owner2Email ?? '').trim();
-        const hasPhone = phones > 0 || !!String(r.phone1 ?? '').trim();
+        /**
+         * Counted PER PERSON, not per property.
+         *
+         * This used to read emailsAll/phonesAll — everything the trace returned for the
+         * ADDRESS, which routinely includes relatives, prior owners and unrelated
+         * co-residents. A lead whose only address belonged to a neighbour counted as
+         * "reachable by email", so the figure answered "is anyone at this property
+         * contactable" rather than "can we reach the person whose policy is renewing".
+         * It also folded the co-insured's address in with the insured's, which hid the
+         * fact that campaigns never mail the co-insured.
+         *
+         * Same functions the campaign push uses, so the number cannot promise reach the
+         * push would not act on.
+         */
+        const insEmails = insuredEmails(r);
+        const coEmails = coInsuredEmails(r);
+        const insPhones = insuredPhones(r);
+        const coPhones = coInsuredPhones(r);
+
+        const hasInsuredEmail = insEmails.length > 0;
+        const hasCoInsuredEmail = coEmails.length > 0;
+        const hasInsuredPhone = insPhones.length > 0;
+        const hasCoInsuredPhone = coPhones.length > 0;
         const traced = !!r.deepSkipTracedAt;
 
+        const part = (n: number, label: string) => (n ? `${n} ${label}${n === 1 ? '' : 's'}` : null);
         const context = [
           traced ? 'traced' : 'not traced',
-          hasEmail ? `${Math.max(emails, hasEmail ? 1 : 0)} email${emails === 1 ? '' : 's'}` : 'no email',
-          hasPhone ? `${Math.max(phones, hasPhone ? 1 : 0)} phone${phones === 1 ? '' : 's'}` : 'no phone',
-        ].join(' · ');
+          part(insEmails.length, 'insured email') ?? 'no insured email',
+          part(coEmails.length, 'co-insured email'),
+          part(insPhones.length, 'insured phone') ?? 'no insured phone',
+          part(coPhones.length, 'co-insured phone'),
+        ].filter(Boolean).join(' · ');
 
         return {
           ...rowOf(r, context, null, iso(r.deepSkipTracedAt)),
           // The status is what splits new / quarantine / rated, and the UI tallies on it.
           reason: r.status ?? null,
-          hasEmail,
-          hasPhone,
+          hasInsuredEmail,
+          hasCoInsuredEmail,
+          hasInsuredPhone,
+          hasCoInsuredPhone,
+          // Kept so anything still reading the old flags keeps working, but they are now
+          // the INSURED's — the only contact the campaign will actually use.
+          hasEmail: hasInsuredEmail,
+          hasPhone: hasInsuredPhone,
           matched: traced,
         };
       });
