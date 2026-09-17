@@ -46,6 +46,12 @@ const eligLabel = (v: string | null) => (v === 'review' ? 'Referral' : v === 'in
 
 const yn = (v: unknown) => (v ? 'Yes' : 'No');
 
+/** Stored as 10 raw digits; shown the way a person would read one back. */
+const fmtPhone = (p: string) => {
+  const d = String(p ?? '').replace(/\D/g, '');
+  return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : String(p ?? '');
+};
+
 /**
  * ONE column definition per report, used by BOTH the table and the CSV export.
  *
@@ -123,10 +129,18 @@ function columnsFor(report: ReportType): QcColumn[] {
   // meant they could not be sorted or filtered in a spreadsheet.
   const extras: QcColumn[] = report === 'cohort'
     ? [
-        { header: 'Insured Email', value: (r) => yn(r.hasInsuredEmail) },
-        { header: 'Co-Insured Email', value: (r) => yn(r.hasCoInsuredEmail) },
-        { header: 'Insured Phone', value: (r) => yn(r.hasInsuredPhone) },
-        { header: 'Co-Insured Phone', value: (r) => yn(r.hasCoInsuredPhone) },
+        /**
+         * The addresses themselves, not Yes/No.
+         *
+         * A Yes told you the household was reachable but not at what, so checking one
+         * homeowner — or handing the list to anyone — meant opening every card. A lead can
+         * hold several insured addresses, so all of them are listed; an empty cell means
+         * none, which reads the same as the old "No".
+         */
+        { header: 'Insured Email', value: (r) => (r.insuredEmailList ?? []).join(', ') },
+        { header: 'Co-Insured Email', value: (r) => (r.coInsuredEmailList ?? []).join(', ') },
+        { header: 'Insured Phone', value: (r) => (r.insuredPhoneList ?? []).map(fmtPhone).join(', ') },
+        { header: 'Co-Insured Phone', value: (r) => (r.coInsuredPhoneList ?? []).map(fmtPhone).join(', ') },
         { header: 'Deep Traced', value: (r) => yn(r.matched) },
       ]
     : report === 'reachability'
@@ -170,7 +184,13 @@ export default function QcReportsPage() {
   const [effTo, setEffTo] = useStickyState('qc:effTo', '');
   // Contact-coverage drill-down: click a summary chip to filter the rows to that slice.
   /** Drill-down on the Renewal Week summary: click a chip to filter, click again to clear. */
-  const [cohortFilter, setCohortFilter] = useState<{ kind: 'grade' | 'status' | 'trait'; value: string } | null>(null);
+  /**
+   * Renewal Week drill-down. One active choice PER KIND, not one overall, so "Grade A"
+   * and "reachable by insured email" narrow together — which is the question actually
+   * being asked ("how many Grade A can we email?"), and was impossible when picking a
+   * second chip silently replaced the first.
+   */
+  const [cohortFilter, setCohortFilter] = useState<{ grade?: string; status?: string; trait?: string }>({});
   /** Reachability drill-down: which slice of the population the table is narrowed to. */
   const [reachFilter, setReachFilter] = useState<'all' | 'insured' | 'coOnly' | 'unreachable'>('all');
   const [covFilter, setCovFilter] = useState<'all' | 'sfh' | 'condo' | 'both' | 'phoneOnly' | 'emailOnly' | 'neither' | 'noEmail' | 'hasDob'>('all');
@@ -214,7 +234,7 @@ export default function QcReportsPage() {
   // Auto-run on report switch (except keyword, which waits for a term).
   useEffect(() => {
     setCovFilter('all'); // reset the coverage drill-down on report change
-    setCohortFilter(null);
+    setCohortFilter({});
     setReachFilter('all'); // reset the reachability drill-down on report change
     // Renewal Week without a range means the entire book — nearly 10,000 rows over the
     // wire for a report whose whole point is one week. It waits for dates, the same way
@@ -388,16 +408,19 @@ const MAX_RENDERED = 300;
 
   const shownRows = useMemo(() => {
     if (report === 'cohort') {
-      if (!cohortFilter) return rows;
-      const { kind, value } = cohortFilter;
+      const { grade, status, trait } = cohortFilter;
+      if (!grade && !status && !trait) return rows;
+      const traitOf = (r: QcRow) => ({
+        traced: !!r.matched,
+        insuredEmail: !!r.hasInsuredEmail,
+        coInsuredEmail: !!r.hasCoInsuredEmail,
+        insuredPhone: !!r.hasInsuredPhone,
+        coInsuredPhone: !!r.hasCoInsuredPhone,
+      } as Record<string, boolean>);
       return rows.filter((r) => {
-        if (kind === 'grade') return (r.manualGrade || r.grade || 'ungraded') === value;
-        if (kind === 'status') return (r.reason || '(none)') === value;
-        if (value === 'traced') return !!r.matched;
-        if (value === 'insuredEmail') return !!r.hasInsuredEmail;
-        if (value === 'coInsuredEmail') return !!r.hasCoInsuredEmail;
-        if (value === 'insuredPhone') return !!r.hasInsuredPhone;
-        if (value === 'coInsuredPhone') return !!r.hasCoInsuredPhone;
+        if (grade && (r.manualGrade || r.grade || 'ungraded') !== grade) return false;
+        if (status && (r.reason || '(none)') !== status) return false;
+        if (trait && !traitOf(r)[trait]) return false;
         return true;
       });
     }
@@ -503,11 +526,11 @@ const MAX_RENDERED = 300;
           label: string,
           sx: Record<string, unknown> = {},
         ) => {
-          const active = cohortFilter?.kind === kind && cohortFilter?.value === value;
+          const active = cohortFilter[kind] === value;
           return (
             <Chip
               key={`${kind}:${value}`} size="small" label={label} clickable
-              onClick={() => setCohortFilter(active ? null : { kind, value })}
+              onClick={() => setCohortFilter((f) => ({ ...f, [kind]: active ? undefined : value }))}
               sx={{
                 ...sx,
                 cursor: 'pointer',
@@ -517,6 +540,18 @@ const MAX_RENDERED = 300;
             />
           );
         };
+
+        /**
+         * The one combination that decides whether a cohort can be mailed this week.
+         *
+         * Grade A is the eligibility gate and an insured address is the delivery gate;
+         * either number on its own overstates the list. Stacking the two chips gives the
+         * same answer, but nobody reads a chip row as an AND — so this states it outright.
+         */
+        const aInsEmail = rows.filter(
+          (r) => r.hasInsuredEmail && (r.manualGrade || r.grade || 'ungraded') === 'A',
+        ).length;
+        const aInsActive = cohortFilter.grade === 'A' && cohortFilter.trait === 'insuredEmail';
 
         return (
           <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
@@ -549,6 +584,21 @@ const MAX_RENDERED = 300;
                   ? { bgcolor: '#fee2e2', color: '#b3261e' }
                   : { bgcolor: '#dcfce7', color: '#166534' }),
               })}
+              <Chip
+                size="small" clickable
+                label={`${aInsEmail.toLocaleString()} reachable by insured email + Grade A`}
+                onClick={() => setCohortFilter((f) => (aInsActive
+                  ? { ...f, grade: undefined, trait: undefined }
+                  : { ...f, grade: 'A', trait: 'insuredEmail' }))}
+                sx={{
+                  fontWeight: 700,
+                  bgcolor: '#1565c0',
+                  color: '#fff',
+                  '&:hover': { bgcolor: '#0d47a1' },
+                  outline: aInsActive ? '2px solid #0d47a1' : 'none',
+                  outlineOffset: 1,
+                }}
+              />
               {chip('trait', 'coInsuredEmail', `${cohort.coInsuredEmail.toLocaleString()} reachable by co-insured email`, {
                 ...(cohort.coInsuredEmail ? { bgcolor: '#fff3d6', color: '#8a5a00' } : {}),
               })}
@@ -560,7 +610,7 @@ const MAX_RENDERED = 300;
                 {Math.round((cohort.insuredEmail / cohort.total) * 100)}% of this cohort has an insured email address
                 {' — campaigns mail the named insured only, so the co-insured counts are reach we hold but do not use.'}
               </Typography>
-              {cohortFilter && (
+              {(cohortFilter.grade || cohortFilter.status || cohortFilter.trait) && (
                 <Typography variant="caption" sx={{ color: '#1565c0', fontWeight: 600 }}>
                   · showing {shownRows.length.toLocaleString()} — click the chip again to clear
                 </Typography>
@@ -753,7 +803,10 @@ const MAX_RENDERED = 300;
                     align={c.numeric ? 'right' : 'left'}
                     sx={c.header === 'Detail'
                       ? { maxWidth: 380, fontSize: 12.5, color: '#3d4658' }
-                      : { whiteSpace: 'nowrap', fontSize: 12.5 }}
+                      : /Email|Phone/.test(c.header)
+                        // Several addresses per cell: wrap rather than stretch the table.
+                        ? { maxWidth: 230, fontSize: 12, color: '#3d4658', wordBreak: 'break-word' }
+                        : { whiteSpace: 'nowrap', fontSize: 12.5 }}
                   >
                     {c.cell ? c.cell(r) : c.value(r)}
                   </TableCell>

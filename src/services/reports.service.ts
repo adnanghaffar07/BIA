@@ -45,6 +45,17 @@ export interface QcRow {
   hasCoInsuredEmail?: boolean;
   hasInsuredPhone?: boolean;
   hasCoInsuredPhone?: boolean;
+  /**
+   * The actual addresses and numbers, not just whether any exist.
+   *
+   * A Yes/No column answers "can we reach them" but not "at what", so anyone wanting to
+   * check a specific homeowner — or hand the list to someone — had to open every card.
+   * Carried on the row so the table and the export show the same values.
+   */
+  insuredEmailList?: string[];
+  coInsuredEmailList?: string[];
+  insuredPhoneList?: string[];
+  coInsuredPhoneList?: string[];
   // Reachability report only — the UI tallies the cohort summary from these.
   cohort?: string | null;
   /** Addresses belonging to the named insured — exactly what the push would mail. */
@@ -468,6 +479,10 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
           hasCoInsuredEmail,
           hasInsuredPhone,
           hasCoInsuredPhone,
+          insuredEmailList: insEmails,
+          coInsuredEmailList: coEmails,
+          insuredPhoneList: insPhones,
+          coInsuredPhoneList: coPhones,
           // Kept so anything still reading the old flags keeps working, but they are now
           // the INSURED's — the only contact the campaign will actually use.
           hasEmail: hasInsuredEmail,
