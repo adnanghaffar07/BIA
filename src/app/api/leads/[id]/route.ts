@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLeadByPropertyId, updateLead, addActivity } from '@/services/storage.service';
 import { getSessionUser, actorLabel } from '@/lib/auth';
+import { recordGradeChange } from '@/services/gradeHistory.service';
 
 export async function GET(
   _request: NextRequest,
@@ -34,7 +35,48 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { _activityNote, _activityType, _createdBy, ...updateData } = body;
+    const { _activityNote, _activityType, _createdBy, ...rawUpdate } = body;
+
+    /**
+     * Strip the fields a client may never set.
+     *
+     * The storage layer already refuses unknown columns, which stops SQL injection
+     * through a column name. This is the second, narrower gate: these are REAL columns,
+     * so the whitelist below would happily write them — but they are owned by the
+     * system, and a producer editing a lead must not be able to set them by adding a key
+     * to the request body.
+     *
+     * Demonstrated before this was added: a normal PUT carrying {"holdoutFlag": false}
+     * moved a lead out of the experiment's control group, and {"bandHit": true} wrote a
+     * pricing-accuracy verdict that no bind had produced. Both silent, both 200 OK.
+     *
+     * Anything the route itself computes — bandHit below, the funnel stamps — is added
+     * AFTER this filter, so the server can still write what the client cannot.
+     */
+    const SERVER_OWNED = new Set([
+      // The experiment. Assigned once by the holdout service; rewriting it destroys the
+      // only thing that lets a bind be attributed to the campaign.
+      'holdoutFlag', 'holdoutAssignedAt', 'holdoutCohort',
+      // Pricing accuracy — measured from a bind, never typed.
+      'publishedBandLow', 'publishedBandHigh', 'publishedBandAt',
+      'bandHit', 'bandVariancePct', 'bandMeasuredAt',
+      // Campaign state — owned by the push and the vendor webhook.
+      'campaignStatus', 'campaignCohort', 'currentEmailStep', 'campaignLastSentAt',
+      'campaignRepliedAt', 'campaignBouncedAt', 'campaignUnsubscribedAt', 'hardBounced',
+      'suppressedReason', 'vendorCampaignId', 'vendorLeadId',
+      'primaryContactEmail', 'primaryContactRole', 'primaryContactAt',
+      // Provenance.
+      'blastRunId', 'blastSkipTracedAt', 'blastSkipTracedBy', 'rawData', 'skipTraceData',
+    ]);
+    const blocked: string[] = [];
+    const updateData: Record<string, any> = {};
+    for (const [k, v] of Object.entries(rawUpdate as Record<string, any>)) {
+      if (SERVER_OWNED.has(k)) { blocked.push(k); continue; }
+      updateData[k] = v;
+    }
+    if (blocked.length) {
+      console.warn(`PUT /api/leads/${id}: refused server-owned field(s): ${blocked.join(', ')}`);
+    }
 
     // Who is actually doing this. The session wins over the client's _createdBy, which
     // carried the lead's producerEmail (usually null) rather than the signed-in user.
@@ -91,6 +133,41 @@ export async function PUT(
       updateData.boundDate = now;
     }
 
+    /**
+     * Band accuracy — playbook §03, the measurement the whole thesis rests on.
+     *
+     * variancePct above answers a DIFFERENT question: the POS quote against
+     * expectedPremium, our internal 0.5%-of-value estimate, which the customer never sees.
+     * What they saw was indicativeBandLow–High, in writing, in email 2. Until now nothing
+     * compared the published band to the premium actually bound, so "the band held on 27
+     * of 30" was unanswerable.
+     *
+     * Measured against publishedBand*, not the lead's CURRENT band: the valuation may have
+     * been re-run since, and the only band that matters is the one the homeowner read.
+     * Falls back to the live band for a lead bound without ever being mailed.
+     */
+    const boundPremium = updateData.boundPremium ?? existing.boundPremium;
+    const bandLow = existing.publishedBandLow ?? existing.indicativeBandLow;
+    const bandHigh = existing.publishedBandHigh ?? existing.indicativeBandHigh;
+    if (boundPremium && bandLow && bandHigh && existing.bandMeasuredAt == null) {
+      const low = Number(bandLow);
+      const high = Number(bandHigh);
+      const bound = Number(boundPremium);
+      const hit = bound >= low && bound <= high;
+
+      // Signed distance from the nearest edge: negative means we quoted high and it bound
+      // below the band, positive means we quoted low. Zero inside. The sign is the point —
+      // "the misses ran high on older Coverage A" is the kind of finding §03 expects, and
+      // an absolute value would hide it.
+      let variance = 0;
+      if (bound < low) variance = ((bound - low) / low) * 100;
+      else if (bound > high) variance = ((bound - high) / high) * 100;
+
+      updateData.bandHit = hit;
+      updateData.bandVariancePct = Math.round(variance * 100) / 100;
+      updateData.bandMeasuredAt = now;
+    }
+
     // Manual grade override (§2/§11): a producer can upgrade/downgrade a lead.
     // When manualGrade is set, mirror it into `grade` (so queue/dashboard filters
     // pick it up) and stamp who/when. An empty string clears the override; the
@@ -111,6 +188,34 @@ export async function PUT(
     }
 
     await updateLead(id, updateData);
+
+    /**
+     * Record the grade change in the one log reports read (register A8).
+     *
+     * The activity feed still gets its own entry below for the human timeline, but the
+     * feed is not a reliable source for counting: the 360 changes already on record are
+     * split across two unrelated types, with the change buried in a JSON array, and a
+     * report reading the obvious one missed 70% of them.
+     *
+     * Written AFTER the update so a failed write cannot produce a log entry for a change
+     * that never happened, and deliberately not fatal — a lead edit must not fail because
+     * the audit insert did.
+     */
+    if (updateData.grade && updateData.grade !== existing.grade) {
+      try {
+        await recordGradeChange({
+          leadId: existing.id,
+          fromGrade: existing.grade ?? null,
+          toGrade: updateData.grade,
+          source: 'producer',
+          reason: updateData.gradeOverrideReason ?? _activityNote ?? null,
+          changedBy: actor,
+          at: now,
+        });
+      } catch (err) {
+        console.error(`PUT /api/leads/${id}: grade change not logged:`, err);
+      }
+    }
 
     // ── Audit trail (Frank Jun-2026): log EVERY manual change, not just noted ones.
     // Build a human summary of what actually changed (status, grade override, fields).

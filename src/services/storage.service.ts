@@ -33,6 +33,14 @@ const LEAD_COLS = [
   // whole household, and a re-import must never blank it — the stop would then hold
   // only until the next refresh.
   'primaryContactEmail', 'primaryContactRole', 'primaryContactAt',
+  // Holdout + band accuracy (migration 022, playbook §00 and §03). Selected because the
+  // push reads holdoutFlag to refuse a control-group lead, and the band comparison reads
+  // the band as PUBLISHED — a column that is not selected reads back undefined, which
+  // here would mean silently mailing the control group.
+  'holdoutAssignedAt', 'holdoutCohort',
+  'gradeAtPull', 'gradeAtPullAt',
+  'publishedBandLow', 'publishedBandHigh', 'publishedBandAt',
+  'bandHit', 'bandVariancePct', 'bandMeasuredAt',
   // Cohort (migration 021) — the renewal week, maintained by the lead_cohort_trg
   // trigger. Selected so the push can stamp it onto each send and the UI can show it;
   // NOT in CRM_ONLY_FIELDS because the database owns the value, not the application.
@@ -95,6 +103,14 @@ const CRM_ONLY_FIELDS = new Set([
   // whole household, and a re-import must never blank it — the stop would then hold
   // only until the next refresh.
   'primaryContactEmail', 'primaryContactRole', 'primaryContactAt',
+  // Holdout + band accuracy (migration 022, playbook §00 and §03). Selected because the
+  // push reads holdoutFlag to refuse a control-group lead, and the band comparison reads
+  // the band as PUBLISHED — a column that is not selected reads back undefined, which
+  // here would mean silently mailing the control group.
+  'holdoutAssignedAt', 'holdoutCohort',
+  'gradeAtPull', 'gradeAtPullAt',
+  'publishedBandLow', 'publishedBandHigh', 'publishedBandAt',
+  'bandHit', 'bandVariancePct', 'bandMeasuredAt',
   'owner1FirstName', 'owner1LastName',
   'phone1', 'phone2', 'email1', 'email2', 'emailsAll', 'phonesAll',
   'travelersEligible', 'travelersNotes', 'plymouthEligible', 'plymouthNotes',
@@ -504,6 +520,19 @@ function contactCondition(contact?: string): string | null {
     case 'phone':  return HAS_PHONE;
     case 'either': return `(${HAS_EMAIL} OR ${HAS_PHONE})`;
     case 'none':   return `(NOT ${HAS_EMAIL} AND NOT ${HAS_PHONE})`;
+    /**
+     * Register A8: "no email filter by cohort" — the list behind "how many of this week
+     * can we actually email", which drives the trace-or-downgrade decision.
+     *
+     * Distinct from 'none', which also requires the lead to have no PHONE. A lead with a
+     * phone and no email is exactly the one worth tracing, and 'none' hides it.
+     *
+     * Note this is the SQL-level definition (any address on the record). The stricter
+     * question — an address belonging to the named insured — is answered by the
+     * Reachability report, which has to read the trace payload per person and cannot be
+     * expressed as a WHERE clause.
+     */
+    case 'no_email': return `NOT ${HAS_EMAIL}`;
     default:       return null;
   }
 }
@@ -663,17 +692,96 @@ export async function updateLead(
     originalMortgageAmount: number;
   }>,
 ): Promise<void> {
-  const entries = Object.entries(data).filter(([, v]) => v !== undefined);
-  if (entries.length === 0) return;
+  const leadId = await leadIdForPropertyId(propertyId);
+  if (!leadId) return;
+  await updateLeadById(leadId, data as Record<string, unknown>);
+}
+
+/**
+ * Every column a write is allowed to touch.
+ *
+ * Playbook §12 item 4 / register A13: "updateLead keyed on id + writable-column
+ * whitelist, before any automated write."
+ *
+ * ── Why this is a security control, not tidiness ─────────────────────────────
+ * The old code built its SQL as `"${k}" = $n` straight from the caller's object keys,
+ * and the caller is the HTTP request body. Two consequences, both demonstrated against a
+ * throwaway lead before this was written:
+ *
+ *  1. Any signed-in user could write ANY column. A routine lead edit carrying
+ *     {"holdoutFlag": false} silently moved a lead out of the experiment's control group,
+ *     and {"bandHit": true} falsified a pricing-accuracy measurement.
+ *  2. A key containing a double quote escaped the identifier entirely. A body with the
+ *     key `addressCity" = 'INJECTED', "addressStreet` set addressCity to INJECTED —
+ *     remote SQL injection through a column name.
+ *
+ * Matching each key against a fixed set closes both: an unknown key cannot reach the SQL,
+ * and a key with a quote in it can never match a real column name.
+ */
+const WRITABLE_LEAD_COLS: ReadonlySet<string> = new Set<string>([
+  ...LEAD_COLS,
+  // Both are real columns deliberately absent from LEAD_COLS, which is the SELECT list —
+  // they are large JSONB blobs kept out of list queries for size, not columns that may
+  // not be written. The skip trace writes skipTraceData on every trace, and omitting them
+  // here would break tracing and enrichment silently, with a 200 and no change.
+  'rawData',
+  'skipTraceData',
+]);
+
+/** Columns no write may set, whatever the whitelist says. */
+const NEVER_WRITABLE: ReadonlySet<string> = new Set([
+  'id',          // identity
+  'propertyId',  // identity, and the key other systems join on
+  'createdAt',   // history
+  'cohort',      // owned by the lead_cohort_trg trigger (migration 021)
+]);
+
+/**
+ * Update a lead BY ITS ID.
+ *
+ * Keyed on "id" rather than "propertyId" because that is the row's actual identity and
+ * the key every automated writer already holds — the campaign webhook, the outreach
+ * event log, the household stop. propertyId is unique today, so this is not a live
+ * correctness bug; it is the precondition for the automated writes in A26 and it removes
+ * a dependency on a uniqueness constraint that nothing guarantees will survive a
+ * re-import.
+ *
+ * Unknown or forbidden keys are dropped, not written, and their names are returned so a
+ * caller that expected them to land is not left guessing.
+ */
+export async function updateLeadById(
+  leadId: string,
+  data: Record<string, unknown>,
+): Promise<{ updated: boolean; rejected: string[] }> {
+  const rejected: string[] = [];
+  const entries: Array<[string, unknown]> = [];
+
+  for (const [k, v] of Object.entries(data)) {
+    if (v === undefined) continue;
+    if (!WRITABLE_LEAD_COLS.has(k) || NEVER_WRITABLE.has(k)) { rejected.push(k); continue; }
+    entries.push([k, v]);
+  }
+
+  if (entries.length === 0) return { updated: false, rejected };
 
   entries.push(['updatedAt', new Date().toISOString()]);
   const sets = entries.map(([k], i) => `"${k}" = $${i + 1}`).join(', ');
-  const values = [...entries.map(([, v]) => toSql(v)), propertyId];
+  const values = [...entries.map(([, v]) => toSql(v)), leadId];
 
-  await pool.query(
-    `UPDATE "Lead" SET ${sets} WHERE "propertyId" = $${entries.length + 1}`,
+  const { rowCount } = await pool.query(
+    `UPDATE "Lead" SET ${sets} WHERE "id" = $${entries.length + 1}`,
     values,
   );
+  return { updated: (rowCount ?? 0) > 0, rejected };
+}
+
+/** Resolve the row identity from the key the HTTP routes are built around. */
+export async function leadIdForPropertyId(propertyId: string): Promise<string | null> {
+  const { rows } = await pool.query(
+    `SELECT "id" FROM "Lead" WHERE "propertyId" = $1 LIMIT 1`,
+    [propertyId],
+  );
+  return rows[0]?.id ?? null;
 }
 
 /** Add an activity/note to a lead. */

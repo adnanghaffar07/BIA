@@ -207,13 +207,24 @@ const clean = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim();
  * and each roll (property tax, then utility) until one has it.
  * Returns the matching records plus which town they came from; null if nowhere.
  */
+export type TaxRollLookup =
+  | { outcome: 'found'; records: TaxRollRecord[]; municipality: Municipality }
+  /** Every roll answered, none of them holds this address. A fact about the property. */
+  | { outcome: 'not_found' }
+  /** No roll is configured for this ZIP. We cannot know either way. */
+  | { outcome: 'unsupported' }
+  /** At least one roll could not be reached. We cannot know either way. */
+  | { outcome: 'unavailable'; errors: string[] };
+
 export async function lookupTaxRoll(
   street: string,
   zip: string,
-): Promise<{ records: TaxRollRecord[]; municipality: Municipality } | null> {
+): Promise<TaxRollLookup> {
   const munis = WIPP_BY_ZIP[String(zip ?? '').trim()];
-  if (!munis?.length || !String(street ?? '').trim()) return null;
+  if (!munis?.length || !String(street ?? '').trim()) return { outcome: 'unsupported' };
   const want = normalizeStreet(street);
+  /** Rolls that errored rather than answering "no". */
+  const failures: string[] = [];
 
   for (const muni of munis) {
     for (const endpoint of SEARCH_ENDPOINTS) {
@@ -231,8 +242,16 @@ export async function lookupTaxRoll(
           if (!res.ok) throw new Error(`Tax roll lookup failed (${res.status})`);
           return res.json();
         });
-      } catch {
-        continue; // try the next roll / town rather than failing the whole lookup
+      } catch (err) {
+        // Remember WHY this attempt produced nothing. Swallowing it and carrying on made
+        // an outage indistinguishable from an absence: the lookup returned null either
+        // way, and the caller then recorded "this property is not on the tax roll" —
+        // a permanent, wrong fact about the property.
+        //
+        // Observed in practice: the roll answers 403 to some clients, and a run against it
+        // produced a page of empty results that read exactly like genuine misses.
+        failures.push(`${muni.town}/${endpoint.kind}: ${(err as Error)?.message ?? 'request failed'}`);
+        continue; // still try the next roll / town — one being down does not mean all are
       }
 
       const rows: any[] = Array.isArray(json) ? json : (json?.content ?? []);
@@ -243,10 +262,13 @@ export async function lookupTaxRoll(
         // otherwise we could verify against a neighbouring property.
         .filter((r) => normalizeStreet(r.propertyLoc) === want);
 
-      if (hits.length) return { records: hits, municipality: muni };
+      if (hits.length) return { outcome: 'found', records: hits, municipality: muni };
     }
   }
-  return null;
+
+  // Only claim the property is absent when every roll actually answered. If any attempt
+  // errored, the truthful answer is "we do not know".
+  return failures.length ? { outcome: 'unavailable', errors: failures } : { outcome: 'not_found' };
 }
 
 /**
@@ -259,13 +281,33 @@ export async function verifyOwnerName(lead: {
   addressZip?: string | null;
   owner1FirstName?: string | null;
   owner1LastName?: string | null;
-}): Promise<OwnerVerification | null> {
+}): Promise<OwnerVerification | { status: 'not_found' | 'unsupported' | 'unavailable'; detail: string }> {
   const zip = String(lead.addressZip ?? '').trim();
-  if (!WIPP_BY_ZIP[zip]?.length) return null;
+  if (!WIPP_BY_ZIP[zip]?.length) {
+    return { status: 'unsupported', detail: `No tax roll is configured for ZIP ${zip || '(none)'}.` };
+  }
 
-  const found = await lookupTaxRoll(String(lead.addressStreet ?? ''), zip);
-  if (!found) return null;
-  const { records, municipality: muni } = found;
+  const lookup = await lookupTaxRoll(String(lead.addressStreet ?? ''), zip);
+
+  // "We could not reach the roll" is NOT "the property is not on the roll". Returning the
+  // two as one value is what let an outage be written down as a verification failure.
+  if (lookup.outcome === 'unavailable') {
+    return {
+      status: 'unavailable',
+      detail: `Tax roll could not be reached: ${lookup.errors.slice(0, 2).join('; ')}`,
+    };
+  }
+  if (lookup.outcome === 'unsupported') {
+    return { status: 'unsupported', detail: `No tax roll is configured for ZIP ${zip}.` };
+  }
+  if (lookup.outcome === 'not_found') {
+    return {
+      status: 'not_found',
+      detail: `No matching property found on the tax roll for "${lead.addressStreet ?? ''}".`,
+    };
+  }
+
+  const { records, municipality: muni } = lookup;
 
   // Compare against every party on the roll and keep the strongest outcome —
   // a property can legitimately be listed under a spouse or co-owner.
@@ -276,7 +318,11 @@ export async function verifyOwnerName(lead: {
     const cmp = compareOwnerNames({ first: lead.owner1FirstName, last: lead.owner1LastName }, rec.ownerName);
     if (!best || rank[cmp.result] > rank[best.result]) { best = cmp; bestRecord = rec; }
   }
-  if (!best) return null;
+  // Records exist but none could be compared — the roll gave us rows with no usable owner
+  // name. Not an absence, so it must not be written down as one.
+  if (!best) {
+    return { status: 'unavailable', detail: 'Tax roll returned records with no comparable owner name.' };
+  }
 
   return {
     status: best.result,

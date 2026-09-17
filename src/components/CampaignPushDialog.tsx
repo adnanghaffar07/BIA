@@ -326,7 +326,10 @@ export default function CampaignPushDialog({
             <Button onClick={onClose} color="inherit">{finished ? 'Close' : 'Cancel'}</Button>
             {canRun && (
               <Button variant="contained" startIcon={<SendIcon />} onClick={run}>
-                Add {preview!.eligible.toLocaleString()} {recipients === 'insured' ? 'insured' : recipients === 'coinsured' ? 'co-insured' : ''} address{preview!.eligible === 1 ? '' : 'es'}
+                {/* Built as one string: interpolating an empty role left "Add 281  addresses". */}
+                {`Add ${preview!.eligible.toLocaleString()} ${
+                  recipients === 'insured' ? 'insured ' : recipients === 'coinsured' ? 'co-insured ' : ''
+                }address${preview!.eligible === 1 ? '' : 'es'}`}
               </Button>
             )}
           </>

@@ -187,23 +187,38 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
      * Keying off the metadata means any future writer that records a Grade change shows
      * up here without this query needing to learn its name.
      */
+    /**
+     * Read from the GradeChange log (register A8), not the activity feed.
+     *
+     * The commentary above is the history of why: grade changes were scattered across
+     * activity types, and matching on the metadata was the workaround. The log is now the
+     * single place every change is written — producer and system, with source recorded at
+     * the point of change rather than inferred from who happened to be signed in — so this
+     * query no longer has to guess.
+     *
+     * The 360 historical changes were migrated into it, so nothing is lost by no longer
+     * reading the feed.
+     */
     rows = await sql`
-      SELECT l.*, a."metadata" AS a_meta, a."content" AS a_content, a."createdBy" AS a_by,
-             a."createdAt" AS a_at, a."type" AS a_type
+      SELECT l.*,
+             g."fromGrade"  AS g_from,
+             g."toGrade"    AS g_to,
+             g."source"     AS g_source,
+             g."reason"     AS a_content,
+             g."changedBy"  AS a_by,
+             g."changedAt"  AS a_at
       FROM "Lead" l
-      JOIN "Activity" a ON a."leadId" = l."id"
-      WHERE a."metadata" -> 'changes' @> '[{"field":"Grade"}]'::jsonb
-         OR a."type" = 'grade_system'
-      ORDER BY a."createdAt" DESC`;
+      JOIN "GradeChange" g ON g."leadId" = l."id"
+      ORDER BY g."changedAt" DESC`;
     const recorded: QcRow[] = rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => {
-        const ch = (r.a_meta?.changes ?? []).find((c: any) => c.field === 'Grade');
-        const transition = ch ? `${ch.from} → ${ch.to}` : (r.manualGrade ? `→ ${r.manualGrade}` : 'override');
-        // Authorship decides the sub-tab, and it comes from the row rather than its
-        // type: a `note` written by a producer is their change, a grade_system row has
-        // no author because the rules made it.
-        const system = r.a_type === 'grade_system' || !r.a_by;
+        const transition = `${r.g_from ?? '—'} → ${r.g_to ?? '—'}`;
+        // The source is now RECORDED at the moment of the change rather than inferred
+        // from whether an author happened to be attached. Inferring it was wrong in both
+        // directions: a producer edit with no session attributed to the rules, and a rules
+        // change made during a signed-in request attributed to the person.
+        const system = r.g_source === 'system';
         const reason = system ? '' : (r.gradeOverrideReason || r.a_content || '');
         return {
           ...rowOf(

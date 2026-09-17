@@ -9,7 +9,10 @@ const JWT_SECRET = new TextEncoder().encode(
 // authenticate as a CRM user. It carries its own auth instead: a shared secret on
 // the x-bia-campaign-key header, compared in constant time, failing closed in
 // production. Nothing else should be added here without an equivalent check.
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/enrich', '/api/webhooks/campaign'];
+// '/c/' is the public CTA landing page and '/api/cta/' its confirm endpoint
+// (playbook §05). Both are reached from a homeowner's email, so neither can require a
+// session — the signed link token is the only credential, and it is verified in the route.
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/enrich', '/api/webhooks/campaign', '/c/', '/api/cta/'];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

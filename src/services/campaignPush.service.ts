@@ -1,5 +1,6 @@
 import crypto from 'crypto';
-import { insuredEmails, coInsuredEmails, EMAIL_RE } from './recipients.service';
+import { EMAIL_RE } from './recipients.service';
+import { bestInsuredAddress, bestCoInsuredAddress, type AddressSignals } from './addressRank.service';
 import { cohortOf } from './cohort';
 import { pool } from '@/lib/neon';
 import { getLeadsFromDb } from '@/services/storage.service';
@@ -110,6 +111,29 @@ export async function triagePush(
     existing.map((r) => String(r.recipientEmail ?? '').trim().toLowerCase()).filter(Boolean),
   );
 
+  /**
+   * Address-level history for the ranking (playbook 04, signal 5).
+   *
+   * Workspace-wide, not per campaign: an address that hard-bounced in October is still
+   * dead in November, and one that replied is still the way in. Scoped to addresses, not
+   * leads, because the whole point of the rule is to choose BETWEEN a person's addresses.
+   */
+  const { rows: history } = await pool.query(
+    `SELECT lower("recipientEmail") AS email,
+            bool_or("bounceType" = 'hard')                             AS hard_bounced,
+            bool_or("repliedAt" IS NOT NULL OR "clickedAt" IS NOT NULL) AS engaged
+       FROM "OutreachEvent"
+      WHERE "recipientEmail" IS NOT NULL
+      GROUP BY 1`,
+  );
+  const signals: AddressSignals = {
+    hardBounced: new Set(history.filter((h) => h.hard_bounced).map((h) => h.email)),
+    engaged: new Set(history.filter((h) => h.engaged).map((h) => h.email)),
+    // No verifier chosen yet (register A25). Everything reads 'unknown' and the ranking
+    // falls through to the name / vendor-rank / domain signals.
+    verification: undefined,
+  };
+
   const mode: RecipientMode = opts.recipients ?? 'insured';
 
   const skipped = { noEmail: 0, suppressed: 0, holdout: 0, alreadyInCampaign: 0, duplicateAddress: 0 };
@@ -128,8 +152,19 @@ export async function triagePush(
     if (suppress === 'holdout') { skipped.holdout++; continue; }
     if (suppress) { skipped.suppressed++; continue; }
 
-    const ins = insuredEmails(lead);
-    const co = coInsuredEmails(lead);
+    /**
+     * ONE address per person per touch — playbook Section 04.
+     *
+     * This used to take every address we held for the insured, which came out at 1.66
+     * sends per card and up to 3 on some. The locked policy is "the top-ranked surviving
+     * address, never two at once", targeting ~1.3 sends per lead per touch. Ranking is in
+     * addressRank.service.ts.
+     */
+    const insBest = bestInsuredAddress(lead, signals);
+    const coBest = bestCoInsuredAddress(lead, signals);
+    const ins = insBest ? [insBest.email] : [];
+    const co = coBest ? [coBest.email] : [];
+
     byMode.insured += ins.length;
     byMode.coinsured += co.length;
     byMode.both += ins.length + co.length;
@@ -275,28 +310,47 @@ export async function pushChunk(
         // renewal date corrected next month moves the lead's cohort — correctly — but
         // must not retroactively move a send that already happened into a different
         // week's numbers.
+        /**
+         * The band is recorded as PUBLISHED, because it is published here.
+         *
+         * band_low / band_high go to the platform as merge variables just above, so the
+         * figure the homeowner reads in email 2 is decided at this moment — and until now
+         * it was never written down on our side. Playbook §03: "no code anywhere compares
+         * the band we published to the premium we bound… there is no retrofitting it,
+         * because the dataset only starts accumulating the day the first band leaves."
+         */
         await client.query(
           `INSERT INTO "OutreachEvent"
-             ("id","leadId","propertyId","personRole","recipientEmail","channel","vendorLeadId","vendorCampaignId","cohort","sentAt","createdAt","updatedAt")
-           VALUES ($1,$2,$3,$4,$5,'campaign',$6,$7,$8,NOW(),NOW(),NOW())`,
+             ("id","leadId","propertyId","personRole","recipientEmail","channel","vendorLeadId","vendorCampaignId","cohort","publishedBandLow","publishedBandHigh","sentAt","createdAt","updatedAt")
+           VALUES ($1,$2,$3,$4,$5,'campaign',$6,$7,$8,$9,$10,NOW(),NOW(),NOW())`,
           [
             crypto.randomUUID(), r.lead.id, r.lead.propertyId ?? null, r.personRole, r.email,
             outcome.leadId ?? null, campaignId,
             r.lead.cohort ?? cohortOf(r.lead.effectiveDate),
+            r.lead.indicativeBandLow ?? null, r.lead.indicativeBandHigh ?? null,
           ],
         );
         // "campaignCohort" is no longer written: it held the push FILTER
         // ("2026-11-09..2026-11-16"), which described the query someone ran rather than
         // the lead, and was only populated when that filter happened to carry both ends
         // of a range. "Lead"."cohort" is the lead's own cohort and is always set.
+        // COALESCE on the band: the FIRST band a household was shown is the one its bind
+        // gets judged against. A later cycle at a new valuation must not rewrite history.
         await client.query(
           `UPDATE "Lead"
               SET "campaignStatus" = COALESCE(NULLIF("campaignStatus",''), 'queued'),
                   "vendorCampaignId" = $2,
                   "vendorLeadId" = COALESCE("vendorLeadId", $3),
+                  "publishedBandLow"  = COALESCE("publishedBandLow", $4),
+                  "publishedBandHigh" = COALESCE("publishedBandHigh", $5),
+                  "publishedBandAt"   = CASE WHEN "publishedBandAt" IS NULL AND $4 IS NOT NULL
+                                             THEN NOW() ELSE "publishedBandAt" END,
                   "updatedAt" = NOW()
             WHERE "id" = $1`,
-          [r.lead.id, campaignId, outcome.leadId ?? null],
+          [
+            r.lead.id, campaignId, outcome.leadId ?? null,
+            r.lead.indicativeBandLow ?? null, r.lead.indicativeBandHigh ?? null,
+          ],
         );
         await client.query(
           `INSERT INTO "Activity" ("id","leadId","type","content","createdBy","createdAt")

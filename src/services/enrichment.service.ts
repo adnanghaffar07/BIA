@@ -6,6 +6,7 @@ import { calculateIndicativePremium } from './pricing.service';
 import { getFemaFloodZone } from './femaFlood.service';
 import { getEffectiveDate } from './pipeline.service';
 import { updateLead, addActivity } from './storage.service';
+import { recordGradeChange } from './gradeHistory.service';
 
 /**
  * Run the full enrichment pipeline on a single lead:
@@ -124,6 +125,28 @@ export async function enrichLead(lead: any): Promise<void> {
     });
 
     if (gradeChangedBySystem) {
+      /**
+       * The log reports read (register A8). Written alongside the activity entry rather
+       * than instead of it: the feed is the human timeline, this is the countable record.
+       *
+       * source: 'system' is set explicitly here. The backfill could only infer it, and
+       * inferred every one of the 360 historical rows as 'producer' because no system
+       * change had ever reached the feed — so the by-system tab was empty and looked like
+       * a bug rather than an absence.
+       */
+      try {
+        await recordGradeChange({
+          leadId: (lead as any).id,
+          fromGrade: previousGrade ?? null,
+          toGrade: computedGrade ?? null,
+          source: 'system',
+          reason: `Re-graded by the rules (Travelers ${eligibility.travelers.status}, Plymouth ${eligibility.plymouthRock.status})`,
+          changedBy: null,
+        });
+      } catch (err) {
+        console.error('enrichment: grade change not logged:', err);
+      }
+
       // Same metadata shape as a producer override, so the Grade Changes report reads
       // both from one place. `createdBy` stays null — that is what marks it as the
       // rules acting rather than a person.

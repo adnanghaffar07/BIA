@@ -37,9 +37,14 @@ export async function POST(
       }, { status: 400 });
     }
 
-    // Cached result wins unless the caller explicitly forces a re-check.
+    /**
+     * Cached result wins unless the caller forces a re-check — EXCEPT 'unavailable',
+     * which is never a result. It records that the roll could not be reached, and caching
+     * it would freeze a transient outage into a permanent non-answer that only a manual
+     * ?force=1 could ever clear.
+     */
     const force = request.nextUrl.searchParams.get('force') === '1';
-    if (l.ownerVerifyStatus && !force) {
+    if (l.ownerVerifyStatus && l.ownerVerifyStatus !== 'unavailable' && !force) {
       return NextResponse.json({ success: true, cached: true, data: lead });
     }
 
@@ -55,27 +60,53 @@ export async function POST(
       owner1LastName: l.owner1LastName,
     });
 
-    if (!result) {
-      // Property isn't on the roll. Frank Aug-2026: WIP verify is mandatory and a
-      // "not found" must be TRACKABLE for review — so we persist the outcome as
-      // 'not_found' (rather than storing nothing) and surface it in QC. It is never a
-      // 'mismatch' (that would wrongly imply a name disagreement).
-      const detail = `No matching property found on the ${townLabel} tax roll for "${l.addressStreet}".`;
+    /**
+     * No name comparison happened. Three different reasons, and they must not be written
+     * down as the same thing:
+     *
+     *   not_found    every roll answered and none holds this address. A real fact about
+     *                the property — overwhelmingly condos, which municipal rolls list by
+     *                lot and qualifier rather than street address.
+     *   unavailable  a roll could not be reached. NOT a fact about the property. Recorded
+     *                so it is visible and retried, never cached as an answer.
+     *   unsupported  no roll is configured for this ZIP. Also not a fact about the
+     *                property.
+     *
+     * Until now all three collapsed into 'not_found', so an outage would have written
+     * "this property is not on the tax roll" across every lead it touched — permanently,
+     * and indistinguishably from the genuine misses.
+     */
+    if (!('recordName' in result)) {
+      const status = result.status;
+      const detail = status === 'not_found'
+        ? `No matching property found on the ${townLabel} tax roll for "${l.addressStreet}".`
+        : result.detail;
+
       await updateLead(id, {
-        ownerVerifyStatus: 'not_found',
-        ownerVerifySource: 'tax_roll',
+        ownerVerifyStatus: status,
+        ownerVerifySource: status === 'not_found' ? 'tax_roll' : `tax_roll_${status}`,
         ownerVerifyAt: new Date(),
         ownerVerifyDetail: detail,
       });
       await addActivity(
         l.id,
         'owner_verify',
-        `Owner name not found on ${townLabel} tax roll`,
-        { status: 'not_found', source: 'tax_roll' },
+        status === 'not_found'
+          ? `Owner name not found on ${townLabel} tax roll`
+          : `Tax-roll check could not complete (${status}) for ${townLabel}`,
+        { status, source: 'tax_roll' },
         actor,
       );
       const updated = await getLeadByPropertyId(id);
-      return NextResponse.json({ success: true, cached: false, result: { status: 'not_found', detail }, data: updated });
+      return NextResponse.json({
+        success: true,
+        cached: false,
+        // An unreachable roll is not a verification result, and a caller that treats a
+        // 200 as "checked" would be wrong. Say so explicitly.
+        checked: status === 'not_found',
+        result: { status, detail },
+        data: updated,
+      });
     }
 
     await updateLead(id, {

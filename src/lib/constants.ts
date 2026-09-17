@@ -1,8 +1,23 @@
-// API Configuration for Real Estate API v2
+/**
+ * Real Estate API v2 credentials — SERVER ONLY.
+ *
+ * Register A12 / playbook §12 item 7: "credentials off the browser bundle".
+ *
+ * These were read from NEXT_PUBLIC_* variables. Anything prefixed NEXT_PUBLIC_ is inlined
+ * into the browser bundle by Next at build time wherever it is referenced — that prefix is
+ * a declaration that the value is public. This file is imported by client components (for
+ * COUNTY_FILTER_OPTIONS and friends), so the key was one careless import away from being
+ * served to every visitor, and tree-shaking is not a security control.
+ *
+ * The server-side names are preferred and the NEXT_PUBLIC ones remain only as a fallback so
+ * nothing breaks between this deploy and the environment being updated. Once
+ * REAL_ESTATE_API_KEY / REAL_ESTATE_USER_ID are set in .env.local and in Vercel, DELETE the
+ * NEXT_PUBLIC_ pair — while they exist, the value is still in the browser bundle.
+ */
 export const API_CONFIG = {
   BASE_URL: 'https://api.realestateapi.com/v2',
-  API_KEY: process.env.NEXT_PUBLIC_REAL_ESTATE_API_KEY || '',
-  USER_ID: process.env.NEXT_PUBLIC_REAL_ESTATE_USER_ID || 'UniqueUserIdentifier',
+  API_KEY: process.env.REAL_ESTATE_API_KEY || process.env.NEXT_PUBLIC_REAL_ESTATE_API_KEY || '',
+  USER_ID: process.env.REAL_ESTATE_USER_ID || process.env.NEXT_PUBLIC_REAL_ESTATE_USER_ID || 'UniqueUserIdentifier',
 };
 
 // Pagination

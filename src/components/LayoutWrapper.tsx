@@ -33,7 +33,19 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   // Close the mobile drawer whenever the route changes.
   useEffect(() => { setMobileOpen(false); }, [pathname]);
 
-  const PUBLIC_ROUTES = ['/login'];
+  /**
+   * Routes that render without a session, and without the CRM shell.
+   *
+   * This list is SEPARATE from the middleware's PUBLIC_PATHS and has to agree with it.
+   * When it did not, the CTA landing page passed the middleware, returned 200 to curl, and
+   * was then bounced to /login by this effect the moment a real browser ran it — so every
+   * homeowner clicking a button in our email would have been shown a staff login screen,
+   * while every server-side check said the page was fine.
+   *
+   * '/c/' is the §05 CTA landing page: public by necessity, authenticated by the signed
+   * token in the URL rather than by a session.
+   */
+  const PUBLIC_ROUTES = ['/login', '/c'];
   const isPublicRoute = PUBLIC_ROUTES.some(
     (r) => pathname === r || pathname.startsWith(r + '/'),
   );
