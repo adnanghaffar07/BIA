@@ -1,115 +1,216 @@
 /**
- * FREE re-grade — recomputes A/B/C/D for every lead using the same rules as
- * src/services/grade.service.ts (roof >20 yr unconfirmed, carrier both-ineligible
- * → D, flood SFHA → D / shaded-X → C, missing pertinent fields). Uses STORED
- * carrier-eligibility + flood data (no FEMA/REAPI calls, no credits). Honors
- * manual grade overrides.
+ * Re-grade leads using the app's OWN rules.
  *
- * ⚠  QUARANTINED — Frank Sep-2026, pre-launch checklist Tier 3. DO NOT RUN.
+ * Usage:
+ *   node --import ./scripts/lib/register-ts.mjs scripts/regrade.mjs
+ *       → dry run. Always reports EVERY disagreement; writes nothing.
  *
- * It no longer mirrors grade.service. That service exempts condos from the
- * roof-age field (CONDO_EXEMPT_FIELDS, grade.service.ts) because a condo owner
- * does not insure the roof; this script has no such notion. 1,200 of the 1,449
- * Grade A leads are condos, so a write pass moves Grade A from 1,449 to 448 —
- * 769 leads out of A, including most of the Grade-A-with-email set the 9/14
- * pilot sends to. Measured 09 Sep 2026 by dry run.
+ *   node --import ./scripts/lib/register-ts.mjs scripts/regrade.mjs --apply
+ *       → write the leads the rules grade A that are stored lower (or ungraded)
  *
- * The app re-grades on every enrichment pass, so this script is not needed to
- * keep the DB correct. Reconcile it against grade.service (condo exemption
- * first) or delete it. Until then a write pass requires an explicit override
- * flag so it cannot be run from muscle memory.
+ *   ... --all-upgrades          also write upgrades that land on B or C
+ *   ... --allow-downgrades      also write grades that move DOWN (see the warning below)
+ *   ... --ids=a,b,c             restrict to specific lead ids
  *
- * Usage:  node scripts/regrade.mjs --dry-run          (safe, reports only)
- *         node scripts/regrade.mjs --force-write-i-have-reconciled-condos
+ * ── Why this script was rewritten ────────────────────────────────────────────
+ *
+ * It used to keep its own copy of grade.service's rules. The copy fell behind the condo
+ * exemption (CONDO_EXEMPT_FIELDS — condos are not rated on roof age, year built, square
+ * footage or bedroom count), and since ~1,200 of the Grade A leads are condos, a write
+ * pass would have moved 769 of them out of A. It was quarantined behind a scary flag
+ * rather than fixed, which left the real problem — a second implementation of a rule is
+ * a second thing to get wrong — in place.
+ *
+ * It now imports calculateLeadGrade from src/services/grade.service.ts directly, so there
+ * is exactly one set of rules and this script cannot drift from the app again. That
+ * includes carrier appetite, the flood caps and the post-skip-trace contactability rule,
+ * none of which the old copy implemented.
+ *
+ * ── Why upgrades-only is the default ─────────────────────────────────────────
+ *
+ * A stored grade can be lower than the computed one for a boring reason: something wrote
+ * a grade and nothing recomputed it afterwards. The Sep-2026 skip-trace middle-name
+ * repair, for example, lifted 22 leads off D by writing 'B' so they would pass
+ * canRunSkipTrace, then re-traced them successfully — and the B stuck. Those leads are
+ * quote-ready and reading as "needs info".
+ *
+ * A downgrade is a different animal. It takes a lead AWAY from a producer, possibly out
+ * of a campaign that is mid-flight, and the computed value depends on stored carrier and
+ * flood columns that may themselves be stale. So downgrades need --allow-downgrades and
+ * a person who has looked at the dry run.
+ *
+ * Manual overrides are never touched, in either direction.
  */
-import { neon, Pool } from '@neondatabase/serverless';
-import { readFileSync } from 'fs';
+import { readFileSync } from 'node:fs';
+import { Pool } from '@neondatabase/serverless';
+import crypto from 'node:crypto';
+import { calculateLeadGrade } from '@/services/grade.service.ts';
 
-const DRY = process.argv.includes('--dry-run');
-const OVERRIDE = process.argv.includes('--force-write-i-have-reconciled-condos');
-const EOL = String.fromCharCode(10);
+const APPLY        = process.argv.includes('--apply');
+const ALL_UPGRADES = process.argv.includes('--all-upgrades');
+const DOWNGRADES   = process.argv.includes('--allow-downgrades');
+const idsArg     = process.argv.find((a) => a.startsWith('--ids='));
+const ONLY_IDS   = idsArg ? idsArg.slice('--ids='.length).split(',').map((s) => s.trim()).filter(Boolean) : null;
 
-// Refuse to write without the override. See the quarantine note above: this
-// script downgrades every condo it touches, and the pilot list is 80% condo.
-if (!DRY && !OVERRIDE) {
-  console.error([
-    '',
-    '  ⛔  regrade.mjs is quarantined and will not write.',
-    '',
-    '  It downgrades every condo it touches — a write pass takes Grade A from',
-    '  1,449 to 448 and would gut the 9/14 pilot list. The live app already',
-    '  re-grades on enrichment, so this script is not needed.',
-    '',
-    '  Report only:  node scripts/regrade.mjs --dry-run',
-    '',
-    '  If you have genuinely reconciled it against grade.service.ts (start with',
-    '  the condo exemption in CONDO_EXEMPT_FIELDS), re-run with',
-    '  --force-write-i-have-reconciled-condos',
-    '',
-  ].join(EOL));
-  process.exit(1);
-}
-const url = readFileSync('.env', 'utf-8').match(/DATABASE_URL=([^\n]+)/)[1].trim().replace(/^["']|["']$/g, '');
-const sql = neon(url);
+const env = ['.env', '.env.local']
+  .map((f) => { try { return readFileSync(f, 'utf8'); } catch { return ''; } })
+  .join('\n');
+const url = /DATABASE_URL\s*=\s*"?([^"\n]+)"?/.exec(env)?.[1]?.trim();
+if (!url) throw new Error('DATABASE_URL not found in .env / .env.local');
+
 const pool = new Pool({ connectionString: url });
-const YEAR = 2026;
 
-// Mirrors CRITICAL_FIELDS in grade.service.ts (flat DB column names).
-const FIELDS = [
-  { k: 'owner1LastName' }, { k: 'addressStreet' }, { k: 'addressZip' }, { k: 'addressCity' },
-  { k: 'estimatedValue' }, { k: 'yearBuilt' }, { k: 'squareFeet' },
-  { k: 'roofYear', applies: (l) => { const yb = Number(l.yearBuilt); return !yb || (YEAR - yb) > 20; } },
-  { k: 'propertyType' }, { k: 'bedrooms' },
+/**
+ * Every column the grading path reads — grade.service's pertinent fields, the condo and
+ * flood checks, the contactability rule, and everything carrier.service touches.
+ *
+ * Listed explicitly rather than SELECT *: "Lead" carries rawData and skipTraceData, which
+ * nothing here reads and which are large enough to have blown the Neon transfer quota
+ * once already.
+ */
+const WANTED = [
+  'id', 'propertyId', 'grade', 'manualGrade',
+  'owner1LastName', 'addressStreet', 'addressCity', 'addressZip',
+  'estimatedValue', 'yearBuilt', 'squareFeet', 'bedrooms', 'roofYear', 'roofType',
+  'propertyType', 'propertyUse', 'landUse', 'unitsCount',
+  'latitude', 'longitude', 'mailCity', 'mailStreet',
+  'floodZone', 'floodZoneType', 'floodZoneSubtype', 'floodSfha',
+  'skipTraced', 'phone1', 'phone2', 'email1', 'email2',
+  'absenteeOwner', 'corporateOwned', 'foreclosure', 'preForeclosure',
+  'investorBuyer', 'ownerOccupied', 'reo', 'vacant',
+];
+const RANK = { A: 0, B: 1, C: 2, D: 3 };
+
+// Some of the names above exist only on raw REAPI records, not as columns (the services
+// read both shapes). Ask the schema rather than guessing, and say which were dropped —
+// a silently missing column here would quietly change what the rules see.
+const { rows: schema } = await pool.query(
+  `SELECT column_name FROM information_schema.columns WHERE table_name = 'Lead'`,
+);
+const present = new Set(schema.map((r) => r.column_name));
+const COLS    = WANTED.filter((c) => present.has(c));
+const absent  = WANTED.filter((c) => !present.has(c));
+if (absent.length) console.log(`  (not columns, skipped: ${absent.join(', ')})`);
+for (const required of ['id', 'grade', 'manualGrade']) {
+  if (!present.has(required)) throw new Error(`"Lead"."${required}" is missing — cannot re-grade`);
+}
+
+const { rows: leads } = await pool.query(
+  `SELECT ${COLS.map((c) => `"${c}"`).join(',')} FROM "Lead"
+    WHERE "manualGrade" IS NULL
+    ${ONLY_IDS ? 'AND "id" = ANY($1)' : ''}`,
+  ONLY_IDS ? [ONLY_IDS] : [],
+);
+
+const before = {}, after = {};
+const moves  = {};
+/** EVERY difference, regardless of what this run is allowed to write. */
+const diffs = [];
+
+for (const l of leads) {
+  const from = l.grade ?? null;
+  const to   = calculateLeadGrade(l);
+  before[from ?? '(null)'] = (before[from ?? '(null)'] ?? 0) + 1;
+  after[to] = (after[to] ?? 0) + 1;
+  if (from === to) continue;
+
+  const isUpgrade = from == null || RANK[to] < RANK[from];
+  moves[`${from ?? '(null)'} → ${to}`] = (moves[`${from ?? '(null)'} → ${to}`] ?? 0) + 1;
+  diffs.push({ ...l, from, to, isUpgrade });
+}
+
+const toA        = diffs.filter((r) => r.isUpgrade && r.to === 'A');
+const otherUp    = diffs.filter((r) => r.isUpgrade && r.to !== 'A');
+const downgrades = diffs.filter((r) => !r.isUpgrade);
+
+// Counted off `diffs`, not off the write list — reporting "downgrades 0" because this run
+// happens not to be writing them is how someone concludes there are none.
+const toWrite = [
+  ...toA,
+  ...(ALL_UPGRADES ? otherUp : []),
+  ...(DOWNGRADES ? downgrades : []),
 ];
 
-function floodCap(l) {
-  if (l.floodSfha === true) return 'D';
-  const z = String(l.floodZoneType ?? '').trim().toUpperCase();
-  const sub = String(l.floodZoneSubtype ?? '').toUpperCase();
-  if (/^(A|V)/.test(z)) return 'D';
-  if (z === 'X' && /0\.2\s*PCT/.test(sub)) return 'C';
-  if (z === 'X500' || z.includes('0.2') || sub.includes('SHADED')) return 'C';
-  if (l.floodZone === true && z === 'X') return 'C';
-  return null;
+console.log(`\nRe-grade — ${leads.length.toLocaleString()} leads without a manual override`);
+console.log('  stored today :', JSON.stringify(before));
+console.log('  rules say    :', JSON.stringify(after));
+console.log('\n  movements:');
+for (const [k, v] of Object.entries(moves).sort((a, b) => b[1] - a[1])) {
+  console.log(`    ${k.padEnd(14)} ${String(v).padStart(5)}`);
+}
+console.log(`\n  disagreements: ${diffs.length}`);
+console.log(`    → A                  ${String(toA.length).padStart(5)}   ${'(writing)'}`);
+console.log(`    other upgrades       ${String(otherUp.length).padStart(5)}   ${ALL_UPGRADES ? '(writing)' : '(needs --all-upgrades)'}`);
+console.log(`    downgrades           ${String(downgrades.length).padStart(5)}   ${DOWNGRADES ? '(writing)' : '(needs --allow-downgrades)'}`);
+console.log(`\n  this run would write: ${toWrite.length}`);
+
+if (!APPLY) {
+  console.log('\n  DRY RUN — nothing written. Re-run with --apply.\n');
+  const sample = toA.slice(0, 15);
+  if (sample.length) {
+    console.log('  sample of leads that become A:');
+    for (const r of sample) {
+      console.log(`    ${String(r.id).padEnd(13)} ${r.from} → A   ${r.owner1LastName ?? ''}, ${r.addressStreet ?? ''} ${r.addressCity ?? ''}`);
+    }
+  }
+  await pool.end();
+  process.exit(0);
 }
 
-function computeGrade(l) {
-  // manual override wins (mirrors grade.service: grade = manualGrade || computed)
-  if (l.manualGrade && ['A', 'B', 'C', 'D'].includes(l.manualGrade)) return l.manualGrade;
-  const fc = floodCap(l);
-  if (fc === 'D') return 'D';
-  const passesAny = l.travelersEligible !== 'ineligible' || l.plymouthEligible !== 'ineligible';
-  if (!passesAny) return 'D';
-  const missing = FIELDS.filter((f) => (!f.applies || f.applies(l))
-    && (l[f.k] === null || l[f.k] === undefined || l[f.k] === '')).length;
-  let g = missing === 0 ? 'A' : missing === 1 ? 'B' : 'C';
-  if (fc === 'C' && (g === 'A' || g === 'B')) g = 'C';
-  return g;
-}
-
-const leads = await sql`
-  SELECT "propertyId","grade","manualGrade","yearBuilt","roofYear","owner1LastName",
-         "addressStreet","addressZip","addressCity","estimatedValue","squareFeet",
-         "propertyType","bedrooms","travelersEligible","plymouthEligible",
-         "floodSfha","floodZone","floodZoneType","floodZoneSubtype"
-  FROM "Lead"`;
-
-const before = { A: 0, B: 0, C: 0, D: 0 }, after = { A: 0, B: 0, C: 0, D: 0 };
-let changed = 0, aToB = 0;
-for (const l of leads) {
-  before[l.grade] = (before[l.grade] || 0) + 1;
-  const g = computeGrade(l);
-  after[g] = (after[g] || 0) + 1;
-  if (g !== l.grade) {
-    changed++;
-    if (l.grade === 'A' && g === 'B') aToB++;
-    if (!DRY) await pool.query(`UPDATE "Lead" SET "grade"=$1,"updatedAt"=NOW() WHERE "propertyId"=$2`, [g, l.propertyId]);
+/**
+ * Write each change in one transaction with its audit rows, so a lead can never end up
+ * re-graded with no record of why. The activity mirrors what enrichment writes for a
+ * system regrade ('grade_system', createdBy null = the rules acted, not a person), which
+ * is the shape the QC Grade Changes report already reads.
+ */
+let written = 0, failed = 0;
+for (const r of toWrite) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Re-read under the transaction: skip if a producer set an override, or the grade
+    // moved, since the snapshot above was taken.
+    const { rows: cur } = await client.query(
+      `SELECT "grade","manualGrade" FROM "Lead" WHERE "id" = $1 FOR UPDATE`, [r.id],
+    );
+    if (!cur.length || cur[0].manualGrade || cur[0].grade !== r.from) {
+      await client.query('ROLLBACK');
+      continue;
+    }
+    await client.query(
+      `UPDATE "Lead" SET "grade" = $2, "updatedAt" = NOW() WHERE "id" = $1`, [r.id, r.to],
+    );
+    await client.query(
+      `INSERT INTO "Activity" ("id","leadId","type","content","metadata","createdBy","createdAt")
+       VALUES (gen_random_uuid()::text,$1,'grade_system',$2,$3,NULL,NOW())`,
+      [
+        r.id,
+        `Grade ${r.from} → ${r.to} (re-graded by the rules)`,
+        JSON.stringify({
+          changes: [{ field: 'Grade', from: r.from, to: r.to }],
+          via: 'scripts/regrade.mjs',
+        }),
+      ],
+    );
+    await client.query(
+      `INSERT INTO "GradeChange" ("id","leadId","fromGrade","toGrade","source","reason","changedBy","changedAt")
+       VALUES ($1,$2,$3,$4,'system',$5,$6,NOW())`,
+      [
+        crypto.randomUUID(), r.id, r.from, r.to,
+        'Stored grade did not match the rules — re-graded by scripts/regrade.mjs',
+        'system: regrade',
+      ],
+    );
+    await client.query('COMMIT');
+    written++;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    failed++;
+    console.error(`  ! ${r.id}: ${err.message}`);
+  } finally {
+    client.release();
   }
 }
 
-console.log(`\n🎯 Re-grade ${DRY ? '(DRY RUN)' : ''} — ${leads.length} leads`);
-console.log('  before:', JSON.stringify(before));
-console.log('  after :', JSON.stringify(after));
-console.log(`  changed ${changed}   (A→B: ${aToB})`);
-console.log(DRY ? '\n  (dry run — nothing written)' : '\n✅ Re-grade applied (free).');
+console.log(`\n  wrote ${written}${failed ? `, ${failed} failed` : ''}${written !== toWrite.length ? `, ${toWrite.length - written - failed} skipped (changed underneath)` : ''}\n`);
 await pool.end();

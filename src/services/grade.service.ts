@@ -1,6 +1,6 @@
-import { Lead } from '@/types/lead';
-import { LeadGrade } from '@/types/grade';
-import { CarrierEligibilityResult } from '@/types/carrier';
+import type { Lead } from '@/types/lead';
+import type { LeadGrade } from '@/types/grade';
+import type { CarrierEligibilityResult } from '@/types/carrier';
 import { checkCarrierEligibility } from './carrier.service';
 
 // ─── Critical fields ──────────────────────────────────────────────────────────

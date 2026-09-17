@@ -1,6 +1,7 @@
-import { Lead } from '@/types/lead';
+import type { Lead } from '@/types/lead';
 import {
-  CarrierRuleResult, CarrierEligibilityResult, EligibilityStatus, Verdict, RuleHit,
+  type CarrierRuleResult, type CarrierEligibilityResult, type EligibilityStatus,
+  type Verdict, type RuleHit,
   statusFromVerdict,
 } from '@/types/carrier';
 import { getCoastalAppetite } from './coastDistance.service';
