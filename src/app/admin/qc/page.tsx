@@ -28,7 +28,11 @@ import { useStickyState } from '@/hooks/useStickyState';
 /** One renewal week in the Cohort Ledger — mirrors CohortLedgerRow on the server. */
 type LedgerRow = {
   cohort: string; label: string; total: number;
-  aAtPull: number; downgraded: number; trough: number; recovered: number;
+  aAtPull: number; downgraded: number; trough: number;
+  /** Left Grade A and is Grade A again — a grade round trip, NOT the skip-trace count. */
+  recovered: number;
+  /** Isolated leads the skip trace found an insured email for. This is the skip-trace count. */
+  emailRecovered: number;
   stillA: number; gainedOther: number; aNow: number; mailable: number;
   lost: number; lostPct: number | null; noPullRecord: number; unexplained: number;
   rated: number; unworkedGradeA: number;
@@ -39,7 +43,7 @@ type ReportType = 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' |
 
 
 const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: string }[] = [
-  { key: 'cohort_ledger', label: 'Cohort Ledger', icon: <SwapVertIcon />, blurb: 'Per renewal week: how many Grade A the pull started with, how many were downgraded, how many the deep skip trace recovered, and how many we hold now — against the 5% loss target.' },
+  { key: 'cohort_ledger', label: 'Cohort Ledger', icon: <SwapVertIcon />, blurb: 'Per renewal week: how many Grade A the pull started with, how many were downgraded, how many came back, how many the skip trace found an email for, and how many we can actually mail — against the 5% loss target.' },
   { key: 'reachability', label: 'Reachability', icon: <ContactPhoneIcon />, blurb: 'Per renewal week: how many households we can reach at the named insured, how many only at the co-insured, and what the insured-only rule costs us in reach.' },
   { key: 'cohort', label: 'Renewal Week', icon: <CalendarMonthIcon />, blurb: 'Every lead whose renewal falls in the chosen effective-date range — the whole cohort, graded or not, with grade, status and how many are actually reachable.' },
   { key: 'referral', label: 'Referrals / Eligibility', icon: <FactCheckIcon />, blurb: 'Leads a carrier flagged Referral (or Non-eligible), with the reason entered.' },
@@ -930,8 +934,18 @@ const MAX_RENDERED = 300;
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow>
+                {/*
+                  Two different recoveries, named apart.
+
+                  One column called "Recovered" read as "what the skip trace bought" and
+                  answered with a grade round trip: it said 1 for the Oct 5 week while the
+                  pipeline had found insured emails for 11 leads in that same week. Both
+                  numbers were right and neither was the one being asked for. A lead that
+                  is Grade A and unmailable never left Grade A, so finding it an address
+                  moves Mailable and leaves the grade columns alone.
+                */}
                 {['Renewal week', 'Leads', 'Grade A at pull', 'Downgraded', 'Low point',
-                  'Recovered', 'Grade A now', 'Mailable', 'Unworked A', 'Lost', 'Lost %'].map((h, i) => (
+                  'Regained A', 'Grade A now', 'Email found', 'Mailable', 'Unworked A', 'Lost', 'Lost %'].map((h, i) => (
                   <TableCell key={h} align={i > 1 ? 'right' : 'left'}
                     sx={{ fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{h}</TableCell>
                 ))}
@@ -952,11 +966,32 @@ const MAX_RENDERED = 300;
                     </TableCell>
                     <TableCell align="right" sx={{ fontSize: 12 }}>{d.trough.toLocaleString()}</TableCell>
                     <TableCell align="right" sx={{ fontSize: 12, color: d.recovered ? '#166534' : 'inherit', fontWeight: d.recovered ? 700 : 400 }}>
-                      {d.recovered ? `+${d.recovered}` : '—'}
+                      <Tooltip arrow title={
+                        d.recovered
+                          ? `${d.recovered} lead${d.recovered === 1 ? '' : 's'} left Grade A and ${d.recovered === 1 ? 'is' : 'are'} Grade A again — a grade round trip. This is NOT the skip trace count; see "Email found".`
+                          : 'Nothing that left Grade A has come back to it. Contact recovery is counted under "Email found".'
+                      }>
+                        <span style={{ cursor: 'help' }}>{d.recovered ? `+${d.recovered}` : '—'}</span>
+                      </Tooltip>
                     </TableCell>
                     <TableCell align="right" sx={{ fontSize: 12, fontWeight: 700 }}>
                       {d.aNow.toLocaleString()}
                       {d.gainedOther ? <Typography component="span" variant="caption" sx={{ color: '#166534', ml: 0.5 }}>+{d.gainedOther}↑</Typography> : null}
+                    </TableCell>
+                    {/*
+                      What the skip trace actually bought.
+
+                      Sits beside Mailable because it is the number that moves it: every
+                      one of these is a Grade A lead that could not be emailed and now can.
+                    */}
+                    <TableCell align="right" sx={{ fontSize: 12, color: d.emailRecovered ? '#166534' : 'inherit', fontWeight: d.emailRecovered ? 700 : 400 }}>
+                      <Tooltip arrow title={
+                        d.emailRecovered
+                          ? `Tracerfy or BatchData found an insured email for ${d.emailRecovered} isolated lead${d.emailRecovered === 1 ? '' : 's'} in this week. They were Grade A throughout — unmailable, not downgraded — so this shows up in Mailable rather than in the grade columns.`
+                          : 'No isolated lead in this week has had an insured email found for it yet.'
+                      }>
+                        <span style={{ cursor: 'help' }}>{d.emailRecovered ? `+${d.emailRecovered}` : '—'}</span>
+                      </Tooltip>
                     </TableCell>
                     {/*
                       Reach, not eligibility.
@@ -1017,7 +1052,7 @@ const MAX_RENDERED = 300;
           </Table>
           <Box sx={{ p: 1.5, borderTop: '1px solid #e6e8eb' }}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-              Grade A at pull → downgraded → low point → recovered by deep skip trace → Grade A now →
+              Grade A at pull → downgraded → low point → regained Grade A → Grade A now →
               <b> mailable</b> (of those, how many have an insured email).
               Target is a loss of {LOST_TARGET_PCT}% or less. <b>↑</b> marks leads that were not Grade A at
               pull and are now.
@@ -1551,6 +1586,56 @@ const MAX_RENDERED = 300;
           )}
 
           {/* Only the two vendor stages can be blasted; the others are outcomes. */}
+          {/*
+            Leads that belong in this pipeline and have not been put in it.
+
+            Four zeros used to mean two completely different things — "this week has no
+            unreachable leads" and "nobody has pressed Isolate for this week" — and the
+            11/09 week showed the second while reading as the first, with 47 leads waiting.
+            The only control that could enrol them lived behind a chip on the Renewal Week
+            tab, which is not a place anyone looking at an empty pipeline would think to go.
+
+            Isolating is free, calls no vendor, sends nothing, and remembers each lead's
+            status so it can be undone. So the action belongs here, next to the gap it fills.
+          */}
+          {!!pipeline.counts?.awaitingIsolation && (
+            <Alert
+              severity="info"
+              sx={{ mb: 2 }}
+              action={
+                <Button
+                  size="small"
+                  disabled={isolateState.busy}
+                  onClick={() => {
+                    const n = pipeline.counts?.awaitingIsolation ?? 0;
+                    if (confirm(
+                      `Isolate ${n} Grade A lead${n === 1 ? '' : 's'} with no insured email?\n\n`
+                      + 'They move into this pipeline so they can be worked through Tracerfy and '
+                      + 'BatchData. Each lead\'s current status is remembered and restored '
+                      + 'automatically if an address turns up.\n\n'
+                      + 'Nothing is sent and no vendor is called — this costs nothing.',
+                    )) runIsolate(false);
+                  }}
+                >
+                  {isolateState.busy ? 'Working…' : `Isolate ${pipeline.counts.awaitingIsolation}`}
+                </Button>
+              }
+            >
+              <strong>
+                {pipeline.counts.awaitingIsolation} Grade A lead
+                {pipeline.counts.awaitingIsolation === 1 ? '' : 's'} in this range {pipeline.counts.awaitingIsolation === 1 ? 'has' : 'have'} no insured email and {pipeline.counts.awaitingIsolation === 1 ? 'is' : 'are'} not in the pipeline yet.
+              </strong>
+              {' '}The stages below only count leads that have been isolated, so they read
+              zero until these are enrolled. Isolating is free and reversible.
+            </Alert>
+          )}
+
+          {isolateState.msg && (
+            <Typography variant="caption" sx={{ color: '#8a5a00', display: 'block', mb: 1.5 }}>
+              {isolateState.msg}
+            </Typography>
+          )}
+
           {(pipeline.stage === 'isolated' || pipeline.stage === 'tracerfy') && (
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1, flexWrap: 'wrap' }} useFlexGap>
               {/*

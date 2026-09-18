@@ -137,6 +137,19 @@ for (const d of await getCohortLedger({ effFrom: '2026-10-05', effTo: '2026-11-2
     d.mailable,
     weekRows.filter((r) => r.hasInsuredEmail && gradeOf(r) === 'A').length);
   check(`ledger ${d.cohort} mailable <= aNow`, d.mailable <= d.aNow, true);
+
+  /**
+   * "Email found" on the ledger and the Recovered tab in Blast Skip Traces are the same
+   * population counted in two places. They were allowed to disagree once: the ledger had
+   * a single "Recovered" column measuring a GRADE round trip, so it read 1 for the Oct 5
+   * week while the pipeline had recovered 11 of those leads. Both numbers were right and
+   * only one of them was the question being asked. Pinned here so they cannot drift.
+   */
+  const [rec] = await sql`
+    SELECT COUNT(*)::int n FROM "Lead"
+     WHERE "cohort" = ${d.cohort} AND "recoveryStage" = 'recovered'`;
+  check(`ledger ${d.cohort} email found == pipeline recovered`, d.emailRecovered, rec.n);
+  check(`ledger ${d.cohort} email found <= mailable`, d.emailRecovered <= d.mailable, true);
 }
 
 console.log(`\n${pass} passed, ${failures.length} failed`);

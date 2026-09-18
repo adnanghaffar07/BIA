@@ -23,7 +23,8 @@ import { insuredEmails, assertRecipientCols } from './recipients.service';
  *                                     pulled (register A8, recovered from the activity
  *                                     feed while that feed was still complete)
  *   left A     a "GradeChange" row with fromGrade = 'A'
- *   recovered  left A, and is Grade A again today
+ *   regained A left A, and is Grade A again today
+ *   email found the contact-recovery pipeline found the insured an email
  *   now        COALESCE(manualGrade, grade), i.e. what the CRM shows
  *
  * Nothing here is stored or cached. Every figure is derived on read from the grade log, so
@@ -52,8 +53,24 @@ export type CohortLedgerRow = {
    * will be the only thing anyone remembers about it. See `unexplained`.
    */
   trough: number;
-  /** Left Grade A and is Grade A again today. This is what the deep skip trace bought. */
+  /**
+   * Left Grade A and is Grade A again today — a GRADE round trip.
+   *
+   * This is not what the skip trace buys, and reading it as though it were understates
+   * the recovery work by an order of magnitude: in the Oct 5 week it is 1, while 11 leads
+   * in that same week had an insured email found for them. Those 11 never left Grade A —
+   * they were Grade A and unmailable, which is what isolation is — so finding them an
+   * address changed their reach and not their grade. `emailRecovered` is that number.
+   */
   recovered: number;
+  /**
+   * Leads the contact-recovery pipeline found an insured email for.
+   *
+   * The measurement that answers "what did the skip trace buy?", because it is the one
+   * that moves `mailable`. Counted from the lead's own recovery stage, so it cannot
+   * disagree with the pipeline tabs in QC → Blast Skip Traces.
+   */
+  emailRecovered: number;
   /** Grade A at pull and Grade A today. */
   stillA: number;
   /** Grade A today but NOT at pull — climbed up from below. */
@@ -143,6 +160,7 @@ export async function getCohortLedger(
              l."cohort",
              l."gradeAtPull",
              l."status",
+             l."recoveryStage",
              COALESCE(l."manualGrade", l."grade") AS now_grade
         FROM "Lead" l
        WHERE l."cohort" IS NOT NULL
@@ -161,6 +179,7 @@ export async function getCohortLedger(
            COUNT(*) FILTER (WHERE "gradeAtPull" = 'A' AND left_a)::int                AS downgraded,
            COUNT(*) FILTER (WHERE "gradeAtPull" = 'A' AND left_a
                               AND now_grade = 'A')::int                               AS recovered,
+           COUNT(*) FILTER (WHERE "recoveryStage" = 'recovered')::int                 AS email_recovered,
            COUNT(*) FILTER (WHERE "gradeAtPull" = 'A' AND now_grade = 'A')::int        AS still_a,
            COUNT(*) FILTER (WHERE "gradeAtPull" IS DISTINCT FROM 'A'
                               AND now_grade = 'A')::int                               AS gained_other,
@@ -246,6 +265,7 @@ export async function getCohortLedger(
       downgraded,
       trough: stillA - recovered,
       recovered,
+      emailRecovered: Number(r.email_recovered),
       unexplained: lost - (downgraded - recovered),
       stillA,
       gainedOther: Number(r.gained_other),

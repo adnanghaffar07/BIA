@@ -43,6 +43,16 @@ export type StageCounts = {
   recoveredByBatchData: number;
   /** Phones found on leads that are still unmailable — real value, not a recovery. */
   phoneOnly: number;
+  /**
+   * Leads that BELONG in this pipeline and are not in it yet: Grade A, quote-ready, no
+   * insured email, never isolated.
+   *
+   * Without this the panel cannot tell "this week has no unreachable leads" apart from
+   * "nobody has pressed Isolate for this week" — and it showed the same four zeros for
+   * both. The 11/09 week had 47 leads waiting and read as though it had none, with the
+   * only control that could enrol them sitting behind a chip on a different tab.
+   */
+  awaitingIsolation: number;
 };
 
 const RANGE_COLS = `"id","propertyId","status","grade","manualGrade","effectiveDate",
@@ -77,6 +87,24 @@ export async function stageCounts(effFrom?: string, effTo?: string): Promise<Sta
   const rows = await pipelineLeads(effFrom, effTo);
   const at = (s: RecoveryStage) => rows.filter((r) => r.recoveryStage === s);
   const rec = at('recovered');
+
+  // The same rule isolate.service uses, so the count here and the number the Isolate
+  // action reports cannot differ. Reading the recipient columns rather than
+  // "email1 IS NOT NULL": the insured's addresses are attributed per person inside the
+  // trace payload, so the column test both misses addresses and credits the co-insured's
+  // to the insured.
+  const awaiting = await sql`
+    SELECT "id","propertyId","status","grade","manualGrade","effectiveDate",
+           "owner1FirstName","owner1LastName","owner2FirstName","owner2LastName",
+           "email1","email2","owner2Email","phone1","phone2","owner2Phone",
+           "emailsAll","skipTraceData"
+      FROM "Lead"
+     WHERE COALESCE("manualGrade", "grade") = 'A'
+       AND "isolatedAt" IS NULL
+       AND "recoveryStage" IS NULL
+       AND (${effFrom ?? null}::text IS NULL OR "effectiveDate" >= ${effFrom ?? null})
+       AND (${effTo ?? null}::text   IS NULL OR "effectiveDate" <= ${effTo ?? null})` as Record<string, unknown>[];
+
   return {
     isolated: at('isolated').length,
     tracerfy: at('tracerfy').length,
@@ -86,6 +114,7 @@ export async function stageCounts(effFrom?: string, effTo?: string): Promise<Sta
     recoveredByBatchData: rec.filter((r) => r.recoveredBy === 'batchdata').length,
     // Counted across the still-unrecovered stages: a phone we did not have before.
     phoneOnly: rows.filter((r) => r.recoveryStage !== 'recovered' && r.recoveredPhone === true).length,
+    awaitingIsolation: awaiting.filter((l) => insuredEmails(l).length === 0).length,
   };
 }
 
