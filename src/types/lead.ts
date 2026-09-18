@@ -39,6 +39,15 @@ export type LeadGradeValue = 'A' | 'B' | 'C' | 'D';
 // Frank Phase 5 workflow: NEW → RATED → INDICATIVE PRICING SENT → POS RAN → QUOTE ISSUED → BOUND/LOST
 export type LeadStatus =
   | 'new'
+  /**
+   * Quote-ready but unreachable — parked until a contact detail turns up (register A41).
+   *
+   * Distinct from 'quarantine', which means the appetite rules ruled the property out.
+   * An isolated lead is one we WOULD mail and cannot: Grade A with no insured email. The
+   * status it held before isolation is kept in isolatedFromStatus, because most of them
+   * are already rated and the email cadence depends on knowing that.
+   */
+  | 'isolated'
   | 'rated'
   | 'referral'
   | 'indicative_sent'
@@ -62,6 +71,7 @@ export const LEAD_STATUS_OPTIONS: Array<{
   { value: 'quote_issued',    label: 'Quote Issued',            color: 'primary' },
   { value: 'bound',           label: 'Bound',                   color: 'success' },
   { value: 'lost',            label: 'Lost',                    color: 'error' },
+  { value: 'isolated',        label: 'Isolated (no contact)',   color: 'warning' },
   { value: 'quarantine',      label: 'Quarantine',              color: 'secondary' },
 ];
 

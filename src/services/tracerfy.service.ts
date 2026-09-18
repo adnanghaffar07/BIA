@@ -1,5 +1,6 @@
 import type { Lead } from '@/types/lead';
 import { matchInsuredPerson, insuredPatchFromPersons } from './skipTrace.service';
+import { readVendorJson } from './vendorErrors';
 
 /**
  * Tracerfy skip trace (Frank Aug-2026) — REPLACES the REAPI skip trace, whose data was
@@ -86,11 +87,10 @@ export async function runTracerfy(lead: Lead): Promise<TracerfyResult> {
       body: JSON.stringify({ first_name: firstName, last_name: last, address, city, state, zip }),
       signal: AbortSignal.timeout(30000),
     });
-    if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      throw new Error(`Tracerfy error ${res.status}: ${t.slice(0, 200)}`);
-    }
-    return res.json();
+    // Classified rather than stringified: a blast has to know whether this was THIS
+    // lead's problem or the account's, and a message it has to pattern-match later is
+    // how a dead account kept getting billed for another 290 calls.
+    return readVendorJson('Tracerfy', res);
   };
 
   // Middle-name retry (Frank Sep-2026). owner1FirstName often holds a middle name too —

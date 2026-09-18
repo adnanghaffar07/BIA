@@ -15,6 +15,28 @@ interface SkipTraceDialogProps {
   onClose: () => void;
   data: any;
   tracedAt?: string;
+  /**
+   * What the CRM itself holds, independent of any vendor payload.
+   *
+   * The columns and the payload are written at different moments: a trace patches the
+   * co-insured name and DOB onto the lead and, until Sep-2026, the next trace replaced the
+   * payload entirely. So a card could show a co-insured the dialog knew nothing about,
+   * which reads as data loss even where the value is safe in a column.
+   */
+  onFile?: {
+    insured?: string | null;
+    insuredDob?: string | null;
+    coInsured?: string | null;
+    coInsuredDob?: string | null;
+    coInsuredPhone?: string | null;
+    coInsuredEmail?: string | null;
+    emailsAll?: string[] | null;
+    phonesAll?: string[] | null;
+    /** Split by whose they are — computed with the same rule the campaign push uses. */
+    insuredEmails?: string[] | null;
+    coInsuredEmails?: string[] | null;
+    otherEmails?: string[] | null;
+  };
 }
 
 function fmtPhone(p?: string): string {
@@ -50,10 +72,30 @@ const HANDLED_KEYS = new Set([
   'age', 'gender', 'occupationDescription', 'maritalStatusDescription',
   // Tracerfy shape (snake_case) — rendered explicitly, kept out of the generic grid
   'full_name', 'first_name', 'last_name', 'mailing_address', 'relatives', 'address_history',
+  // Internal provenance markers — shown as chips, not as raw rows in the field grid.
+  '_foundBy', '_archived', 'batchDataName',
 ]);
 
-export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipTraceDialogProps) {
-  const persons: any[] = Array.isArray(data?.persons) ? data.persons : [];
+export default function SkipTraceDialog({ open, onClose, data, tracedAt, onFile }: SkipTraceDialogProps) {
+  /**
+   * Current AND archived results, each labelled with the tool that produced it.
+   *
+   * Two vendors now write this payload. Showing only the newest made a BatchData run look
+   * as though it had thrown Tracerfy's work away — the data was archived under
+   * priorPersons the whole time, just never rendered — and the footer credited every
+   * result to Tracerfy regardless of who found it.
+   *
+   * A payload with no provider is Tracerfy's raw response; that is how the current set is
+   * attributed when nothing says otherwise.
+   */
+  const currentProvider: string = data?.provider ?? 'tracerfy';
+  const vendorLabel = (v: string) => (v === 'batchdata' ? 'BatchData' : 'Tracerfy');
+  const current: any[] = Array.isArray(data?.persons) ? data.persons : [];
+  const archived: any[] = Array.isArray(data?.priorPersons) ? data.priorPersons : [];
+  const persons: any[] = [
+    ...current.map((x) => ({ ...x, _foundBy: x?._foundBy ?? currentProvider, _archived: false })),
+    ...archived.map((x) => ({ ...x, _foundBy: x?._foundBy ?? 'tracerfy', _archived: true })),
+  ];
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
@@ -68,6 +110,75 @@ export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipT
         </IconButton>
       </DialogTitle>
       <DialogContent dividers>
+        {/*
+          Held by the CRM, whatever the vendors currently say. Shown first and always:
+          these values came from a trace at some point and are what the producer will
+          actually work from.
+        */}
+        {onFile && (onFile.coInsured || onFile.insuredDob || onFile.coInsuredDob
+          || (onFile.emailsAll?.length ?? 0) > 0 || (onFile.phonesAll?.length ?? 0) > 0) && (
+          <Box sx={{ p: 2, mb: 2, borderRadius: 2, border: '1px solid #cfe0ee', bgcolor: '#f4f9fd' }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1f5f8b', mb: 0.75 }}>
+              On file in the CRM
+            </Typography>
+            <Stack spacing={0.5}>
+              {onFile.insured && (
+                <Typography variant="body2">
+                  <b>Insured:</b> {onFile.insured}
+                  {onFile.insuredDob ? ` · DOB ${onFile.insuredDob}` : ''}
+                </Typography>
+              )}
+              {onFile.coInsured && (
+                <Typography variant="body2">
+                  <b>Co-insured:</b> {onFile.coInsured}
+                  {onFile.coInsuredDob ? ` · DOB ${onFile.coInsuredDob}` : ''}
+                  {onFile.coInsuredPhone ? ` · ${fmtPhone(onFile.coInsuredPhone)}` : ''}
+                  {onFile.coInsuredEmail ? ` · ${onFile.coInsuredEmail}` : ''}
+                </Typography>
+              )}
+              {/*
+                Split by WHOSE they are, not lumped into one list.
+                
+                A card can hold sixteen addresses of which none belong to the insured — the
+                rest are relatives, prior owners and co-residents the trace returned for the
+                property. Shown as one total it reads as sixteen ways to reach this
+                homeowner, and someone will mail one of them. That is the mistake the
+                insured-only rule exists to prevent, so the dialog has to make the
+                distinction the rule makes.
+              */}
+              {!!onFile.insuredEmails?.length && (
+                <Typography variant="body2" sx={{ color: '#166534' }}>
+                  <b>Insured&apos;s emails ({onFile.insuredEmails.length}):</b> {onFile.insuredEmails.join(', ')}
+                </Typography>
+              )}
+              {!!onFile.coInsuredEmails?.length && (
+                <Typography variant="body2">
+                  <b>Co-insured&apos;s emails ({onFile.coInsuredEmails.length}):</b> {onFile.coInsuredEmails.join(', ')}
+                </Typography>
+              )}
+              {!!onFile.otherEmails?.length && (
+                <Typography variant="body2" sx={{ color: '#8a5a00' }}>
+                  <b>Other people at this property ({onFile.otherEmails.length}):</b> {onFile.otherEmails.join(', ')}
+                  <Box component="span" sx={{ display: 'block', fontSize: 11 }}>
+                    Relatives, prior owners and co-residents the trace returned for the address. Not the
+                    insured — never mailed by a campaign.
+                  </Box>
+                </Typography>
+              )}
+              {!onFile.insuredEmails?.length && !!onFile.emailsAll?.length && (
+                <Typography variant="body2" sx={{ color: '#b3261e', fontWeight: 600 }}>
+                  No address belongs to the insured — this lead cannot be emailed.
+                </Typography>
+              )}
+              {!!onFile.phonesAll?.length && (
+                <Typography variant="body2"><b>All phones held ({onFile.phonesAll.length}):</b> {onFile.phonesAll.map(fmtPhone).join(', ')}</Typography>
+              )}
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+              Kept on the lead itself, so it survives whatever a later trace returns.
+            </Typography>
+          </Box>
+        )}
         {persons.length === 0 ? (
           <Typography color="text.secondary">No matched persons returned for this lead.</Typography>
         ) : (
@@ -76,6 +187,8 @@ export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipT
               const name = p.full_name || p.fullName
                 || [p.first_name ?? p.firstName, p.middleName, p.last_name ?? p.lastName].filter(Boolean).join(' ')
                 || 'Unknown';
+              const foundBy: string = p._foundBy;
+              const archivedRow: boolean = p._archived === true;
               const phones: any[] = Array.isArray(p.phones) ? p.phones : [];
               const emails: any[] = Array.isArray(p.emails) ? p.emails : [];
               // Every remaining scalar field, so nothing from the API is hidden.
@@ -83,10 +196,34 @@ export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipT
                 ([k, v]) => !HANDLED_KEYS.has(k) && v != null && v !== '' && typeof v !== 'object',
               );
               return (
-                <Box key={p.personId || i} sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                <Box
+                  key={`${p.personId || i}-${archivedRow ? 'prev' : 'cur'}`}
+                  sx={{
+                    p: 2, borderRadius: 2,
+                    border: '1px solid',
+                    borderColor: archivedRow ? '#e2e0d9' : 'divider',
+                    bgcolor: archivedRow ? '#faf9f6' : 'transparent',
+                  }}
+                >
                   {/* Header: name + key demographics */}
                   <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: 'space-between', alignItems: { sm: 'center' } }} spacing={1}>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{name}</Typography>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }} useFlexGap>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{name}</Typography>
+                      {/* Which tool found this person — the question the old footer answered wrongly. */}
+                      <Chip
+                        size="small"
+                        label={vendorLabel(foundBy)}
+                        sx={{
+                          height: 20, fontSize: 11, fontWeight: 700,
+                          bgcolor: foundBy === 'batchdata' ? '#eaf1f6' : '#e9f4ec',
+                          color: foundBy === 'batchdata' ? '#1f5f8b' : '#2e7d46',
+                        }}
+                      />
+                      {archivedRow && (
+                        <Chip size="small" variant="outlined" label="earlier trace — kept"
+                          sx={{ height: 20, fontSize: 11, color: '#8a5a00', borderColor: '#f0dcae' }} />
+                      )}
+                    </Stack>
                     <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: 'wrap' }}>
                       {p.age && <Chip size="small" variant="outlined" label={`Age ${p.age}`} />}
                       {p.gender && <Chip size="small" variant="outlined" label={p.gender === 'F' ? 'Female' : p.gender === 'M' ? 'Male' : p.gender} />}
@@ -215,7 +352,13 @@ export default function SkipTraceDialog({ open, onClose, data, tracedAt }: SkipT
         )}
 
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
-          Source: Tracerfy Skip Trace{tracedAt ? ` · ${new Date(tracedAt).toLocaleString()}` : ''}. Verify DNC status before calling.
+          {(() => {
+            const used = [...new Set(persons.map((x) => x._foundBy))].map(vendorLabel);
+            const src = used.length ? used.join(' + ') : vendorLabel(currentProvider);
+            return `Source: ${src}${tracedAt ? ` · latest ${new Date(tracedAt).toLocaleString()}` : ''}. `
+              + (archived.length ? 'Earlier results are kept and shown below the current ones. ' : '')
+              + 'Verify DNC status before calling.';
+          })()}
         </Typography>
       </DialogContent>
     </Dialog>

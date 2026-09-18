@@ -15,7 +15,10 @@ import PersonSearchIcon from '@mui/icons-material/PersonSearch';
  *
  *  1. It always previews before it spends. The preview is a free API call, so
  *     there is no reason to make someone spend credits to find out how many
- *     credits they are about to spend.
+ *     credits they are about to spend. It quotes the CEILING for this run — 15 per
+ *     match, misses free — and no longer quotes an account balance: Tracerfy
+ *     publishes none, so that figure could only ever be a stale guess, and it
+ *     spent a while insisting the account was empty when it was not.
  *  2. It drives the run in bounded chunks rather than one long request. The
  *     server commits each lead as it goes and a traced lead drops out of the
  *     eligible set, so closing this dialog mid-run loses nothing and re-opening
@@ -39,13 +42,13 @@ type Preview = {
   eligible: number;
   skipped: { alreadyTraced: number; missingName: number; wrongGrade: number };
   maxCredits: number;
-  credits?: {
-    known: boolean;
-    low: boolean;
-    remaining: number | null;
-    matchesRemaining: number | null;
-  };
 };
+
+/**
+ * Why a run ended before the cohort did. Reported by the server after the fact — the
+ * dialog never predicts it, because no vendor publishes a balance to predict from.
+ */
+type Stopped = { reason: 'no_credits' | 'auth'; vendor: string; detail: string; remaining: number };
 
 type Tally = {
   processed: number; hit: number; miss: number; failed: number;
@@ -84,6 +87,7 @@ export default function SkipTraceBlastDialog({
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stopped, setStopped] = useState<Stopped | null>(null);
   const [tally, setTally] = useState<Tally>(EMPTY);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [current, setCurrent] = useState<string | null>(null);
@@ -112,8 +116,18 @@ export default function SkipTraceBlastDialog({
   // it conditionally), so every run starts from the initial state above and there is
   // nothing to reset here — just fetch the free preview.
   useEffect(() => {
+    /**
+     * Not once a run has started.
+     *
+     * onFinished() refreshes the Leads page, which hands this dialog a new `filters`
+     * object, which re-creates loadPreview and re-fires this effect. The preview then
+     * reset `remaining` to the full eligible count — so a run that stopped with one lead
+     * left announced "1 left untouched" in its alert and "3 left" in its header, in the
+     * same box. After a run the numbers belong to the run.
+     */
+    if (running || finished) return;
     loadPreview();
-  }, [loadPreview]);
+  }, [loadPreview, running, finished]);
 
   const run = async () => {
     // One id for the whole run, so every chunk stamps the same blastRunId and the
@@ -143,6 +157,10 @@ export default function SkipTraceBlastDialog({
         running.coInsured += json.recovered?.coInsured ?? 0;
         setTally({ ...running });
         setRemaining(json.remaining);
+        // The chunk that hit the wall says so. Without this the loop simply ended on
+        // `done` and the dialog announced a finished run, leaving the untraced half of
+        // the cohort looking like leads the vendor had nothing for.
+        if (json.stopped) setStopped(json.stopped as Stopped);
 
         const last = json.results?.[json.results.length - 1];
         if (last) setCurrent(`${last.address}${last.owner ? ` — ${last.owner}` : ''}`);
@@ -203,19 +221,6 @@ export default function SkipTraceBlastDialog({
                   Tracerfy matches. <strong>A miss costs nothing</strong>, so the real spend
                   lands below this.
                 </Alert>
-                {/* Said before the run, where it can still change the decision. */}
-                {preview.credits?.known && preview.credits.low && (
-                  <Alert severity="error" sx={{ mb: 2 }}>
-                    <strong>Tracerfy credits are low.</strong>{' '}
-                    {preview.credits.remaining != null
-                      ? `About ${fmt(preview.credits.remaining)} left`
-                      : 'Balance is below the warning level'}
-                    {preview.credits.matchesRemaining != null
-                      ? `, roughly ${fmt(preview.credits.matchesRemaining)} more matches.`
-                      : '.'}
-                    {' '}This run may stop partway — ask your manager to top up first.
-                  </Alert>
-                )}
               </>
             )}
 
@@ -269,7 +274,32 @@ export default function SkipTraceBlastDialog({
               {' · '}<strong>{fmt(tally.coInsured)}</strong> co-insured
             </Typography>
 
-            {finished && (
+            {/*
+              A run that the vendor ended is not a run that finished. Saying "traced 40
+              leads" and nothing else would leave the other 260 looking like leads
+              Tracerfy had nothing for, which is the opposite of what happened.
+            */}
+            {finished && stopped && (
+              <Alert severity="warning" sx={{ mt: 2 }}>
+                <strong>
+                  {stopped.reason === 'no_credits'
+                    ? `${stopped.vendor} is out of credits — the run stopped.`
+                    : `${stopped.vendor} rejected the API key — the run stopped.`}
+                </strong>
+                {' '}
+                {tally.processed > 0
+                  ? `${fmt(tally.processed)} lead${tally.processed === 1 ? '' : 's'} were traced first and are saved.`
+                  : 'Nothing was traced.'}
+                {stopped.remaining > 0
+                  ? ` ${fmt(stopped.remaining)} left untouched and uncharged — run again once it is sorted and they pick up from here.`
+                  : ''}
+                <Box sx={{ mt: 0.5, fontFamily: 'monospace', fontSize: 11, color: '#5a6675' }}>
+                  {stopped.vendor} said: {stopped.detail}
+                </Box>
+              </Alert>
+            )}
+
+            {finished && !stopped && (
               <Alert severity="success" sx={{ mt: 2 }}>
                 {tally.processed === 0
                   ? 'Nothing was traced.'

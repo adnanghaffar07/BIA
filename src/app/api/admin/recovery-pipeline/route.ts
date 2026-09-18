@@ -1,0 +1,62 @@
+import { NextRequest, NextResponse } from 'next/server';
+import {
+  stageCounts, leadsAtStage, runTracerfyBlast, runBatchDataBlast,
+  type RecoveryStage,
+} from '@/services/recoveryPipeline.service';
+
+const STAGES: RecoveryStage[] = ['isolated', 'tracerfy', 'batchdata', 'recovered'];
+
+/**
+ * GET  /api/admin/recovery-pipeline?effFrom&effTo[&stage]
+ *        counts for all four stages, plus the rows of one stage when asked
+ * POST /api/admin/recovery-pipeline
+ *        body: { vendor: 'tracerfy'|'batchdata', effFrom?, effTo?, limit?, dryRun? }
+ *
+ * Admin/superadmin only (enforced by middleware on /api/admin).
+ * dryRun defaults TRUE — both vendors cost money per call.
+ */
+export async function GET(request: NextRequest) {
+  try {
+    const q = request.nextUrl.searchParams;
+    const effFrom = q.get('effFrom') || undefined;
+    const effTo = q.get('effTo') || undefined;
+    const stage = q.get('stage') as RecoveryStage | null;
+
+    const counts = await stageCounts(effFrom, effTo);
+    const rows = stage && STAGES.includes(stage)
+      ? await leadsAtStage(stage, effFrom, effTo)
+      : [];
+    return NextResponse.json({ success: true, counts, stage, count: rows.length, data: rows });
+  } catch (error) {
+    console.error('GET /api/admin/recovery-pipeline error:', error);
+    return NextResponse.json({ success: false, error: 'Failed to read the pipeline' }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json().catch(() => ({} as any));
+    const vendor = body?.vendor;
+    if (vendor !== 'tracerfy' && vendor !== 'batchdata') {
+      return NextResponse.json({ success: false, error: 'vendor must be tracerfy or batchdata' }, { status: 400 });
+    }
+    const opts = {
+      effFrom: body?.effFrom || undefined,
+      effTo: body?.effTo || undefined,
+      limit: Math.min(Math.max(Number(body?.limit) || 25, 1), 200),
+      dryRun: body?.dryRun !== false,
+      createdBy: body?._createdBy ?? null,
+    };
+    const result = vendor === 'tracerfy'
+      ? await runTracerfyBlast(opts)
+      : await runBatchDataBlast(opts);
+    const counts = await stageCounts(opts.effFrom, opts.effTo);
+    return NextResponse.json({ success: true, ...result, counts });
+  } catch (error: any) {
+    console.error('POST /api/admin/recovery-pipeline error:', error);
+    return NextResponse.json(
+      { success: false, error: error?.message || 'Blast failed' },
+      { status: 500 },
+    );
+  }
+}

@@ -1,4 +1,4 @@
-import { Lead, PipelineEngine } from '@/types/lead';
+import type { Lead, PipelineEngine } from '@/types/lead';
 
 const ENGINE1_DAYS = 90; // New Purchase: policy effective ~90 days after mortgage origination
 const ENGINE2_START = new Date('2022-01-01');

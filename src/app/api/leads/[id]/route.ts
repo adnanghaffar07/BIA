@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getLeadByPropertyId, updateLead, addActivity } from '@/services/storage.service';
 import { getSessionUser, actorLabel } from '@/lib/auth';
 import { recordGradeChange } from '@/services/gradeHistory.service';
+import { insuredEmails, coInsuredEmails } from '@/services/recipients.service';
 
 export async function GET(
   _request: NextRequest,
@@ -13,7 +14,27 @@ export async function GET(
     if (!lead) {
       return NextResponse.json({ success: false, error: 'Lead not found' }, { status: 404 });
     }
-    return NextResponse.json({ success: true, data: lead });
+    /**
+     * Whose each held address is — computed HERE, on the server.
+     *
+     * The card needs this split and the rule lives in recipients.service, but importing
+     * that into the client component would drag in @/lib/constants and inline
+     * NEXT_PUBLIC_REAL_ESTATE_API_KEY into the browser bundle. Sending the answer instead
+     * of the rule keeps one definition without shipping a credential.
+     */
+    const ins = insuredEmails(lead);
+    const co = coInsuredEmails(lead);
+    const held: string[] = Array.isArray((lead as any).emailsAll) ? (lead as any).emailsAll : [];
+    const attributed = new Set([...ins, ...co]);
+    return NextResponse.json({
+      success: true,
+      data: {
+        ...lead,
+        insuredEmailsOnFile: ins,
+        coInsuredEmailsOnFile: co,
+        otherHouseholdEmails: held.filter((e) => !attributed.has(String(e).toLowerCase())),
+      },
+    });
   } catch (error) {
     console.error('GET /api/leads/[id] error:', error);
     return NextResponse.json({ success: false, error: 'Failed to fetch lead' }, { status: 500 });
@@ -231,6 +252,23 @@ export async function PUT(
       changes.push(`Grade override → ${updateData.manualGrade}`
         + `${updateData.gradeOverrideReason ? ` (${updateData.gradeOverrideReason})` : ''}`);
     }
+    /**
+     * Removing an override is an action too.
+     *
+     * The condition above requires a NEW grade, so clearing one fell through every
+     * branch: manualGrade, the reason, who set it and when were all nulled, `grade` was
+     * left standing, and nothing was written anywhere. 22 leads in this database carry a
+     * gradeOverrideAt with no override and not one of them has a record of the removal —
+     * so "who took this lead off its override, and when" had no answer.
+     *
+     * No GradeChange row: the effective grade does not move here. It moves at the next
+     * re-grade, and that pass logs it as a system change. This records the decision that
+     * allowed it, which is the half that was missing.
+     */
+    const clearedOverride = 'manualGrade' in updateData && !updateData.manualGrade && existing.manualGrade;
+    if (clearedOverride) {
+      changes.push(`Grade override removed (was ${existing.manualGrade}) — reverts to the computed grade on the next re-grade`);
+    }
     // Human-readable labels for EVERY editable field on the lead detail page.
     const FIELD_LABELS: Record<string, string> = {
       // Producer workflow / pricing
@@ -304,6 +342,11 @@ export async function PUT(
     }
     if ('manualGrade' in updateData && updateData.manualGrade && updateData.manualGrade !== existing.manualGrade) {
       changeDetails.push({ field: 'Grade', from: display(existing.manualGrade ?? existing.grade), to: display(updateData.manualGrade) });
+    }
+    // Structured too, not just prose: the Grade Changes report reads `changes`, so a
+    // removal that exists only in the sentence would be invisible to every report.
+    if (clearedOverride) {
+      changeDetails.push({ field: 'Grade override', from: display(existing.manualGrade), to: '(none)' });
     }
     for (const k of editedFields) {
       changeDetails.push({ field: label(k), from: display(existing[k]), to: display(updateData[k]) });

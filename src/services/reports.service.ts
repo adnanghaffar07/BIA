@@ -1,8 +1,9 @@
 import { sql } from '@/lib/neon';
 import { eligibilityReasonLabel } from '@/types/carrier';
 import { compareOwnerNames } from './ownerNameMatch.service';
-import { insuredEmails, coInsuredEmails, insuredPhones, coInsuredPhones } from './recipients.service';
+import { insuredEmails, coInsuredEmails, insuredPhones, coInsuredPhones, coInsuredName, assertRecipientCols } from './recipients.service';
 import { cohortLabel } from './cohort';
+import { classifyGradeChange } from './gradeChangeReason';
 
 /**
  * QC / data-validation reports (Frank Jul-2026). The CRM captures producer notes,
@@ -56,6 +57,21 @@ export interface QcRow {
   coInsuredEmailList?: string[];
   insuredPhoneList?: string[];
   coInsuredPhoneList?: string[];
+  /**
+   * Who the co-insured addresses belong to.
+   *
+   * The report carried the co-insured's email but never their name, so an export could
+   * not be addressed — there was no way to write "Dear ___" for the second email in the
+   * cadence, and no way to tell whether an address belonged to a spouse or to whoever
+   * the trace happened to attach.
+   */
+  coInsuredName?: string | null;
+  /**
+   * Grade Changes report only — what the change was FOR (see gradeChangeReason.ts).
+   * Lets the downgrades that a better trace could reverse be separated from the ones no
+   * amount of tracing will.
+   */
+  changeCategory?: string;
   // Reachability report only — the UI tallies the cohort summary from these.
   cohort?: string | null;
   /** Addresses belonging to the named insured — exactly what the push would mail. */
@@ -243,6 +259,10 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
           reason: system
             ? 'System regrade'
             : (r.gradeOverrideReason || (r.a_content ? String(r.a_content).slice(0, 80) : null)),
+          // Classified off the CHANGE's own reason, not the lead's current
+          // gradeOverrideReason — that column holds the latest override and would
+          // mislabel every earlier change on the same lead.
+          changeCategory: classifyGradeChange(r.a_content || r.gradeOverrideReason, r.g_source),
         };
       });
 
@@ -386,12 +406,20 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
       SELECT "propertyId", "owner1FirstName", "owner1LastName", "addressCity", "addressZip",
              "effectiveDate", "cohort", "grade", "manualGrade", "propertyType",
              "travelersEligible", "plymouthEligible", "deepSkipTracedAt",
-             "email1", "email2", "owner2Email", "skipTraceData", "phone1", "phone2"
+             "email1", "email2", "owner2Email", "skipTraceData", "emailsAll", "phone1", "phone2",
+             -- The owner2 pair is REQUIRED, not cosmetic: without it the co-insured
+             -- cannot be matched in the trace payload, their addresses are never taken
+             -- out of the insured's, and this tab over-reports insured reach. It read
+             -- 521 against Renewal Week's 518 for the same range. See RECIPIENT_COLS.
+             "owner2FirstName", "owner2LastName", "owner2Phone"
         FROM "Lead"
        WHERE "effectiveDate" IS NOT NULL
          AND (${from}::text IS NULL OR left("effectiveDate", 10) >= ${from})
          AND (${to}::text   IS NULL OR left("effectiveDate", 10) <= ${to})
        ORDER BY "cohort", "addressCity", "owner1LastName"`;
+    // Checked once, not per row: this is the only report with a hand-written column list
+    // feeding the recipient rules, so it is the only one that can drift away from them.
+    assertRecipientCols(rows[0], 'reachability report');
     return rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => {
@@ -483,6 +511,7 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
           coInsuredEmailList: coEmails,
           insuredPhoneList: insPhones,
           coInsuredPhoneList: coPhones,
+          coInsuredName: coInsuredName(r),
           // Kept so anything still reading the old flags keeps working, but they are now
           // the INSURED's — the only contact the campaign will actually use.
           hasEmail: hasInsuredEmail,

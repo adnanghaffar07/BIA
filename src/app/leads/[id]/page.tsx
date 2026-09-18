@@ -20,6 +20,8 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
 import WavesIcon from '@mui/icons-material/Waves';
+import FactCheckIcon from '@mui/icons-material/FactCheck';
+import ContactPhoneIcon from '@mui/icons-material/ContactPhone';
 import SaveIcon from '@mui/icons-material/Save';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
 import GavelIcon from '@mui/icons-material/Gavel';
@@ -175,8 +177,24 @@ export default function LeadDetailPage() {
   // Return to wherever the producer came from — the actual previous page (filtered
   // Leads, a specific Queue tab, QC Reports, …) — instead of a hardcoded route.
   // Falls back to the leads list only when there's no in-app history (direct open).
+  /**
+   * Where this lead was opened from, carried on the URL so "next lead" keeps it and Back
+   * still knows the way home several leads into a queue.
+   */
+  const cameFrom = typeof window === 'undefined'
+    ? null
+    : new URLSearchParams(window.location.search).get('from');
+  const keepOrigin = (href: string) => (cameFrom ? `${href}?from=${encodeURIComponent(cameFrom)}` : href);
+
   const goBack = () => {
-    if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+    if (typeof window === 'undefined') return;
+    // A lead opened from a QC report carries ?from=<report key>. router.back() alone
+    // lands on the QC page with its React state gone — the chosen report shows its
+    // empty "press Run" state and the pipeline tab is back at the first stage — so the
+    // producer has to rebuild the view they were already looking at. ?restore=1 tells
+    // that page to re-apply the filters it kept and re-run itself.
+    if (cameFrom) { router.push(`/admin/qc?restore=1&from=${encodeURIComponent(cameFrom)}`); return; }
+    if (window.history.length > 1) router.back();
     else router.push('/leads');
   };
 
@@ -201,6 +219,8 @@ export default function LeadDetailPage() {
   const [overridingName, setOverridingName] = useState(false);
   const [verifyingOwner, setVerifyingOwner] = useState(false);
   const [floodChecking, setFloodChecking] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [batchTracing, setBatchTracing] = useState(false);
   const [skipDialogOpen, setSkipDialogOpen] = useState(false);
   const [lostReason, setLostReason] = useState('');
   const [lostStage, setLostStage] = useState('');
@@ -456,7 +476,7 @@ export default function LeadDetailPage() {
       setLead(json.data);
       setProducerNote('');
       if (andNext && nextLeadId) {
-        router.push(`/leads/${nextLeadId}`);
+        router.push(keepOrigin(`/leads/${nextLeadId}`));
       } else {
         setSnackbar({ open: true, msg: 'Lead saved successfully', severity: 'success' });
         prefetchNextLead();
@@ -524,6 +544,36 @@ export default function LeadDetailPage() {
     }
   };
 
+  /**
+   * Second-source trace. Works on any grade — see the API route for why.
+   */
+  const runBatchDataAction = async () => {
+    setBatchTracing(true);
+    try {
+      const res = await fetch(`/api/leads/${id}/batchdata`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ _createdBy: lead?.producerEmail || undefined }),
+      });
+      const j = await res.json();
+      if (!j.success) {
+        setSnackbar({ open: true, msg: j.error || 'BatchData trace failed', severity: 'error' });
+      } else if (!j.matched) {
+        setSnackbar({ open: true, msg: j.message || 'BatchData found nothing for this property', severity: 'error' });
+      } else {
+        const bits = [`${j.phones.length} phone(s)`, `${j.emails.length} email(s)`];
+        if (j.regradedTo) bits.push(`grade → ${j.regradedTo}`);
+        else if (j.overrideStands) bits.push('manual grade kept — review it');
+        setSnackbar({ open: true, msg: `BatchData: ${bits.join(' · ')}`, severity: 'success' });
+        await load();
+      }
+    } catch {
+      setSnackbar({ open: true, msg: 'BatchData trace failed — try again', severity: 'error' });
+    } finally {
+      setBatchTracing(false);
+    }
+  };
+
   const runSkipTraceAction = async () => {
     setSkipTracing(true);
     try {
@@ -586,6 +636,35 @@ export default function LeadDetailPage() {
   };
 
   /** Re-check FEMA flood zone for this lead (FREE — no credits). */
+  /**
+   * Fill in a lead the pipeline never processed: carrier verdicts, flood, grade, pricing.
+   * Free — no vendor credits — which is why it can be a button rather than a request.
+   */
+  const runEnrichAction = async () => {
+    setEnriching(true);
+    try {
+      const res = await fetch(`/api/leads/${id}/enrich`, { method: 'POST' });
+      const json = await res.json();
+      if (json.success) {
+        const moved = json.gradeBefore !== json.gradeAfter;
+        setSnackbar({
+          open: true,
+          msg: json.filled?.length
+            ? `Enriched — ${json.filled.join(', ')}${moved ? ` · grade ${json.gradeBefore ?? '—'} → ${json.gradeAfter ?? '—'}` : ''}`
+            : 'Enrichment ran — no new data was available',
+          severity: 'success',
+        });
+        await load();
+      } else {
+        setSnackbar({ open: true, msg: json.error || 'Enrichment failed', severity: 'error' });
+      }
+    } catch {
+      setSnackbar({ open: true, msg: 'Enrichment failed — try again', severity: 'error' });
+    } finally {
+      setEnriching(false);
+    }
+  };
+
   const runFloodCheckAction = async () => {
     setFloodChecking(true);
     try {
@@ -931,13 +1010,28 @@ export default function LeadDetailPage() {
               <Row label="Land Use" value={lead.landUse} />
               <Row label="Year Built" value={lead.yearBuilt} />
               <Row label="Sq Ft" value={lead.squareFeet ? Number(lead.squareFeet).toLocaleString() : undefined} />
-              <Row label="Bedrooms / Bath" value={
-                (lead.bathroomsFull != null || lead.bathroomsHalf != null)
-                  ? `${lead.bedrooms ?? '—'} bd / ${lead.bathroomsFull ?? 0} full · ${lead.bathroomsHalf ?? 0} half`
-                  : `${lead.bedrooms ?? '—'} bd / ${lead.bathrooms ?? '—'} ba`
-              } />
-              <Row label="Stories" value={lead.stories} />
-              <Row label="Lot Sq Ft" value={lead.lotSquareFeet ? Number(lead.lotSquareFeet).toLocaleString() : undefined} />
+              {/*
+                Condos are not rated on home characteristics.
+
+                The edit form below already hides these; this read-only panel did not, and
+                it is the one people actually look at. A condo card showing "— bd / — ba"
+                reads as missing data, and on 17 Sep 2026 a room spent ten minutes asking
+                whether a blank bedroom count was what made a condo Grade B. It is not:
+                CONDO_EXEMPT_FIELDS in grade.service drops bedrooms, square footage, year
+                built and roof year for condos precisely because no carrier rates them.
+                Showing a field that cannot affect anything invites exactly that question.
+              */}
+              {!isCondoLead && (
+                <>
+                  <Row label="Bedrooms / Bath" value={
+                    (lead.bathroomsFull != null || lead.bathroomsHalf != null)
+                      ? `${lead.bedrooms ?? '—'} bd / ${lead.bathroomsFull ?? 0} full · ${lead.bathroomsHalf ?? 0} half`
+                      : `${lead.bedrooms ?? '—'} bd / ${lead.bathrooms ?? '—'} ba`
+                  } />
+                  <Row label="Stories" value={lead.stories} />
+                  <Row label="Lot Sq Ft" value={lead.lotSquareFeet ? Number(lead.lotSquareFeet).toLocaleString() : undefined} />
+                </>
+              )}
               {/* SFH quoting assumptions (Frank Aug-2026): when the granular detail is missing,
                   show the standard default so producers quote fast — pool in-ground, basement
                   100% finished, garage 2-car. Actual data (if pulled) wins over the assumption. */}
@@ -959,6 +1053,12 @@ export default function LeadDetailPage() {
                   : <>Yes <Box component="span" sx={{ color: '#8a5a00', fontSize: 11 }}>· assume 100% finished</Box></>
               } />
               <Row label="A/C" value={lead.airConditioning ? 'Yes' : 'No'} />
+              {isCondoLead && (
+                <Typography variant="caption" sx={{ display: 'block', mt: 1, color: '#2e5540' }}>
+                  Bedrooms, baths, stories and lot size are hidden — carriers don&apos;t rate
+                  condos on them, and they don&apos;t affect this lead&apos;s grade.
+                </Typography>
+              )}
             </Grid>
 
             {/* Financials */}
@@ -981,6 +1081,33 @@ export default function LeadDetailPage() {
               {renderCarrierEligibility('travelers', 'Travelers', travelersNotes)}
               <Divider sx={{ my: 1 }} />
               {renderCarrierEligibility('plymouth', 'Plymouth Rock', plymouthNotes)}
+
+              {/*
+                Shown only on a lead that has never been enriched.
+
+                Such a lead reports a dash for both carriers, which reads as "declined"
+                and is really "never asked" — and its grade is provisional, because the
+                flood check that could cap it has not run either. The button is offered
+                here, next to the dashes that prompt the question, rather than buried in
+                an admin screen.
+              */}
+              {!lead.travelersEligible && !lead.plymouthEligible && (
+                <Box sx={{ mt: 1.5, p: 1.25, borderRadius: 1, bgcolor: '#fff3d6', border: '1px solid #f0dcae' }}>
+                  <Typography variant="caption" sx={{ color: '#8a5a00', display: 'block', mb: 0.75 }}>
+                    This lead has never been enriched — no carrier verdict and no flood check,
+                    so the grade is provisional.
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={enriching ? <CircularProgress size={14} color="inherit" /> : <FactCheckIcon />}
+                    onClick={runEnrichAction}
+                    disabled={enriching}
+                  >
+                    {enriching ? 'Running…' : 'Run enrichment (free)'}
+                  </Button>
+                </Box>
+              )}
             </Grid>
 
             {/* Flood & Coastal Risk */}
@@ -1093,25 +1220,94 @@ export default function LeadDetailPage() {
                   </Button>
                 )}
               </Stack>
-            ) : !['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade)) ? (
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, mb: 0.5 }}>
-                Skip trace is available on Grade A, B, or C leads.
-              </Typography>
-            ) : !insuredNameOnFile ? (
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, mb: 0.5 }}>
-                Skip trace needs the insured first and last name on file.
-              </Typography>
-            ) : (
-              <Button
-                size="small" variant="contained" color="warning"
-                startIcon={skipTracing ? <CircularProgress size={13} color="inherit" /> : <PersonSearchIcon />}
-                onClick={() => runSkipTraceAction()}
-                disabled={skipTracing}
-                sx={{ mt: 1, mb: 0.5 }}
-              >
-                {skipTracing ? 'Deep tracing…' : 'Deep Skip Trace'}
-              </Button>
-            )}
+            ) : (() => {
+              /**
+               * The button is always here; it refuses rather than disappears.
+               *
+               * A missing control reads as a missing feature — a producer looking at a
+               * card with no deep-trace button cannot tell whether the tool is gone, the
+               * lead is ineligible, or something is broken. Shown disabled with the
+               * reason underneath, the answer is on screen.
+               *
+               * Both blocks are real: Tracerfy's endpoint looks the insured up BY NAME, so
+               * no name means no lookup at all, and the A/B/C rule is Frank's.
+               */
+              const blocked = !['A', 'B', 'C'].includes(String(lead.manualGrade || lead.grade))
+                ? 'Deep skip trace is available on Grade A, B or C leads. BatchData below works on any grade.'
+                : !insuredNameOnFile
+                  ? 'Tracerfy looks the insured up by name — add the first and last name to enable this. BatchData below works from the address alone.'
+                  : null;
+              return (
+                <Box sx={{ mt: 1, mb: 0.5 }}>
+                  <Button
+                    size="small" variant="contained" color="warning"
+                    startIcon={skipTracing ? <CircularProgress size={13} color="inherit" /> : <PersonSearchIcon />}
+                    onClick={() => runSkipTraceAction()}
+                    disabled={skipTracing || !!blocked}
+                  >
+                    {skipTracing ? 'Deep tracing…' : 'Deep Skip Trace'}
+                  </Button>
+                  {blocked && (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                      {blocked}
+                    </Typography>
+                  )}
+                </Box>
+              );
+            })()}
+            {/*
+              BatchData — the second opinion, available on EVERY grade.
+
+              Offered unconditionally because the leads that most need it are the ones the
+              deep trace button refuses: a lead downgraded to D with "Trace pulled no
+              contact info nor DOB" is precisely the one a producer wants to retry, and the
+              A/B/C rule locks them out of it. Only an address is required, because
+              BatchData resolves the person from the property.
+            */}
+            {(() => {
+              /**
+               * Has BatchData already answered for this lead?
+               *
+               * Two independent signals, because either can be true on its own: the
+               * pipeline stamps recoveryBatchDataAt, while a card-button run only leaves
+               * its fingerprint on the stored payload.
+               */
+              const ranBefore = !!lead.recoveryBatchDataAt
+                || lead.skipTraceData?.provider === 'batchdata'
+                || (Array.isArray(lead.skipTraceData?.priorPersons)
+                    && lead.skipTraceData.priorPersons.some((x: any) => x?._foundBy === 'batchdata'));
+              const noAddress = !lead.addressStreet || !lead.addressZip;
+              return (
+              <Box sx={{ mt: 1, mb: 0.5 }}>
+                <Button
+                  size="small" variant="outlined"
+                  startIcon={batchTracing ? <CircularProgress size={13} color="inherit" /> : <ContactPhoneIcon />}
+                  onClick={() => {
+                    // A repeat costs money and usually returns what it returned last
+                    // time. Asking first is the same courtesy the deep trace extends.
+                    if (ranBefore && !confirm(
+                      'BatchData has already run on this lead.\n\n'
+                      + 'Running it again costs another lookup and will usually return the same result. '
+                      + 'Anything it does find is added to what is already held, never replacing it.\n\nRun it again?',
+                    )) return;
+                    runBatchDataAction();
+                  }}
+                  disabled={batchTracing || noAddress}
+                >
+                  {batchTracing
+                    ? 'Checking BatchData…'
+                    : ranBefore ? 'Re-run BatchData' : 'Try BatchData (2nd source)'}
+                </Button>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                  {noAddress
+                    ? 'BatchData looks a person up from the property — this lead has no street and ZIP on file.'
+                    : <>Phones and emails only — BatchData returns no date of birth.
+                        {lead.manualGrade && ' A manual grade is never lifted by this.'}</>}
+                </Typography>
+              </Box>
+              );
+            })()}
+
             {/* Insured-name mismatch (Frank Aug-2026): skip trace found a different name.
                 Show both and let the producer override the on-file name. */}
             {nameMismatch && (
@@ -1804,7 +2000,7 @@ export default function LeadDetailPage() {
                   <Button
                     variant="outlined"
                     endIcon={<SkipNextIcon />}
-                    onClick={() => router.push(nextLeadId ? `/leads/${nextLeadId}` : '/leads')}
+                    onClick={() => router.push(nextLeadId ? keepOrigin(`/leads/${nextLeadId}`) : '/leads')}
                     sx={{ flex: 1 }}
                   >
                     Next
@@ -1821,8 +2017,24 @@ export default function LeadDetailPage() {
             <Stack spacing={1} sx={{ mt: 0.5 }}>
               {lead.activities.map((a: any) => {
                 const det = Array.isArray(a.metadata?.changes) ? a.metadata.changes : [];
+                /**
+                 * A mass operation is marked, and carries the run it belonged to.
+                 *
+                 * Without this a blast trace and a hand-run trace are the same line of
+                 * text, so "did something run across all of these?" can only be answered
+                 * from the database. The run id is the same one the Blast Skip Traces
+                 * report groups by, so this card can be tied back to the whole run.
+                 */
+                const runId: string | null = a.metadata?.blast?.runId ?? null;
                 return (
-                  <Box key={a.id} sx={{ borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, py: 0.25 }}>
+                  <Box
+                    key={a.id}
+                    sx={{
+                      borderLeft: '3px solid',
+                      borderColor: runId ? '#8a5a00' : 'divider',
+                      pl: 1.5, py: 0.25,
+                    }}
+                  >
                     <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
                       {det.length > 0 ? (
                         <Tooltip
@@ -1843,7 +2055,24 @@ export default function LeadDetailPage() {
                           </Typography>
                         </Tooltip>
                       ) : (
-                        <Typography variant="body2">{a.content}</Typography>
+                        <Typography variant="body2">
+                          {runId && (
+                            <Tooltip arrow placement="top-start" title={`Cohort blast run ${runId}`}>
+                              <Box
+                                component="span"
+                                sx={{
+                                  display: 'inline-block', mr: 0.75, px: 0.75, borderRadius: 0.5,
+                                  bgcolor: '#fff3d6', color: '#8a5a00', fontSize: 10,
+                                  fontWeight: 700, letterSpacing: '.06em', verticalAlign: 'middle',
+                                  cursor: 'help',
+                                }}
+                              >
+                                BLAST
+                              </Box>
+                            </Tooltip>
+                          )}
+                          {a.content}
+                        </Typography>
                       )}
                       <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 2 }}>
                         {new Date(a.createdAt).toLocaleString()}
@@ -1864,6 +2093,22 @@ export default function LeadDetailPage() {
         onClose={() => setSkipDialogOpen(false)}
         data={lead.skipTraceData}
         tracedAt={lead.skipTracedAt}
+        onFile={{
+          insured: [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ') || null,
+          insuredDob: lead.owner1Dob ?? lead.reapiDob ?? null,
+          coInsured: [lead.owner2FirstName, lead.owner2LastName].filter(Boolean).join(' ') || null,
+          coInsuredDob: lead.owner2Dob ?? null,
+          coInsuredPhone: lead.owner2Phone ?? null,
+          coInsuredEmail: lead.owner2Email ?? null,
+          emailsAll: lead.emailsAll ?? null,
+          phonesAll: lead.phonesAll ?? null,
+          // Computed on the client from the SAME lead object the card renders, using the
+          // rules the campaign push uses, so the dialog cannot claim reach the push
+          // would not act on.
+          insuredEmails: lead.insuredEmailsOnFile ?? null,
+          coInsuredEmails: lead.coInsuredEmailsOnFile ?? null,
+          otherEmails: lead.otherHouseholdEmails ?? null,
+        }}
       />
 
       <Snackbar

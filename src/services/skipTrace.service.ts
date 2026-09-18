@@ -17,22 +17,55 @@ export interface SkipTraceResult {
 const norm = (s: any) => String(s ?? '').toLowerCase().trim();
 
 /**
- * The skip-trace person whose name matches the INSURED (owner1). Exact first+last,
- * else same-surname with a first-name prefix agreement (≥3 chars) so "Alla"↔"Allan"
- * matches but a same-surname relative like "Al"↔"Albert" does not. Never guesses.
+ * The skip-trace person with a given name. Exact first+last, else same-surname with a
+ * first-name prefix agreement (≥3 chars) so "Alla"↔"Allan" matches but a same-surname
+ * relative like "Al"↔"Albert" does not. Never guesses.
+ *
+ * Exported because the co-insured needs exactly the same treatment as the insured: their
+ * addresses were being read from the single owner2Email column, so a co-insured with
+ * three addresses in the trace payload counted as one. The matching rule must not be
+ * re-implemented per person — that is how the two sides drift apart.
  */
-export function matchInsuredPerson(persons: any[], lead: any): any | null {
+export function matchPersonByName(persons: any[], first: any, last: any): any | null {
   const list = Array.isArray(persons) ? persons : [];
-  const o1First = norm(lead.owner1FirstName);
-  const o1Last = norm(lead.owner1LastName);
+  const f = norm(first);
+  const l = norm(last);
+  if (!f || !l) return null;
   const firstNamesAgree = (a: string, b: string) => {
     if (!a || !b) return false;
-    const [s, l] = a.length <= b.length ? [a, b] : [b, a];
-    return s.length >= 3 && l.startsWith(s);
+    const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+    return short.length >= 3 && long.startsWith(short);
   };
-  return (o1First && o1Last && list.find((p) => norm(p.firstName) === o1First && norm(p.lastName) === o1Last))
-    || (o1Last && o1First && list.find((p) => norm(p.lastName) === o1Last && firstNamesAgree(norm(p.firstName), o1First)))
+  return list.find((p) => norm(p.firstName) === f && norm(p.lastName) === l)
+    || list.find((p) => norm(p.lastName) === l && firstNamesAgree(norm(p.firstName), f))
     || null;
+}
+
+/** The skip-trace person whose name matches the INSURED (owner1). */
+export function matchInsuredPerson(persons: any[], lead: any): any | null {
+  return matchPersonByName(persons, lead?.owner1FirstName, lead?.owner1LastName);
+}
+
+/**
+ * The skip-trace person whose name matches the CO-INSURED (owner2), if we have one.
+ *
+ * Returns null when owner2 carries the INSURED's own name. That is not hypothetical: on
+ * a number of leads the co-insured slots hold a copy of owner1 (e.g. insured "Harold
+ * Boyer", co-insured "Harold Boyer"), so a plain name match returns the insured's own
+ * person record. Treating that as a second person would move the insured's addresses
+ * over to a co-insured who does not exist, and the campaign would be left with nobody
+ * to mail on email 1.
+ */
+export function matchCoInsuredPerson(persons: any[], lead: any): any | null {
+  const first = norm(lead?.owner2FirstName);
+  const last = norm(lead?.owner2LastName);
+  if (!first || !last) return null;
+  if (first === norm(lead?.owner1FirstName) && last === norm(lead?.owner1LastName)) return null;
+
+  const co = matchPersonByName(persons, first, last);
+  // Belt and braces: even with different spellings, the same person record must never
+  // count as both parties.
+  return co && co === matchInsuredPerson(persons, lead) ? null : co;
 }
 
 const personStreet = (p: any) => norm(p?.address?.streetAddress || p?.address?.address);

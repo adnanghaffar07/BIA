@@ -1,5 +1,7 @@
 import { updateLead, addActivity } from '@/services/storage.service';
+import { runBatchData } from './batchData.service';
 import { runTracerfy } from '@/services/tracerfy.service';
+import { coInsuredEmails, coInsuredPhones } from './recipients.service';
 
 /**
  * One place where a deep skip trace is decided and written.
@@ -69,7 +71,7 @@ export type SkipTraceOutcome = {
  * case-insensitively — vendors return the same address in varying case and a duplicate
  * would become a duplicate column in the export.
  */
-function mergeContacts(fresh: string[], existing?: string[] | null): string[] {
+export function mergeContacts(fresh: string[], existing?: string[] | null): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const v of [...fresh, ...(Array.isArray(existing) ? existing : [])]) {
@@ -81,6 +83,42 @@ function mergeContacts(fresh: string[], existing?: string[] | null): string[] {
     out.push(s);
   }
   return out;
+}
+
+/** How many archived people a lead may accumulate before the oldest are dropped. */
+const MAX_PRIOR_PERSONS = 24;
+
+/**
+ * Attach the previous trace's people to a fresh payload.
+ *
+ * Additive on purpose. The stored shape's contract is a top-level `persons` array (read
+ * by the reachability rules and address ranking) plus the vendor's own fields such as
+ * Tracerfy's `hit` (read by the credit accounting and the blast report). Re-shaping it
+ * would break those; adding a sibling key does not.
+ */
+export function withPriorPersons(fresh: any, existing: any): any {
+  if (!fresh || typeof fresh !== 'object') return fresh;
+
+  /**
+   * Each archived person is stamped with the tool that found them.
+   *
+   * Without it the archive is an anonymous pile: a card showing five phone numbers cannot
+   * say which vendor produced which, so nobody can tell what the second tool actually
+   * added — and a modal that labels everything with one vendor's name reads as though the
+   * other vendor's work was thrown away. The tag is written once, here, at the moment the
+   * provenance is still known.
+   *
+   * A Tracerfy payload has no `provider` key (it is the vendor's raw response), so an
+   * untagged archive is Tracerfy's by elimination.
+   */
+  const previousProvider: string = existing?.provider ?? 'tracerfy';
+  const tag = (p: any) => (p && typeof p === 'object' && !p._foundBy ? { ...p, _foundBy: previousProvider } : p);
+
+  const prior = [
+    ...(Array.isArray(existing?.persons) ? existing.persons.map(tag) : []),
+    ...(Array.isArray(existing?.priorPersons) ? existing.priorPersons : []),
+  ].slice(0, MAX_PRIOR_PERSONS);
+  return prior.length ? { ...fresh, priorPersons: prior } : fresh;
 }
 
 /**
@@ -102,6 +140,8 @@ export function buildTraceUpdate(
     email1?: string | null; email2?: string | null;
     /** What earlier traces already found, so a re-trace adds rather than replaces. */
     emailsAll?: string[] | null; phonesAll?: string[] | null;
+    /** The previous trace payload, so its per-person attribution is not thrown away. */
+    skipTraceData?: any;
   },
   result: {
     matched: boolean;
@@ -117,7 +157,16 @@ export function buildTraceUpdate(
     skipTracedAt: now,
     deepSkipTracedAt: now,
     // The whole response, so the card can surface DNC / TCPA / carrier / rank per number.
-    skipTraceData: result.raw ?? null,
+    //
+    // The PREVIOUS trace's people are carried forward alongside it. This column was
+    // replaced outright on every run, so re-tracing a lead destroyed the earlier vendor's
+    // per-person attribution — and that attribution is what decides whether an address
+    // belongs to the insured. A lead traced by Tracerfy (which returns a DOB, DNC and
+    // carrier flags) and later re-traced by BatchData (which returns none of those) would
+    // silently lose them, and an insured address found by the first vendor would stop
+    // being counted as the insured's. Bounded, so a lead traced repeatedly cannot grow an
+    // unbounded blob in a column that already caused one transfer-quota outage.
+    skipTraceData: withPriorPersons(result.raw ?? null, lead.skipTraceData),
     // The name Tracerfy returned. Shown next to the on-file name with an override
     // button; never applied automatically.
     skipTraceOwnerName: result.ownerName ?? null,
@@ -155,6 +204,17 @@ export function buildTraceUpdate(
   }
 
   Object.assign(update, result.insuredPatch ?? {});
+
+  /**
+   * The co-insured's own contact fields.
+   *
+   * insuredPatch already carries their NAME and date of birth; their email and phone
+   * were left in the household list, so a card could hold suma_sreejith@hotmail.com
+   * while the Co-Insured Email box sat empty. Email 2 of the cadence is addressed to
+   * this person — an address they can be reached at has to reach a field.
+   */
+  const afterTrace = { ...lead, ...update } as any;
+  Object.assign(update, coInsuredContactPatch(afterTrace, coInsuredEmails(afterTrace), coInsuredPhones(afterTrace)));
   return update;
 }
 
@@ -174,8 +234,53 @@ export async function traceAndApply(
    */
   blast?: { runId: string },
 ): Promise<SkipTraceOutcome> {
-  const result = await runTracerfy(lead as any);
+  const tracerfy = await runTracerfy(lead as any);
   const now = new Date();
+
+  /**
+   * BatchData, only where Tracerfy came back without an address.
+   *
+   * The condition is "no email", not "no match": a Tracerfy hit that returns phones and
+   * no email leaves the lead just as unmailable as a miss, and 478 leads in this book are
+   * in exactly that state. Re-running Tracerfy on them returns the same nothing, which is
+   * the whole reason for a second source.
+   *
+   * The payload is stored under a top-level `persons` array because that is what
+   * recipients.service reads. BatchData nests its people under results.persons, so
+   * storing its response verbatim would leave the addresses present in the record and
+   * invisible to every reach count — the same silent shape mismatch that had the
+   * Reachability tab reporting 521 against 518.
+   *
+   * A BatchData failure never loses the Tracerfy result: the trace still persists, and
+   * the error is returned so a blast can stop rather than record hundreds of false misses
+   * the way the Tracerfy run did when its account ran dry.
+   */
+  let result: typeof tracerfy = tracerfy;
+  let provider: 'tracerfy' | 'batchdata' = 'tracerfy';
+  let batchDataError: string | null = null;
+
+  const tracerfyUsable = tracerfy.matched && tracerfy.emails.length > 0;
+  if (!tracerfyUsable && process.env.BATCHDATA_API_KEY) {
+    try {
+      const bd = await runBatchData(lead);
+      if (bd.matched && (bd.emails.length > 0 || bd.phones.length > 0)) {
+        provider = 'batchdata';
+        result = {
+          ...tracerfy,
+          matched: true,
+          emails: bd.emails,
+          phones: bd.phones,
+          personCount: bd.personCount,
+          ownerName: bd.ownerName ?? tracerfy.ownerName,
+          insuredPatch: Object.keys(bd.insuredPatch).length ? bd.insuredPatch : tracerfy.insuredPatch,
+          raw: { provider: 'batchdata', persons: bd.persons, ownerVerified: bd.ownerVerified, raw: bd.raw },
+        };
+      }
+    } catch (err: any) {
+      batchDataError = err?.message ?? 'BatchData call failed';
+      console.error(`[skiptrace] BatchData fallback failed for ${lead.propertyId}:`, batchDataError);
+    }
+  }
 
   const recoveredPhone = Boolean(result.phones[0] && !lead.phone1);
   const recoveredEmail = Boolean(result.emails[0] && !lead.email1);
@@ -194,16 +299,51 @@ export async function traceAndApply(
   const coInsured = [insuredPatch.owner2FirstName, insuredPatch.owner2LastName]
     .filter(Boolean).join(' ') || null;
 
+  /**
+   * A blast says so, on the card.
+   *
+   * ── Why (Frank, 17 Sep 2026) ────────────────────────────────────────────
+   * "Would that have been noted on the activity log?" — asked six times about a mass
+   * trace, and nobody in the room could answer from a card. Blast traces WERE being
+   * logged, but the row read word-for-word the same as a hand-run trace and `createdBy`
+   * was usually empty, so the only honest answer was "open the database". Twenty
+   * minutes went into reconstructing what one line could have stated.
+   *
+   * The run id goes into the metadata as well as the text: it is what groups a run in
+   * the Blast Skip Traces report, so a card can be traced to the run and the run back
+   * to every card it touched.
+   */
+  /**
+   * WHICH provider produced the data, on the line itself.
+   *
+   * Two vendors now write the same kind of row. Without naming the one that answered,
+   * "is the second source actually recovering anything" can only be settled by reading
+   * jsonb — which is the position the blast rows were in before A44.
+   */
+  const via = provider === 'batchdata' ? ' via BatchData' : '';
+  const summary = result.matched
+    ? `Skip trace${via}: ${result.phones.length} phone(s), ${result.emails.length} email(s)`
+      + `${result.personCount ? `, ${result.personCount} person(s) on loan` : ''}`
+      + `${coInsured ? `, co-insured ${coInsured}` : ''}`
+    : `Skip trace: no match found${batchDataError ? ' · BatchData fallback errored' : ''}`;
+
   await addActivity(
     lead.id,
     'skip_trace',
-    result.matched
-      ? `Skip trace: ${result.phones.length} phone(s), ${result.emails.length} email(s)`
-        + `${result.personCount ? `, ${result.personCount} person(s) on loan` : ''}`
-        + `${coInsured ? `, co-insured ${coInsured}` : ''}`
-      : 'Skip trace: no match found',
-    { phones: result.phones, emails: result.emails, persons: result.personCount, insuredPatch },
-    createdBy ?? undefined,
+    blast ? `Cohort blast — ${summary.replace(/^Skip trace: /, '')}` : summary,
+    {
+      phones: result.phones,
+      emails: result.emails,
+      persons: result.personCount,
+      insuredPatch,
+      provider,
+      ...(batchDataError ? { batchDataError } : {}),
+      ...(blast ? { blast: { runId: blast.runId, ranBy: createdBy ?? null } } : {}),
+    },
+    // A blast that nobody is signed in for still has an author: the run. Left null, the
+    // feed showed a timestamp and nothing else, which reads as though it happened by
+    // itself — the precise impression that made the mass update feel untraceable.
+    (blast ? (createdBy ? `blast · ${createdBy}` : 'blast (system)') : createdBy) ?? undefined,
   );
 
   return {
@@ -213,6 +353,40 @@ export async function traceAndApply(
     recoveredPhone,
     recoveredEmail,
     coInsured,
-    credits: result.matched ? 15 : 0,
+    /**
+     * TRACERFY's bill, not the combined one.
+     *
+     * Read off `result` this said 15 whenever the fallback rescued a lead — reporting a
+     * charge from a vendor that missed and therefore billed zero. The Blast Skip Traces
+     * report quotes this as spend, so it would have overstated Tracerfy's cost by 15
+     * credits on precisely the leads Tracerfy failed to trace. BatchData's own billing is
+     * not reported in its response and is not guessed at here.
+     */
+    credits: tracerfy.matched ? 15 : 0,
   };
+}
+
+/**
+ * Put the co-insured's contact details in the co-insured's own fields.
+ *
+ * ── Why this is needed ──────────────────────────────────────────────────────
+ * A trace returns addresses for a household and the rules attribute them per person, but
+ * only the INSURED's ever reached a column. So a card could hold
+ * `suma_sreejith@hotmail.com` in its "all emails" list, plainly the co-insured Suma
+ * Sreejith's, while the Co-Insured Email box sat empty — the data was in the CRM and not
+ * where anyone works. Email 2 of the cadence goes to this person; it needs an address in
+ * a field, not a string in a list.
+ *
+ * Empty slots only. A producer's own entry is never overwritten by vendor data, which is
+ * the same rule the insured's slots follow.
+ */
+export function coInsuredContactPatch(
+  leadAfterTrace: any,
+  coEmails: string[],
+  coPhones: string[],
+): Record<string, string> {
+  const patch: Record<string, string> = {};
+  if (coEmails[0] && !leadAfterTrace.owner2Email) patch.owner2Email = coEmails[0];
+  if (coPhones[0] && !leadAfterTrace.owner2Phone) patch.owner2Phone = coPhones[0];
+  return patch;
 }

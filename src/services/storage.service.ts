@@ -1,5 +1,5 @@
 import sql, { pool } from '@/lib/neon';
-import { LeadStatus } from '@/types/lead';
+import type { LeadStatus } from '@/types/lead';
 import { assignPipelineEngine, getRenewalTargetDate } from './pipeline.service';
 import { zipsForCountyName } from '@/lib/constants';
 
@@ -39,6 +39,9 @@ const LEAD_COLS = [
   // here would mean silently mailing the control group.
   'holdoutAssignedAt', 'holdoutCohort',
   'gradeAtPull', 'gradeAtPullAt',
+  'isolatedAt', 'isolatedFromStatus', 'isolatedReason',
+  'recoveryStage', 'recoveryEnteredAt', 'recoveryTracerfyAt', 'recoveryBatchDataAt',
+  'recoveredAt', 'recoveredBy', 'recoveredEmail', 'recoveredPhone',
   'publishedBandLow', 'publishedBandHigh', 'publishedBandAt',
   'bandHit', 'bandVariancePct', 'bandMeasuredAt',
   // Cohort (migration 021) — the renewal week, maintained by the lead_cohort_trg
@@ -109,6 +112,9 @@ const CRM_ONLY_FIELDS = new Set([
   // here would mean silently mailing the control group.
   'holdoutAssignedAt', 'holdoutCohort',
   'gradeAtPull', 'gradeAtPullAt',
+  'isolatedAt', 'isolatedFromStatus', 'isolatedReason',
+  'recoveryStage', 'recoveryEnteredAt', 'recoveryTracerfyAt', 'recoveryBatchDataAt',
+  'recoveredAt', 'recoveredBy', 'recoveredEmail', 'recoveredPhone',
   'publishedBandLow', 'publishedBandHigh', 'publishedBandAt',
   'bandHit', 'bandVariancePct', 'bandMeasuredAt',
   'owner1FirstName', 'owner1LastName',
@@ -634,6 +640,19 @@ export async function updateLead(
   data: Partial<{
     // core CRM
     status: LeadStatus; grade: string;
+    // Isolation (register A41): the status a lead held before being parked as
+    // unreachable, so putting it back restores exactly what the producer had set.
+    recoveryStage: string | null;
+    recoveryEnteredAt: Date | string | null;
+    recoveryTracerfyAt: Date | string | null;
+    recoveryBatchDataAt: Date | string | null;
+    recoveredAt: Date | string | null;
+    recoveredBy: string | null;
+    recoveredEmail: boolean | null;
+    recoveredPhone: boolean | null;
+    isolatedAt: Date | string | null;
+    isolatedFromStatus: string | null;
+    isolatedReason: string | null;
     travelersEligible: string; travelersNotes: any;
     plymouthEligible: string; plymouthNotes: any;
     travelersEligibilityReason: string; plymouthEligibilityReason: string;

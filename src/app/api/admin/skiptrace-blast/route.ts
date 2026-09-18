@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getLeadsFromDb, getLeadByPropertyId } from '@/services/storage.service';
 import { getSessionUser, actorLabel } from '@/lib/auth';
 import { traceAndApply, skipTraceBlocker, effectiveGrade } from '@/services/skipTraceApply.service';
-import { getCreditStatus } from '@/services/credits.service';
+import { isRunFatal, VendorError } from '@/services/vendorErrors';
 import { insuredEmails } from '@/services/recipients.service';
 
 /**
@@ -139,12 +139,21 @@ export async function GET(req: NextRequest) {
     if (invalid) return NextResponse.json({ success: false, error: invalid }, { status: 400 });
 
     const t = await triage(f);
-    // Whether the balance can cover this run is the decision the operator is about
-    // to make, so it belongs in the same response as the estimate.
-    const credits = await getCreditStatus();
+    /**
+     * No balance is quoted here any more.
+     *
+     * Tracerfy publishes no balance endpoint, so the only figure available was one
+     * somebody had typed into AppConfig minus what had been spent since. The moment the
+     * account was topped up outside the CRM that went stale, and it told people there
+     * were zero credits while the vendor dashboard showed a balance — a warning that is
+     * wrong in the alarming direction gets believed once and ignored ever after.
+     *
+     * The ceiling below is still worth saying, because it is arithmetic on THIS run and
+     * cannot go stale. Whether the account can pay for it is answered by the run itself:
+     * the vendor refuses, the blast stops on that call and reports it.
+     */
     return NextResponse.json({
       success: true,
-      credits,
       range: { from: f.effectiveDate, to: f.effectiveTo },
       matching: t.candidates.length,
       eligible: t.eligible.length,
@@ -193,8 +202,8 @@ export async function POST(req: NextRequest) {
     }> = [];
     let hit = 0, miss = 0, failed = 0, creditsSpent = 0;
     let recoveredPhone = 0, recoveredEmail = 0, coInsuredFound = 0;
-    /** The vendor refused for want of balance — end the run, do not retry into it. */
-    let outOfCredits = false;
+    /** The vendor refused on account grounds — end the run, do not retry into it. */
+    let stopped: { reason: 'no_credits' | 'auth'; vendor: string; detail: string } | null = null;
 
     for (const candidate of batch) {
       // Re-read immediately before tracing: another admin's blast, or the card
@@ -232,7 +241,7 @@ export async function POST(req: NextRequest) {
         });
 
         /**
-         * An empty balance is not a bad lead — it is the end of the run.
+         * An account fault is not a bad lead — it is the end of the run.
          *
          * A failed trace leaves deepSkipTracedAt unstamped, so the lead stays eligible
          * and the next chunk picks it up again. With credits exhausted that is a spin:
@@ -241,11 +250,13 @@ export async function POST(req: NextRequest) {
          * happened on this cohort — roughly 290 pointless calls after the balance hit
          * zero, none of them charged but none of them useful either.
          *
-         * So: stop the whole run, and say why. Out of credits is the operator's problem
-         * to fix, not something to retry into.
+         * The vendor's own response decides this now. Matching "insufficient credits" in
+         * a message string only caught the wording we had happened to see; a 402 whose
+         * body reads "Payment required", or a rejected key, sailed straight past it.
          */
-        if (/insufficient credits/i.test(message) || /\b402\b/.test(message)) {
-          outOfCredits = true;
+        if (isRunFatal(err)) {
+          const e = err as VendorError;
+          stopped = { reason: e.fault === 'auth' ? 'auth' : 'no_credits', vendor: e.vendor, detail: e.detail };
           break;
         }
       }
@@ -261,14 +272,13 @@ export async function POST(req: NextRequest) {
       processed, hit, miss, failed, creditsSpent,
       recovered: { phone: recoveredPhone, email: recoveredEmail, coInsured: coInsuredFound },
       remaining,
-      outOfCredits,
-      ...(outOfCredits
-        ? { error: `Out of skip-trace credits — ${remaining} leads in this cohort were not traced. Top up, then re-run: nothing already traced will be charged again.` }
-        : {}),
-      // Nothing left to trace, nothing traceable this round, or no balance to trace
-      // with — either way, stop. Without the last one a driver loops forever against a
-      // set that can never shrink.
-      done: remaining === 0 || processed === 0 || outOfCredits,
+      stopped: stopped ? { ...stopped, remaining } : null,
+      // Kept for anything still reading the old flag.
+      outOfCredits: stopped?.reason === 'no_credits',
+      // Nothing left to trace, nothing traceable this round, or an account the vendor
+      // will not serve — either way, stop. Without the last one a driver loops forever
+      // against a set that can never shrink.
+      done: remaining === 0 || processed === 0 || !!stopped,
       results,
     });
   } catch (err: any) {
