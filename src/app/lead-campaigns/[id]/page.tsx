@@ -22,6 +22,7 @@ import CampaignMailboxPanel from '@/components/CampaignMailboxPanel';
 import CampaignSettingsPanel from '@/components/CampaignSettingsPanel';
 import CampaignSequencePanel from '@/components/CampaignSequencePanel';
 import CampaignAnalyticsPanel from '@/components/CampaignAnalyticsPanel';
+import CampaignRepliesPanel from '@/components/CampaignRepliesPanel';
 
 /**
  * One campaign, managed from the CRM.
@@ -56,7 +57,10 @@ const TAB_ANALYTICS = 0;
 const TAB_LEADS = 1;
 const TAB_SEQUENCE = 2;
 const TAB_MAILBOXES = 3;
-const TAB_SETTINGS = 4;
+// Replies sits beside the mailboxes because that is where the conversation physically
+// lives — a reply arrives in one of those inboxes, and the two are read together.
+const TAB_REPLIES = 4;
+const TAB_SETTINGS = 5;
 
 export default function CampaignDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -288,6 +292,7 @@ export default function CampaignDetailPage() {
               <Tab label={`Leads${totals?.count ? ` (${totals.count})` : ''}`} />
               <Tab label={tabLabel('Email sequence', !!noSteps)} />
               <Tab label={tabLabel('Sending mailboxes', !!noMailboxes)} />
+              <Tab label="Replies" />
               <Tab label={tabLabel('Settings', !detail.unsubscribeHeader)} />
             </Tabs>
           </Box>
@@ -367,6 +372,8 @@ export default function CampaignDetailPage() {
               onSaved={() => { load(); }}
             />
           )}
+
+          {tab === TAB_REPLIES && <CampaignRepliesPanel campaignId={detail.id} />}
 
           {tab === TAB_SETTINGS && (
             <CampaignSettingsPanel

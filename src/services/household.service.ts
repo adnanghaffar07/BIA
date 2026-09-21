@@ -4,7 +4,7 @@ import { insuredEmails, coInsuredEmails } from './recipients.service';
  * Household identity — who counts as "the same people" (directive Sec. 11.2, 7.1).
  *
  * ── The problem this solves ─────────────────────────────────────────────────
- * Instantly deduplicates by email address. That is not the same question. Frank's rule is
+ * The campaign tool deduplicates by email address. That is not the same question. Frank's rule is
  * "Insured and co-insured are one household. Engagement by either confirms the household
  * and stops sends to the other. Suppression, opt-out and DNC are household-level."
  *

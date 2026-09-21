@@ -36,7 +36,10 @@ export type MailboxRow = {
   statusLabel: string;
 };
 
-const ACCOUNTS_URL = 'https://app.instantly.ai/app/accounts';
+// The vendor's own accounts page, for the one action their API does not expose
+// (reconnecting a mailbox). The hostname is unavoidable — it is where the user has to
+// go — but it appears only as an href: the menu item reads "Reconnect".
+const VENDOR_ACCOUNTS_URL = 'https://app.instantly.ai/app/accounts';
 
 export default function MailboxRowActions({
   mailbox, onChanged,
@@ -99,7 +102,7 @@ export default function MailboxRowActions({
       {/* Two items, matching the platform's own menu. Warmup lives on the row icon and
           pause/resume stay available on the API without cluttering this. */}
       <Menu anchorEl={anchor} open={!!anchor} onClose={close}>
-        <MenuItem component="a" href={ACCOUNTS_URL} target="_blank" rel="noopener noreferrer" onClick={close}>
+        <MenuItem component="a" href={VENDOR_ACCOUNTS_URL} target="_blank" rel="noopener noreferrer" onClick={close}>
           <ListItemIcon><RefreshIcon fontSize="small" /></ListItemIcon>
           <ListItemText primary="Reconnect" />
         </MenuItem>

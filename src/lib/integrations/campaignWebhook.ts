@@ -13,7 +13,7 @@ export const WEBHOOK_HEADER = 'x-bia-campaign-key';
 /**
  * The same secret, accepted from the query string.
  *
- * Instantly's webhook UI offers a URL and nothing else — no custom-header field. A header
+ * The campaign tool's webhook UI offers a URL and nothing else — no custom-header field. A header
  * we cannot send is a 401 on every delivery, and the dashboard would keep showing the
  * webhook as "Active" the whole time, because from its side the request left successfully.
  * That is a silent integration failure, which is the worst kind: replies would arrive,

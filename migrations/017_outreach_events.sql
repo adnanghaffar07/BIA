@@ -1,5 +1,5 @@
 -- Frank Sep-2026, pre-launch checklist T1.1 — campaign state per lead + an outreach
--- event log. This is the local half of the Instantly integration.
+-- event log. This is the local half of the campaign-tool integration.
 --
 -- The campaign platform is the system of record: campaigns, sequences, schedules and
 -- sender mailboxes live there and are addressed only by the string IDs it assigns.

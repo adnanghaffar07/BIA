@@ -5,7 +5,7 @@
 -- confirmed · dedup at both levels evidenced".
 --
 -- WHY THIS CANNOT LIVE IN THE EMAIL TOOL
--- Instantly suppresses by email address, inside one workspace, for as long as that
+-- The campaign tool suppresses by email address, inside one workspace, for as long as that
 -- workspace exists. Three things break on that alone:
 --
 --   · It has no idea that two addresses are one household. An insured who says "stop"
@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS "Suppression" (
   -- 'unsubscribe' | 'complaint' | 'hard_bounce' | 'not_interested' | 'dnc' | 'manual'
   "reason"        TEXT NOT NULL,
 
-  -- 'instantly' | 'crm' | 'producer' | 'import'
+  -- 'campaign_tool' | 'crm' | 'producer' | 'import'
+  -- Never the vendor's brand name: it is stored, exported and read by people, and the
+  -- platform is replaceable. See the header of lib/integrations/leadCampaign.ts.
   "source"        TEXT,
 
   "createdAt"     TIMESTAMP NOT NULL DEFAULT NOW(),

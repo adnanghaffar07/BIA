@@ -4,6 +4,10 @@
 // Routes queries over Neon's HTTP transport (poolQueryViaFetch) so it works
 // without the optional `ws` package. Each migration file should be a single
 // statement (e.g. one ALTER TABLE with multiple ADD COLUMN IF NOT EXISTS clauses).
+//
+// A file with MORE THAN ONE statement will fail here — use
+// scripts/run-migration-multi.mjs instead. Every migration from 026 onward is
+// multi-statement (a table plus its indexes), so that is the usual case now.
 
 import { readFileSync } from 'node:fs';
 import { Pool, neonConfig } from '@neondatabase/serverless';

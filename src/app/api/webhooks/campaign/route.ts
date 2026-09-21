@@ -280,7 +280,7 @@ export async function POST(request: NextRequest) {
     if (kind === 'unsubscribe' || kind === 'complaint') {
       const r = await suppressWithClient(client, {
         leadId: row.leadId, email: p.email, reason: kind,
-        householdKey: householdKeyOf(lead), source: 'instantly',
+        householdKey: householdKeyOf(lead), source: 'campaign_tool',
         note: `${kind} via campaign ${p.campaignId ?? '(unknown)'}`,
       });
       suppression = { scope: r.scope, reason: kind };
@@ -297,7 +297,7 @@ export async function POST(request: NextRequest) {
         || /(does not exist|no such user|unknown recipient|550)/i.test(String(p.bounceReason ?? ''));
       if (hard) {
         const r = await suppressWithClient(client, {
-          leadId: row.leadId, email: p.email, reason: 'hard_bounce', source: 'instantly',
+          leadId: row.leadId, email: p.email, reason: 'hard_bounce', source: 'campaign_tool',
           note: p.bounceReason ?? null,
         });
         suppression = { scope: r.scope, reason: 'hard_bounce' };
@@ -311,7 +311,7 @@ export async function POST(request: NextRequest) {
        */
       const r = await suppressWithClient(client, {
         leadId: row.leadId, email: p.email, reason: 'not_interested',
-        householdKey: householdKeyOf(lead), source: 'instantly',
+        householdKey: householdKeyOf(lead), source: 'campaign_tool',
         note: 'explicit stop in reply text',
       });
       suppression = { scope: r.scope, reason: 'not_interested' };

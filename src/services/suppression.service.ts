@@ -234,7 +234,7 @@ export async function suppressWithClient(
        ("id","scope","email","householdKey","leadId","reason","source","createdBy","note")
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [globalThis.crypto.randomUUID(), scope, email, householdKey, leadId,
-      reason, input.source ?? 'instantly', input.createdBy ?? null, input.note ?? null],
+      reason, input.source ?? 'campaign_tool', input.createdBy ?? null, input.note ?? null],
   );
   return { scope, created: true };
 }

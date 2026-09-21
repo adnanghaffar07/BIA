@@ -542,7 +542,11 @@ export type VendorEmail = {
   to_address_email_list?: string;
   timestamp_email?: string;
   is_unread?: boolean;
-  /** 1 = outbound (sent by us). Inbound replies carry a different value. */
+  /**
+   * Message type. Observed live 21 Sep 2026: 1 = campaign send, 2 = the prospect's reply,
+   * 3 = a reply we sent by hand through /emails/reply. So "not 1" does NOT mean inbound —
+   * compare the from address against `eaccount` instead.
+   */
   ue_type?: number;
   lead_id?: string;
   /** Vendor's own sequence coordinate, e.g. "0_0_0". NOT a plain step number. */
@@ -551,7 +555,10 @@ export type VendorEmail = {
 
 /** Recent messages — the raw feed behind replies. */
 export async function listEmails(opts?: { campaignId?: string; limit?: number }): Promise<VendorEmail[]> {
-  const params = new URLSearchParams({ limit: String(opts?.limit ?? PAGE_SIZE) });
+  // The platform rejects limit > 100 outright — "querystring/limit must be <= 100", a 400,
+  // not a silent truncation. Clamped rather than passed through so a caller asking for
+  // more gets the most the API allows instead of an error page.
+  const params = new URLSearchParams({ limit: String(Math.min(opts?.limit ?? PAGE_SIZE, PAGE_SIZE)) });
   if (opts?.campaignId) params.set('campaign_id', opts.campaignId);
   const json = await getJson<{ items?: VendorEmail[] }>(`/emails?${params.toString()}`);
   return json.items ?? [];
@@ -571,7 +578,8 @@ export async function listEmailsPage(opts: {
   limit?: number;
   startingAfter?: string;
 }): Promise<{ items: VendorEmail[]; nextCursor: string | null }> {
-  const params = new URLSearchParams({ limit: String(opts.limit ?? PAGE_SIZE) });
+  // Same 100 ceiling as listEmails above.
+  const params = new URLSearchParams({ limit: String(Math.min(opts.limit ?? PAGE_SIZE, PAGE_SIZE)) });
   if (opts.campaignId) params.set('campaign_id', opts.campaignId);
   if (opts.startingAfter) params.set('starting_after', opts.startingAfter);
   const json = await getJson<{ items?: VendorEmail[]; next_starting_after?: string }>(
@@ -700,4 +708,47 @@ export async function getLeadCountsByCampaign(
     cursor = json.next_starting_after;
   }
   return { counts, truncated };
+}
+
+// ─── Replies (Unibox) ─────────────────────────────────────────────────────────
+
+/**
+ * Send a reply into an existing thread.
+ *
+ * Verified live 21 Sep 2026. The required shape is not in any doc we have — it was
+ * established by probing, one 400 at a time:
+ *
+ *   POST /emails/reply
+ *     reply_to_uuid  the INBOUND message's `id` (not its message_id — see VendorEmail)
+ *     eaccount       the mailbox that owns the thread
+ *     subject        string
+ *     body           an OBJECT { html?, text? } — a string here fails validation
+ *
+ * `reply_to_uuid` is what threads it. Composing a fresh message to the same person
+ * instead would arrive as a disconnected email from a stranger, which is worse than not
+ * replying at all: the prospect answered a named producer and gets a reply that looks
+ * like a new cold approach.
+ */
+export async function replyToEmail(input: {
+  replyToUuid: string;
+  eaccount: string;
+  subject: string;
+  text?: string;
+  html?: string;
+}): Promise<VendorEmail> {
+  if (!input.text && !input.html) throw new Error('A reply needs a body.');
+  return postJson<VendorEmail>('/emails/reply', {
+    reply_to_uuid: input.replyToUuid,
+    eaccount: input.eaccount,
+    subject: input.subject,
+    body: {
+      ...(input.html ? { html: input.html } : {}),
+      ...(input.text ? { text: input.text } : {}),
+    },
+  });
+}
+
+/** One message, by the vendor's own id. Used to read a full body the webhook truncated. */
+export async function getEmail(id: string): Promise<VendorEmail> {
+  return getJson<VendorEmail>(`/emails/${encodeURIComponent(id)}`);
 }

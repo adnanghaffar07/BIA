@@ -115,7 +115,7 @@ export async function buildSendList(
   const exclusions: Exclusion[] = [];
   const usedAddresses = new Set<string>();
   const perHousehold = new Map<string, number>();
-  /** Which household keys already have somebody on the list — the dedup Instantly cannot do. */
+  /** Which household keys already have somebody on the list — the dedup the campaign tool cannot do. */
   const householdOnList = new Set<string>();
 
   const exclude = (l: Record<string, unknown>, reason: ExclusionReason, detail: string) => {

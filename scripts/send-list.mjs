@@ -73,6 +73,6 @@ console.table([...byCohort.entries()].sort().map(([cohort, recipients]) => ({
 
 const dupes = list.exclusions.filter((e) => e.reason === 'duplicate_household' || e.reason === 'duplicate_address');
 if (dupes.length) {
-  console.log(`\n--- the repeats Instantly would not have caught (first 10 of ${dupes.length}) ---`);
+  console.log(`\n--- the repeats the campaign tool would not have caught (first 10 of ${dupes.length}) ---`);
   for (const d of dupes.slice(0, 10)) console.log(`  ${d.leadId}  ${d.reason}  ${d.detail}`);
 }

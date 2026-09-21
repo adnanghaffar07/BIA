@@ -28,6 +28,8 @@ import GavelIcon from '@mui/icons-material/Gavel';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import SkipTraceDialog from '@/components/SkipTraceDialog';
+import CallDispositionPanel from '@/components/CallDispositionPanel';
+import QuoteOutcomePanel from '@/components/QuoteOutcomePanel';
 import { useAuth } from '@/context/AuthContext';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1177,6 +1179,21 @@ export default function LeadDetailPage() {
 
           </Grid>
         </Section>
+
+        {/*
+          Call logging (directive Sec. 10.5) — above the worksheet because it is what a
+          producer does FIRST and what cannot be reconstructed later. An email event can
+          be recovered from the tool's logs weeks afterwards; a call nobody logged never
+          happened.
+        */}
+        <Box sx={{ mb: 3 }}>
+          <CallDispositionPanel leadId={String(lead.propertyId ?? lead.id)} />
+        </Box>
+
+        {/* What happened after the call — Sec. 10.9 band accuracy, Sec. 10.6 the loss. */}
+        <Box sx={{ mb: 3 }}>
+          <QuoteOutcomePanel leadId={String(lead.propertyId ?? lead.id)} />
+        </Box>
 
         <Divider textAlign="center"><Typography variant="body1" color="text.secondary" sx={{ fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>PRODUCER WORKSHEET</Typography></Divider>
 
