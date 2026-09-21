@@ -303,11 +303,51 @@ function buildApiUpdate(
  * Dedup rule:
  *   Same propertyId + same owner  → UPDATE (preserve CRM fields)
  *   Same propertyId + new owner   → INSERT new record (new homeowner event)
+ *
+ * ── The owner-change branch does not work, and has never worked ─────────────
+ * "Lead"."propertyId" carries a UNIQUE index (Lead_propertyId_key). The branch below
+ * builds the new owner's row with a fresh `id` but the SAME `propertyId`, so the INSERT
+ * is rejected with 23505 every time. Reproduced against the live schema on 21 Sep 2026.
+ *
+ * Until now that rejection was swallowed by the catch and counted as `skipped`, which is
+ * also what a malformed payload counts as — so a property changing hands looked exactly
+ * like a bad record, and the new homeowner never entered the CRM at all. Nobody could
+ * have noticed: the old owner's card is still there, still looks complete, and the count
+ * of skips has no reason attached to it.
+ *
+ * This is the real shape of register A13 / directive Sec. 10.1. The directive describes
+ * the opposite failure — "an automated write can hit every row sharing a property" — but
+ * no write can do that: updateLead() resolves propertyId to the lead id and writes
+ * `WHERE "id"`, and the unique index means a property can only ever have one row. The
+ * risk is not a write hitting two rows. It is that a second row cannot exist, so the new
+ * owner is dropped.
+ *
+ * ── Why this is reported and not repaired here ──────────────────────────────
+ * Repairing it means one of two things, and both are larger than they look:
+ *
+ *   · renaming the superseded row's propertyId — but propertyId is the lead's URL
+ *     identifier, so every existing link to that card breaks; or
+ *   · dropping the unique index and adding a superseded flag — correct, and what Sec. 11.2
+ *     ("append-only, never overwritten") ultimately needs, but then EVERY count in the
+ *     system silently includes the old owner's row until each one is taught to exclude it.
+ *
+ * The second is the right answer and it is not a change to make to the Lead table on the
+ * morning of go-live. What changes now is that the failure stops being invisible: it is
+ * counted on its own, logged with the property, and returned so the weekly pull reports
+ * it rather than absorbing it into "skipped".
  */
 export async function upsertLeads(properties: any[]): Promise<{
   created: number; updated: number; skipped: number;
+  /**
+   * Properties that changed hands and could not be recorded. Non-zero means that many
+   * new homeowners are missing from the CRM — see the block above.
+   */
+  ownerChangeBlocked: number;
+  /** Their propertyIds, so the pull can name them rather than only count them. */
+  ownerChangeBlockedIds: string[];
 }> {
   let created = 0, updated = 0, skipped = 0;
+  const ownerChangeBlockedIds: string[] = [];
 
   for (const property of properties) {
     const propertyId = property.propertyId || property.id;
@@ -340,8 +380,24 @@ export async function upsertLeads(properties: any[]): Promise<{
         if (ownerChanged) {
           const newId = `${propertyId}-${property.recordingDate || Date.now()}`;
           const [query, values] = buildInsert({ ...payload, id: newId });
-          await pool.query(query, values);
-          created++;
+          try {
+            await pool.query(query, values);
+            created++;
+          } catch (err: unknown) {
+            // 23505 on Lead_propertyId_key is the known, structural case — the property
+            // has a new owner and the schema has no room for the record. Counted apart
+            // from ordinary failures so it can never again read as "skipped".
+            if ((err as { code?: string })?.code === '23505') {
+              ownerChangeBlockedIds.push(propertyId);
+              console.error(
+                `[storage] OWNER CHANGE NOT RECORDED for property ${propertyId}: `
+                + `"${existingOwner}" → "${incomingOwner}". The new owner's lead was rejected `
+                + `(propertyId is unique) and is NOT in the CRM. See upsertLeads() header.`,
+              );
+            } else {
+              throw err;
+            }
+          }
         } else {
           const [query, values] = buildApiUpdate(payload, propertyId, existing);
           await pool.query(query, values);
@@ -354,7 +410,18 @@ export async function upsertLeads(properties: any[]): Promise<{
     }
   }
 
-  return { created, updated, skipped };
+  if (ownerChangeBlockedIds.length) {
+    console.error(
+      `[storage] ${ownerChangeBlockedIds.length} owner change(s) could not be recorded. `
+      + `Those homeowners are absent from the CRM: ${ownerChangeBlockedIds.join(', ')}`,
+    );
+  }
+
+  return {
+    created, updated, skipped,
+    ownerChangeBlocked: ownerChangeBlockedIds.length,
+    ownerChangeBlockedIds,
+  };
 }
 
 /** Fetch leads from the DB with optional filters. rawData excluded for performance. */

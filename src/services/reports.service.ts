@@ -2,6 +2,10 @@ import { sql } from '@/lib/neon';
 import { eligibilityReasonLabel } from '@/types/carrier';
 import { compareOwnerNames } from './ownerNameMatch.service';
 import { insuredEmails, coInsuredEmails, insuredPhones, coInsuredPhones, coInsuredName, assertRecipientCols } from './recipients.service';
+import {
+  contactabilityOf, householdReach, channelOf, isDirectMailOnly,
+  type Contactability, type Channel,
+} from './contactability.service';
 import { cohortLabel } from './cohort';
 import { classifyGradeChange } from './gradeChangeReason';
 
@@ -74,6 +78,21 @@ export interface QcRow {
   changeCategory?: string;
   // Reachability report only — the UI tallies the cohort summary from these.
   cohort?: string | null;
+  /**
+   * contactability (directive Sec. 4.1) — how this lead can be reached, as its own
+   * dimension rather than a grade. Campaign lists are built from this, never from grade.
+   *
+   * Measured on the NAMED INSURED, because that is who E1 sends to. `householdReach` is
+   * the same question asked of the whole card, which is what the grading rule tests —
+   * they differ on 310 leads across C1–C7, so both are carried rather than one being
+   * quoted as the other.
+   */
+  contactability?: Contactability;
+  householdReach?: Contactability;
+  /** Which queue works this lead: email campaign, Ruben's calls, or the post. */
+  channel?: Channel;
+  /** Nothing anywhere on the card — the direct-mail segment. Flagged, never regraded. */
+  directMailOnly?: boolean;
   /** Addresses belonging to the named insured — exactly what the push would mail. */
   insuredEmailCount?: number;
   /** A co-insured address we hold and do NOT mail, and which the insured set lacks. */
@@ -512,6 +531,12 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
           insuredPhoneList: insPhones,
           coInsuredPhoneList: coPhones,
           coInsuredName: coInsuredName(r),
+          // contactability (Sec. 4.1). Derived here from the same functions above, so the
+          // column, the chips and the campaign export cannot disagree about a lead.
+          contactability: contactabilityOf(r),
+          householdReach: householdReach(r),
+          channel: channelOf(r),
+          directMailOnly: isDirectMailOnly(r),
           // Kept so anything still reading the old flags keeps working, but they are now
           // the INSURED's — the only contact the campaign will actually use.
           hasEmail: hasInsuredEmail,

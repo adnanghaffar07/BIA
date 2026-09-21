@@ -1,0 +1,235 @@
+import { sql } from '@/lib/neon';
+import { insuredEmails, coInsuredEmails, coInsuredName } from './recipients.service';
+import { groupHouseholds, householdKeyOf, type Household } from './household.service';
+import { loadActiveSuppressions, type SuppressionHit } from './suppression.service';
+
+/**
+ * The send list, and the reason every excluded lead was excluded.
+ *
+ * ── Why the exclusions are the deliverable ──────────────────────────────────
+ * Frank's go/no-go asks for "final Grade A file with exclusion report · household
+ * suppression rule confirmed · dedup at both levels evidenced". A list of who gets mailed
+ * is not evidence of anything. A list of who does NOT, each with a stated cause that adds
+ * back to the cohort total, is the only form in which the rule can be checked — and it is
+ * the form that catches the failure this project keeps hitting, where a filter quietly
+ * drops leads and every count downstream agrees with itself while being wrong.
+ *
+ * Every lead in the input appears exactly once in the output: either as a recipient or as
+ * an exclusion with a reason. recipients + exclusions = input. That is asserted, not hoped.
+ *
+ * ── The send rules applied here (Sec. 7.1) ──────────────────────────────────
+ *   · One address per person. Not one per household, not every address on the card.
+ *   · Insured only at E1. Co-insured from E2, and only as a second decision-maker.
+ *   · Maximum two addresses per household.
+ *   · A confirmed address wins outright: once engagement has confirmed one, it is the
+ *     only address in that household that receives anything.
+ *   · Suppression is checked here AND again at send time — this answers "who do we
+ *     stage", the send-time check answers "may this go out right now".
+ */
+
+export type SendStep = 'E1' | 'E2' | 'E3';
+
+export type Recipient = {
+  leadId: string;
+  propertyId: string;
+  cohort: string | null;
+  email: string;
+  role: 'insured' | 'co_insured';
+  firstName: string;
+  lastName: string;
+  householdKey: string;
+  /** True when this address was confirmed by engagement — it overrides the normal rule. */
+  confirmed: boolean;
+};
+
+export type ExclusionReason =
+  | 'no_insured_email'        // nothing to send to at this step
+  | 'suppressed_household'    // the household said stop / complained / is DNC
+  | 'suppressed_address'      // this mailbox is dead or opted out
+  | 'duplicate_household'     // another lead in the same household is already being mailed
+  | 'duplicate_address'       // this exact address is already on the list
+  | 'household_cap';          // already at two addresses for this household
+
+export type Exclusion = {
+  leadId: string;
+  propertyId: string;
+  cohort: string | null;
+  reason: ExclusionReason;
+  detail: string;
+};
+
+export type SendList = {
+  step: SendStep;
+  recipients: Recipient[];
+  exclusions: Exclusion[];
+  counts: {
+    leadsConsidered: number;
+    households: number;
+    recipients: number;
+    excluded: Record<ExclusionReason, number>;
+  };
+  /** Sec. 2.1 discipline: the parts must add back to the whole, or the list is not sent. */
+  reconciles: boolean;
+};
+
+const MAX_ADDRESSES_PER_HOUSEHOLD = 2;
+
+const LEAD_COLS = `"id","propertyId","cohort","effectiveDate","grade","manualGrade","status",
+  "addressStreet","addressCity","addressState","addressZip",
+  "owner1FirstName","owner1LastName","owner2FirstName","owner2LastName",
+  "email1","email2","owner2Email","phone1","phone2","owner2Phone",
+  "emailsAll","phonesAll","skipTraceData",
+  "confirmedEmail","confirmedAt","confirmedVia","confirmedRole"`;
+
+/** Grade A leads in an effective-date window, with everything the rules need. */
+export async function loadCandidates(effFrom: string, effTo: string): Promise<Record<string, unknown>[]> {
+  const rows = await sql`
+    SELECT "id","propertyId","cohort","effectiveDate","grade","manualGrade","status",
+           "addressStreet","addressCity","addressState","addressZip",
+           "owner1FirstName","owner1LastName","owner2FirstName","owner2LastName",
+           "email1","email2","owner2Email","phone1","phone2","owner2Phone",
+           "emailsAll","phonesAll","skipTraceData",
+           "confirmedEmail","confirmedAt","confirmedVia","confirmedRole"
+      FROM "Lead"
+     WHERE "effectiveDate" >= ${effFrom} AND "effectiveDate" <= ${effTo}
+       AND COALESCE("manualGrade","grade") = 'A'
+     ORDER BY "effectiveDate", "owner1LastName"` as Record<string, unknown>[];
+  void LEAD_COLS;
+  return rows;
+}
+
+/**
+ * Build the list.
+ *
+ * Deterministic: same input, same output, same order. A send list that shuffles cannot be
+ * reviewed, signed off and then sent with confidence that it is the thing that was signed.
+ */
+export async function buildSendList(
+  leads: Record<string, unknown>[],
+  step: SendStep = 'E1',
+): Promise<SendList> {
+  const { byLeadId } = groupHouseholds(leads);
+  const sup = await loadActiveSuppressions();
+
+  const recipients: Recipient[] = [];
+  const exclusions: Exclusion[] = [];
+  const usedAddresses = new Set<string>();
+  const perHousehold = new Map<string, number>();
+  /** Which household keys already have somebody on the list — the dedup Instantly cannot do. */
+  const householdOnList = new Set<string>();
+
+  const exclude = (l: Record<string, unknown>, reason: ExclusionReason, detail: string) => {
+    exclusions.push({
+      leadId: String(l.id), propertyId: String(l.propertyId ?? ''),
+      cohort: (l.cohort as string) ?? null, reason, detail,
+    });
+  };
+
+  for (const l of leads) {
+    const id = String(l.id);
+    const hh: Household | undefined = byLeadId.get(id);
+    const hhKey = hh?.key ?? householdKeyOf(l);
+    const persistedKey = householdKeyOf(l);
+
+    // 1. Household suppression outranks everything, including a confirmed address. A
+    //    household that said stop does not get mail because one of its addresses once
+    //    replied.
+    const hhHit: SuppressionHit | undefined =
+      sup.byHousehold.get(persistedKey)
+      ?? hh?.leadIds.map((x) => sup.byHousehold.get(`hh:lead:${x}`)).find(Boolean);
+    if (hhHit) {
+      exclude(l, 'suppressed_household', `${hhHit.reason} on ${hhHit.createdAt.slice(0, 10)}`);
+      continue;
+    }
+
+    // 2. A confirmed address narrows the household to exactly one mailbox (Sec. 7.1).
+    const confirmed = String(l.confirmedEmail ?? '').toLowerCase().trim();
+
+    // 3. Who may be written to at this step. E1 is the insured only; the co-insured joins
+    //    at E2 as a second decision-maker, never as a replacement.
+    const ins = insuredEmails(l).map((e) => e.toLowerCase());
+    const co = step === 'E1' ? [] : coInsuredEmails(l).map((e) => e.toLowerCase());
+
+    let candidates: Array<{ email: string; role: 'insured' | 'co_insured' }> =
+      confirmed
+        ? [{ email: confirmed, role: (l.confirmedRole === 'co_insured' ? 'co_insured' : 'insured') }]
+        : [
+            ...ins.slice(0, 1).map((e) => ({ email: e, role: 'insured' as const })),
+            ...co.slice(0, 1).map((e) => ({ email: e, role: 'co_insured' as const })),
+          ];
+
+    candidates = candidates.filter((c) => c.email);
+    if (!candidates.length) {
+      exclude(l, 'no_insured_email', step === 'E1' ? 'no insured email' : 'no insured or co-insured email');
+      continue;
+    }
+
+    // 4. Household-level dedup — the whole point. Another lead in this household is
+    //    already on the list, so this one is a repeat even though it is a different
+    //    property record and a different address.
+    if (householdOnList.has(hhKey)) {
+      exclude(l, 'duplicate_household', `same household as ${hh?.leadIds.filter((x) => x !== id).join(', ')}`);
+      continue;
+    }
+
+    let placed = 0;
+    for (const c of candidates) {
+      const addrHit = sup.byEmail.get(c.email);
+      if (addrHit) { exclude(l, 'suppressed_address', `${c.email}: ${addrHit.reason}`); continue; }
+      if (usedAddresses.has(c.email)) { exclude(l, 'duplicate_address', c.email); continue; }
+      if ((perHousehold.get(hhKey) ?? 0) >= MAX_ADDRESSES_PER_HOUSEHOLD) {
+        exclude(l, 'household_cap', `${c.email}: household already has ${MAX_ADDRESSES_PER_HOUSEHOLD}`);
+        continue;
+      }
+
+      recipients.push({
+        leadId: id,
+        propertyId: String(l.propertyId ?? ''),
+        cohort: (l.cohort as string) ?? null,
+        email: c.email,
+        role: c.role,
+        firstName: String((c.role === 'insured' ? l.owner1FirstName : l.owner2FirstName) ?? '').trim(),
+        lastName: String((c.role === 'insured' ? l.owner1LastName : l.owner2LastName) ?? '').trim(),
+        householdKey: hhKey,
+        confirmed: !!confirmed,
+      });
+      usedAddresses.add(c.email);
+      perHousehold.set(hhKey, (perHousehold.get(hhKey) ?? 0) + 1);
+      placed++;
+    }
+    if (placed) householdOnList.add(hhKey);
+  }
+
+  const excluded = {
+    no_insured_email: 0, suppressed_household: 0, suppressed_address: 0,
+    duplicate_household: 0, duplicate_address: 0, household_cap: 0,
+  } as Record<ExclusionReason, number>;
+  for (const e of exclusions) excluded[e.reason]++;
+
+  /**
+   * Every lead is either mailed or excluded, exactly once.
+   *
+   * A lead can contribute two exclusion rows (both of its addresses rejected) while still
+   * being mailed at neither, so the check counts DISTINCT leads rather than rows.
+   */
+  const mailedLeads = new Set(recipients.map((r) => r.leadId));
+  const excludedLeads = new Set(exclusions.map((e) => e.leadId));
+  for (const id of mailedLeads) excludedLeads.delete(id);
+  const reconciles = mailedLeads.size + excludedLeads.size === leads.length;
+
+  return {
+    step,
+    recipients,
+    exclusions,
+    counts: {
+      leadsConsidered: leads.length,
+      households: new Set(leads.map((l) => byLeadId.get(String(l.id))?.key ?? householdKeyOf(l))).size,
+      recipients: recipients.length,
+      excluded,
+    },
+    reconciles,
+  };
+}
+
+/** Co-insured display name, for E2 copy that has to address a second person. */
+export { coInsuredName };

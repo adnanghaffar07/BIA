@@ -17,6 +17,12 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 // Type-only import: erased at build, so the server-side reports module never reaches
 // the browser bundle. One definition of a report row, shared by producer and consumer.
 import type { QcRow } from '@/services/reports.service';
+/**
+ * From @/lib, NOT from the service. These are values, and a value import pulls the whole
+ * graph: contactability.service → recipients.service → skipTrace.service → @/lib/constants,
+ * which reads NEXT_PUBLIC_REAL_ESTATE_API_KEY and would inline it into this bundle.
+ */
+import { CONTACTABILITY_LABEL, CHANNEL_LABEL } from '@/lib/contactability';
 import { LOST_TARGET_PCT } from '@/lib/targets';
 import { CATEGORY_LABEL, RECOVERABLE, type GradeChangeCategory } from '@/services/gradeChangeReason';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
@@ -33,6 +39,12 @@ type LedgerRow = {
   recovered: number;
   /** Isolated leads the skip trace found an insured email for. This is the skip-trace count. */
   emailRecovered: number;
+  /** contactability inside Grade A — the channel split (directive Sec. 4.1 / 4.2). */
+  emailAndPhone: number;
+  emailOnly: number;
+  phoneOnly: number;
+  noInsuredContact: number;
+  directMailOnly: number;
   stillA: number; gainedOther: number; aNow: number; mailable: number;
   lost: number; lostPct: number | null; noPullRecord: number; unexplained: number;
   rated: number; unworkedGradeA: number;
@@ -230,6 +242,15 @@ function columnsFor(report: ReportType): QcColumn[] {
         { header: 'Insured Phone', value: (r) => (r.insuredPhoneList ?? []).map(fmtPhone).join(', ') },
         { header: 'Co-Insured Phone', value: (r) => (r.coInsuredPhoneList ?? []).map(fmtPhone).join(', ') },
         { header: 'Deep Traced', value: (r) => yn(r.matched) },
+        /**
+         * contactability (Sec. 4.1) — first among the contact columns on purpose.
+         *
+         * It is the field the campaign list is built from, so an export handed to anyone
+         * carries the routing decision with it rather than leaving them to re-derive it
+         * from five address columns and get a different answer.
+         */
+        { header: 'Contactability', value: (r) => CONTACTABILITY_LABEL[r.contactability ?? 'none'] },
+        { header: 'Channel', value: (r) => CHANNEL_LABEL[r.channel ?? 'mail'] },
       ]
     : report === 'reachability'
       ? [
@@ -671,6 +692,8 @@ export default function QcReportsPage() {
     // Split by person. The insured is who campaigns actually mail; the co-insured is
     // reach we hold but do not use, and rolling the two together hid that.
     let traced = 0, insuredEmail = 0, coInsuredEmail = 0, insuredPhone = 0, coInsuredPhone = 0;
+    // contactability (Sec. 4.1) — the same population split by how it can be reached.
+    let chEmail = 0, chPhone = 0, chMail = 0, chHouseholdOnly = 0;
     for (const r of rows) {
       const g = r.manualGrade || r.grade || 'ungraded';
       grades[g] = (grades[g] ?? 0) + 1;
@@ -681,8 +704,20 @@ export default function QcReportsPage() {
       if (r.hasCoInsuredEmail) coInsuredEmail++;
       if (r.hasInsuredPhone) insuredPhone++;
       if (r.hasCoInsuredPhone) coInsuredPhone++;
+      switch (r.contactability) {
+        case 'email_and_phone': case 'email_only': chEmail++; break;
+        case 'phone_only': chPhone++; break;
+        case 'none':
+          // Nothing for the insured. Where the HOUSEHOLD still has something, the lead
+          // belongs to the call queue rather than the post — counting them together is
+          // what put people with no number into a calling list.
+          if (r.directMailOnly) chMail++; else chHouseholdOnly++;
+          break;
+        default: break;
+      }
     }
-    return { total: rows.length, grades, statuses, traced, insuredEmail, coInsuredEmail, insuredPhone, coInsuredPhone };
+    return { total: rows.length, grades, statuses, traced, insuredEmail, coInsuredEmail, insuredPhone, coInsuredPhone,
+      chEmail, chPhone, chMail, chHouseholdOnly };
   })() : null;
 
   /**
@@ -775,6 +810,20 @@ const MAX_RENDERED = 300;
          * stops the next blast paying to re-trace leads that were never traced at all.
          */
         tracedStillNoEmail: !!r.matched && !r.hasInsuredEmail,
+        /**
+         * The channel segments (Sec. 4.1 / 4.2), each retrievable by name.
+         *
+         * directMail is the one the directive asks for explicitly (task 28): nothing
+         * anywhere on the card, so the post is the only way left. Flagged, never
+         * regraded — a lead with no email is not a worse prospect, it is a prospect on
+         * a different channel.
+         */
+        chEmail: r.contactability === 'email_and_phone' || r.contactability === 'email_only',
+        chPhone: r.contactability === 'phone_only',
+        directMail: !!r.directMailOnly,
+        // Nothing for the insured, but the household can still be reached. These are the
+        // leads that make Grade A look like a working email list when it is not.
+        householdOnly: r.contactability === 'none' && !r.directMailOnly,
       } as Record<string, boolean>);
       return rows.filter((r) => {
         if (grade && (r.manualGrade || r.grade || 'ungraded') !== grade) return false;
@@ -944,8 +993,18 @@ const MAX_RENDERED = 300;
                   is Grade A and unmailable never left Grade A, so finding it an address
                   moves Mailable and leaves the grade columns alone.
                 */}
+                {/*
+                  The three channels, side by side (Sec. 4.2).
+
+                  Grade A was being read as an email list and it is not one — it is a
+                  mixed bag, and until there was a report to tell the three types apart
+                  nobody could see it. Mailable / Call queue / Direct mail are the same
+                  Grade A population split by how it can actually be reached, so the row
+                  says what can be done with the week rather than only how big it is.
+                */}
                 {['Renewal week', 'Leads', 'Grade A at pull', 'Downgraded', 'Low point',
-                  'Regained A', 'Grade A now', 'Email found', 'Mailable', 'Unworked A', 'Lost', 'Lost %'].map((h, i) => (
+                  'Regained A', 'Grade A now', 'Email found', 'Mailable', 'Call queue', 'Direct mail',
+                  'Unworked A', 'Lost', 'Lost %'].map((h, i) => (
                   <TableCell key={h} align={i > 1 ? 'right' : 'left'}
                     sx={{ fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{h}</TableCell>
                 ))}
@@ -1023,6 +1082,47 @@ const MAX_RENDERED = 300;
                         </TableCell>
                       );
                     })()}
+                    {/*
+                      Phone but no email — Ruben's queue, not a loss. These leads are
+                      correctly Grade A: the grading rule is about appetite, and a
+                      phone-reachable prospect is still a prospect.
+                    */}
+                    <TableCell align="right" sx={{ fontSize: 12, color: d.phoneOnly ? '#8a5a00' : 'inherit' }}>
+                      <Tooltip arrow title={
+                        d.phoneOnly
+                          ? `${d.phoneOnly} Grade A lead${d.phoneOnly === 1 ? '' : 's'} with a phone but no insured email. They go to the call queue, not the email campaign, and they are not downgraded for it.`
+                          : 'Every Grade A lead in this week with a phone also has an email.'
+                      }>
+                        <span style={{ cursor: 'help' }}>{d.phoneOnly || '—'}</span>
+                      </Tooltip>
+                    </TableCell>
+                    {/*
+                      Nothing anywhere on the card. The post is the only channel left —
+                      flagged, never regraded, because a lead with no email is not a worse
+                      prospect, it is a prospect on a different channel.
+
+                      The amber count beside it is the gap worth watching: leads with
+                      nothing for the INSURED but something for the household. A call
+                      queue containing people with no number is not a queue, and until
+                      these two were counted apart they were the same column.
+                    */}
+                    <TableCell align="right" sx={{ fontSize: 12, color: d.directMailOnly ? '#b3261e' : 'inherit' }}>
+                      <Tooltip arrow title={
+                        `${d.directMailOnly} lead${d.directMailOnly === 1 ? '' : 's'} have no phone and no email anywhere on the card — direct mail by property address.`
+                        + (d.noInsuredContact > d.directMailOnly
+                          ? ` A further ${d.noInsuredContact - d.directMailOnly} have nothing for the INSURED but a co-insured contact, so the household can still be called.`
+                          : '')
+                      }>
+                        <span style={{ cursor: 'help' }}>
+                          {d.directMailOnly || '—'}
+                          {d.noInsuredContact > d.directMailOnly && (
+                            <Typography component="span" variant="caption" sx={{ color: '#8a5a00', ml: 0.5, fontWeight: 400 }}>
+                              {`+${d.noInsuredContact - d.directMailOnly}`}
+                            </Typography>
+                          )}
+                        </span>
+                      </Tooltip>
+                    </TableCell>
                     {/*
                       Grade A leads nobody has put in front of a producer. Amber rather
                       than red: they are not lost, they are unseen — and a rated lead
@@ -1345,6 +1445,25 @@ const MAX_RENDERED = 300;
                 ...(cohort.coInsuredEmail ? { bgcolor: '#fff3d6', color: '#8a5a00' } : {}),
               })}
               {chip('trait', 'insuredPhone', `${cohort.insuredPhone.toLocaleString()} have an insured phone — all grades`)}
+              {/*
+                contactability (Sec. 4.1) — the same leads, split by the channel that can
+                actually work them. Grade A is a mixed bag; these three chips are what
+                turns it back into three usable lists. Each is a named segment: click it
+                and the table below is that list, ready to export.
+              */}
+              {chip('trait', 'chEmail', `Email campaign: ${cohort.chEmail.toLocaleString()}`, {
+                ...(cohort.chEmail ? { bgcolor: '#e7f5ec', color: '#166534', fontWeight: 600 } : {}),
+              })}
+              {chip('trait', 'chPhone', `Call queue: ${cohort.chPhone.toLocaleString()}`, {
+                ...(cohort.chPhone ? { bgcolor: '#fff3d6', color: '#8a5a00', fontWeight: 600 } : {}),
+              })}
+              {chip('trait', 'directMail', `Direct mail: ${cohort.chMail.toLocaleString()}`, {
+                ...(cohort.chMail ? { bgcolor: '#fdecea', color: '#b3261e', fontWeight: 600 } : {}),
+              })}
+              {!!cohort.chHouseholdOnly && chip('trait', 'householdOnly',
+                `No insured contact, household reachable: ${cohort.chHouseholdOnly.toLocaleString()}`, {
+                  bgcolor: '#fff', color: '#8a5a00', border: '1px solid #f0c987', fontWeight: 600,
+                })}
               {chip('trait', 'coInsuredPhone', `${cohort.coInsuredPhone.toLocaleString()} have a co-insured phone — all grades`, {
                 ...(cohort.coInsuredPhone ? { bgcolor: '#fff3d6', color: '#8a5a00' } : {}),
               })}

@@ -11,6 +11,23 @@ import crypto from 'crypto';
 export const WEBHOOK_HEADER = 'x-bia-campaign-key';
 
 /**
+ * The same secret, accepted from the query string.
+ *
+ * Instantly's webhook UI offers a URL and nothing else — no custom-header field. A header
+ * we cannot send is a 401 on every delivery, and the dashboard would keep showing the
+ * webhook as "Active" the whole time, because from its side the request left successfully.
+ * That is a silent integration failure, which is the worst kind: replies would arrive,
+ * be rejected, and nobody would know until a customer complained about being chased after
+ * they had already answered.
+ *
+ * The header remains the preferred form and is tried first. A secret in a query string is
+ * weaker — URLs end up in access logs and proxy traces in a way headers usually do not —
+ * so it is a fallback for tools that cannot do better, not the default, and it is one more
+ * reason this key should be rotated on a schedule.
+ */
+export const WEBHOOK_QUERY_PARAM = 'key';
+
+/**
  * Constant-time comparison, never `===`: a plain string compare short-circuits on the
  * first differing byte and leaks the secret one character at a time to anyone who can
  * measure response time.
@@ -19,15 +36,18 @@ export const WEBHOOK_HEADER = 'x-bia-campaign-key';
  * refuse traffic rather than accept anything that arrives. Fails open only in local
  * dev, loudly, so testing is not blocked by a missing env var.
  */
-export function verifyWebhookSecret(headerValue: string | null): boolean {
+export function verifyWebhookSecret(headerValue: string | null, queryValue?: string | null): boolean {
   const expected = process.env.LEADS_CAMPAIGN_WEBHOOK_KEY;
   if (!expected) {
     if (process.env.NODE_ENV === 'production') return false;
     console.warn('[campaign-webhook] no secret configured — allowing through (dev only)');
     return true;
   }
-  if (!headerValue) return false;
-  const a = Buffer.from(headerValue);
+  // Header first, query string only if the header is absent — a tool that can send the
+  // header should never fall back to the weaker form just because it also set a param.
+  const presented = headerValue ?? queryValue ?? null;
+  if (!presented) return false;
+  const a = Buffer.from(presented);
   const b = Buffer.from(expected);
   // timingSafeEqual throws on a length mismatch, so the length check has to come first.
   // Length is not secret; the bytes are.

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { pool } from '@/lib/neon';
 import {
-  WEBHOOK_HEADER, verifyWebhookSecret, classifyEvent, readPayload, cleanReplyExcerpt, htmlToText,
+  WEBHOOK_HEADER, WEBHOOK_QUERY_PARAM, verifyWebhookSecret, classifyEvent, readPayload,
+  cleanReplyExcerpt, htmlToText,
 } from '@/lib/integrations/campaignWebhook';
 import { stopHousehold, setPrimaryContact, type HouseholdStopResult } from '@/services/householdStop.service';
+import { suppressWithClient, isExplicitStopReply } from '@/services/suppression.service';
+import { householdKeyOf } from '@/services/household.service';
 
 /**
  * POST /api/webhooks/campaign — outcomes from the campaign platform.
@@ -38,7 +41,10 @@ export const maxDuration = 10;
 
 export async function POST(request: NextRequest) {
   // ── auth ──────────────────────────────────────────────────────────────────
-  if (!verifyWebhookSecret(request.headers.get(WEBHOOK_HEADER))) {
+  if (!verifyWebhookSecret(
+    request.headers.get(WEBHOOK_HEADER),
+    request.nextUrl.searchParams.get(WEBHOOK_QUERY_PARAM),
+  )) {
     // Deliberately terse: an attacker probing the endpoint learns nothing about
     // whether the header was missing, wrong length, or simply wrong.
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -73,12 +79,16 @@ export async function POST(request: NextRequest) {
     // ── find the row this event is about ─────────────────────────────────────
     // Campaign id narrows it when present, but is not required: a payload missing it
     // should still land on the right row rather than be discarded.
+    // The lead's address comes back too: the household key is derived from it, and a
+    // suppression recorded without one would be scoped to a lead rather than a household.
     const { rows: found } = await client.query(
-      `SELECT "id", "leadId", "openCount", "personRole"
-         FROM "OutreachEvent"
-        WHERE lower("recipientEmail") = $1
-          AND ($2::text IS NULL OR "vendorCampaignId" = $2)
-        ORDER BY "vendorCampaignId" IS NOT DISTINCT FROM $2 DESC, "sentAt" DESC NULLS LAST
+      `SELECT e."id", e."leadId", e."openCount", e."personRole",
+              l."addressStreet", l."addressZip"
+         FROM "OutreachEvent" e
+         LEFT JOIN "Lead" l ON l."id" = e."leadId"
+        WHERE lower(e."recipientEmail") = $1
+          AND ($2::text IS NULL OR e."vendorCampaignId" = $2)
+        ORDER BY e."vendorCampaignId" IS NOT DISTINCT FROM $2 DESC, e."sentAt" DESC NULLS LAST
         LIMIT 1`,
       [p.email, p.campaignId],
     );
@@ -250,6 +260,84 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    /**
+     * ── Durable suppression (directive S2) ────────────────────────────────────
+     * Everything above stops THIS campaign. stopHousehold works by removing the sibling
+     * leads from the vendor, which halts the sequence and nothing else: the next cohort,
+     * next year's renewal cycle and Ruben's call queue have never heard of it. S2 is
+     * exactly that gap — "suppression persisted in the CRM, not only the email tool.
+     * Currently captured and never stored."
+     *
+     * So the same event also writes a record that outlives the campaign. Scope is decided
+     * by suppression.service from the REASON, not here, so a vendor's vocabulary can
+     * never widen a dead mailbox into a dead household or narrow an opt-out into one
+     * address. Written on the open transaction, so it cannot survive a rollback of the
+     * event that caused it.
+     */
+    const lead = { id: row.leadId, addressStreet: row.addressStreet, addressZip: row.addressZip };
+    let suppression: { scope: string; reason: string } | null = null;
+
+    if (kind === 'unsubscribe' || kind === 'complaint') {
+      const r = await suppressWithClient(client, {
+        leadId: row.leadId, email: p.email, reason: kind,
+        householdKey: householdKeyOf(lead), source: 'instantly',
+        note: `${kind} via campaign ${p.campaignId ?? '(unknown)'}`,
+      });
+      suppression = { scope: r.scope, reason: kind };
+    } else if (kind === 'bounce') {
+      /**
+       * ADDRESS scope, never household — Sec. 12: "address flagged invalid and
+       * suppressed, kept on record; next valid address used". The lead-level
+       * campaignStatus written above is the older, blunter behaviour: it takes the whole
+       * card out over one dead mailbox, so a household whose insured address bounced
+       * loses its co-insured address too. This record is what the send list actually
+       * reads, and it only removes the address that bounced.
+       */
+      const hard = String(p.bounceType ?? '').toLowerCase().includes('hard')
+        || /(does not exist|no such user|unknown recipient|550)/i.test(String(p.bounceReason ?? ''));
+      if (hard) {
+        const r = await suppressWithClient(client, {
+          leadId: row.leadId, email: p.email, reason: 'hard_bounce', source: 'instantly',
+          note: p.bounceReason ?? null,
+        });
+        suppression = { scope: r.scope, reason: 'hard_bounce' };
+      }
+    } else if (kind === 'reply' && isExplicitStopReply(p.replyText)) {
+      /**
+       * Sec. 7.6: a stop reply suppresses the household immediately. Only unmistakable
+       * wording fires this — everything else waits for Ruben to classify, because a
+       * missed auto-suppression is caught within the hour while a false one deletes a
+       * live prospect silently.
+       */
+      const r = await suppressWithClient(client, {
+        leadId: row.leadId, email: p.email, reason: 'not_interested',
+        householdKey: householdKeyOf(lead), source: 'instantly',
+        note: 'explicit stop in reply text',
+      });
+      suppression = { scope: r.scope, reason: 'not_interested' };
+    }
+
+    /**
+     * ── Confirmed address (Sec. 7.1) ──────────────────────────────────────────
+     * "Once an address is confirmed by engagement, only that address receives email."
+     * setPrimaryContact above marks it within the campaign; this writes it onto the CARD,
+     * where the send list reads it and where it survives into the next renewal cycle —
+     * Sec. 11.2's "engagement promotes a contact point permanently".
+     *
+     * Never on an open. Apple and Gmail auto-open, and E1 carries no pixel anyway.
+     */
+    if (kind === 'reply' || kind === 'click') {
+      await client.query(
+        `UPDATE "Lead"
+            SET "confirmedEmail" = COALESCE("confirmedEmail", $2),
+                "confirmedAt"    = COALESCE("confirmedAt", $3),
+                "confirmedVia"   = COALESCE("confirmedVia", $4),
+                "confirmedRole"  = COALESCE("confirmedRole", $5)
+          WHERE "id" = $1`,
+        [row.leadId, p.email, now, kind, row.personRole ?? 'insured'],
+      );
+    }
+
     // Activity feed: vendor-sourced activity reads the same as anything else.
     //
     // A 'sent' gets no entry. Every recipient on every step fires one, so on a 300-lead
@@ -300,6 +388,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true, matched: true, event: p.eventType, kind, leadId: row.leadId,
       household: household ?? undefined,
+      // Echoed so a delivery log shows whether the event became durable, and at which
+      // scope — the difference between a dead mailbox and a household that said stop.
+      suppression: suppression ?? undefined,
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});

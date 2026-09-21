@@ -204,6 +204,18 @@ export interface WeeklyPullResult {
     creditsSpent: number; // full-data pulls (newPulled) + PropertyDetail credits
     /** Fetched (and charged) but discarded as outside the requested county. */
     outOfCounty: number;
+    /**
+     * Properties that changed hands whose NEW owner could not be recorded.
+     *
+     * "Lead"."propertyId" is unique, so a property can hold only one lead — see the
+     * upsertLeads() header. A non-zero figure here is that many homeowners missing from
+     * the CRM, each of them a lead we paid to pull. Reported rather than absorbed,
+     * because the old owner's card is still present and still looks complete, so nothing
+     * else on any screen would give it away.
+     */
+    ownerChangeBlocked: number;
+    /** Their propertyIds, so they can be recovered by hand until the schema allows them. */
+    ownerChangeBlockedIds: string[];
     dated: number;
     detailPulled: number;  // new Grade-A SFR leads enriched via PropertyDetail
     detailCredits: number; // credits spent on PropertyDetail (1 per lead)
@@ -252,6 +264,7 @@ export async function runWeeklyPull(opts?: {
   const reports: WindowReport[] = [];
   const allNewIds = new Set<string>(); // distinct brand-new leads across all windows
   let outOfCounty = 0;                 // fetched but discarded — wrong county for this pull
+  const ownerChangeBlockedIds: string[] = [];   // new homeowners the schema cannot hold
 
   for (const w of windows) {
     const ids = await scanWindowIds(w, zips); // FREE
@@ -272,7 +285,9 @@ export async function runWeeklyPull(opts?: {
         const inFootprint = props.filter((p) => propertyInCounty(p, county));
         outOfCounty += props.length - inFootprint.length;
         if (inFootprint.length) {
-          await upsertLeads(inFootprint);
+          const up = await upsertLeads(inFootprint);
+          // Not discarded: this is the only place an owner change surfaces at all.
+          ownerChangeBlockedIds.push(...up.ownerChangeBlockedIds);
           await enrichLeadBatch(inFootprint);
         }
         newPulled = inFootprint.length;
@@ -313,6 +328,8 @@ export async function runWeeklyPull(opts?: {
       // Fetched (and therefore charged) but discarded as outside the requested county.
       // Surfaced so a rising number is visible rather than silently absorbed.
       outOfCounty,
+      ownerChangeBlocked: ownerChangeBlockedIds.length,
+      ownerChangeBlockedIds,
       detailPulled: detail.detailed,   // Grade-A SFR leads enriched via PropertyDetail
       detailCredits: detail.attempted, // credits spent on PropertyDetail (1 per lead)
     },

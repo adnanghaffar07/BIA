@@ -2,6 +2,7 @@ import { sql } from '@/lib/neon';
 import { cohortLabel, cohortEnd, cohortOf } from './cohort';
 import { LOST_TARGET_PCT } from '@/lib/targets';
 import { insuredEmails, assertRecipientCols } from './recipients.service';
+import { contactabilityOf, householdReach } from './contactability.service';
 
 /**
  * The cohort ledger (register A43).
@@ -63,6 +64,26 @@ export type CohortLedgerRow = {
    * address changed their reach and not their grade. `emailRecovered` is that number.
    */
   recovered: number;
+  /**
+   * contactability inside Grade A (directive Sec. 4.1, task 27).
+   *
+   * The four values are the channel split: the first two are the email campaign, phone
+   * only is Ruben's queue, and neither goes to the post. `mailable` above is the same
+   * population as emailAndPhone + emailOnly — kept as its own field because the campaign
+   * reads it by that name, and checked against it in scripts/verify-counts.mjs.
+   */
+  emailAndPhone: number;
+  emailOnly: number;
+  phoneOnly: number;
+  /**
+   * Grade A with nothing for the INSURED. Under the grading rule these should not exist
+   * — it says D requires neither channel — so a non-zero value is either a lead that has
+   * never been traced, or a grading gap. Surfaced rather than folded into phoneOnly,
+   * because a call queue that contains people with no phone number is not a queue.
+   */
+  noInsuredContact: number;
+  /** Of those, the ones with nothing anywhere on the card either: the direct-mail segment. */
+  directMailOnly: number;
   /**
    * Leads the contact-recovery pipeline found an insured email for.
    *
@@ -217,7 +238,7 @@ export async function getCohortLedger(
     SELECT "cohort", "email1", "email2", "owner2Email",
            "phone1", "phone2", "owner2Phone",
            "owner1FirstName", "owner1LastName", "owner2FirstName", "owner2LastName",
-           "skipTraceData", "emailsAll",
+           "skipTraceData", "emailsAll", "phonesAll",
            COALESCE("manualGrade", "grade") AS now_grade
       FROM "Lead"
      WHERE "cohort" IS NOT NULL
@@ -226,8 +247,42 @@ export async function getCohortLedger(
   assertRecipientCols((reachRows as any[])[0], 'cohort ledger (mailable)');
 
   const mailableByCohort = new Map<string, number>();
+
+  /**
+   * contactability inside Grade A, per cohort (Sec. 4.1, task 27).
+   *
+   * Tallied from the same rows as `mailable` and in the same pass, so the four values and
+   * the mailable count are guaranteed to describe one population. Computed through
+   * contactability.service rather than inline, so the ledger, the QC rows and the campaign
+   * export all answer this question the same way.
+   */
+  type Tally = {
+    emailAndPhone: number; emailOnly: number; phoneOnly: number;
+    noInsuredContact: number; directMailOnly: number;
+  };
+  const contactByCohort = new Map<string, Tally>();
+  const tallyFor = (cohort: string): Tally => {
+    let t = contactByCohort.get(cohort);
+    if (!t) {
+      t = { emailAndPhone: 0, emailOnly: 0, phoneOnly: 0, noInsuredContact: 0, directMailOnly: 0 };
+      contactByCohort.set(cohort, t);
+    }
+    return t;
+  };
+
   for (const r of reachRows as any[]) {
     if (r.now_grade !== 'A') continue;
+    const t = tallyFor(r.cohort);
+    switch (contactabilityOf(r)) {
+      case 'email_and_phone': t.emailAndPhone++; break;
+      case 'email_only': t.emailOnly++; break;
+      case 'phone_only': t.phoneOnly++; break;
+      default:
+        t.noInsuredContact++;
+        // Nothing for the insured AND nothing for the household: the post is the only
+        // way left. A co-insured number keeps the lead in the call queue instead.
+        if (householdReach(r) === 'none') t.directMailOnly++;
+    }
     if (insuredEmails(r).length === 0) continue;
     mailableByCohort.set(r.cohort, (mailableByCohort.get(r.cohort) ?? 0) + 1);
   }
@@ -271,6 +326,11 @@ export async function getCohortLedger(
       gainedOther: Number(r.gained_other),
       aNow: Number(r.a_now),
       mailable: mailableByCohort.get(r.cohort) ?? 0,
+      emailAndPhone: contactByCohort.get(r.cohort)?.emailAndPhone ?? 0,
+      emailOnly: contactByCohort.get(r.cohort)?.emailOnly ?? 0,
+      phoneOnly: contactByCohort.get(r.cohort)?.phoneOnly ?? 0,
+      noInsuredContact: contactByCohort.get(r.cohort)?.noInsuredContact ?? 0,
+      directMailOnly: contactByCohort.get(r.cohort)?.directMailOnly ?? 0,
       lost,
       // A cohort with no Grade A at pull has no loss rate — not a loss rate of zero.
       lostPct: aAtPull ? Math.round((lost / aAtPull) * 1000) / 10 : null,
