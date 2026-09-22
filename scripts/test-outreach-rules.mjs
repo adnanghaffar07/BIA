@@ -17,7 +17,7 @@
 import './lib/env.mjs';
 import { sql } from '@/lib/neon';
 import {
-  normaliseStreet, addressKeyOf, groupHouseholds, householdKeyOf,
+  normaliseStreet, addressKeyOf, groupHouseholds, householdKeyOf, householdScopeKey,
 } from '@/services/household.service';
 import {
   contactabilityOf, householdReach, channelOf, isDirectMailOnly, breakdown,
@@ -191,7 +191,7 @@ console.log('\n=== 6. Send-list rules (Sec. 7.1) ===');
 console.log('\n=== 7. Suppression against the live table (marked, then removed) ===');
 {
   const [seed] = await sql`
-    SELECT "id","propertyId","addressStreet","addressZip","email1","confirmedEmail","confirmedVia"
+    SELECT "id","propertyId","addressStreet","addressZip","email1","confirmedEmail","confirmedVia","householdId"
       FROM "Lead"
      WHERE COALESCE("manualGrade","grade")='A' AND "email1" IS NOT NULL AND "email1" <> ''
        AND "addressStreet" IS NOT NULL AND "addressZip" IS NOT NULL
@@ -217,7 +217,9 @@ console.log('\n=== 7. Suppression against the live table (marked, then removed) 
 
     const active = await loadActiveSuppressions();
     ok('bulk load sees the address', active.emails.has(addr));
-    ok('bulk load sees the household', active.households.has(householdKeyOf(seed)));
+    // The STORED household id since migration 034. householdKeyOf is the address-derived
+    // string it replaced, and no reader asks for that any more.
+    ok('bulk load sees the household', active.households.has(householdScopeKey(seed)));
 
     await confirmAddress({ leadId: seed.id, email: addr, via: 'reply', role: 'insured' });
     const [after] = await sql`SELECT "confirmedEmail","confirmedVia" FROM "Lead" WHERE "id" = ${seed.id}`;

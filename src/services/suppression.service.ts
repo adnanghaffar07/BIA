@@ -1,5 +1,5 @@
 import { sql } from '@/lib/neon';
-import { householdKeyOf } from './household.service';
+import { householdScopeKey } from './household.service';
 
 /**
  * Suppression, held in the CRM (directive S2, Sec. 7.1, Sec. 12).
@@ -73,13 +73,49 @@ export type SuppressInput = {
   note?: string | null;
 };
 
+/**
+ * The household key for a suppression, resolved against the database when the caller's
+ * lead object does not carry one.
+ *
+ * ── Why this is not just `lead.householdId ?? derive(lead)` ─────────────────
+ * Callers build their lead from whatever columns they happened to need. recordBind
+ * selects eight, replies.service selects three, the webhook builds a literal from a join.
+ * None of them included "householdId", so householdScopeKey fell back to the address key
+ * and wrote a suppression under a string no reader looks up any more — a stop that
+ * records successfully, reports successfully, and silently never fires.
+ *
+ * Reading it here removes the whole class: a partial SELECT can no longer produce the
+ * wrong key, because the key does not come from the caller's object at all unless it is
+ * genuinely there. Costs one indexed lookup on a path that runs once per suppression, not
+ * once per recipient — the bulk send-time check is loadActiveSuppressions, which is
+ * unaffected.
+ */
+async function householdKeyForSuppression(
+  lead: Record<string, unknown> | null | undefined,
+  leadId: string | null,
+): Promise<string | null> {
+  const onObject = String(lead?.householdId ?? '').trim();
+  if (onObject) return onObject;
+
+  if (leadId) {
+    const [row] = await sql`
+      SELECT "householdId" FROM "Lead" WHERE "id" = ${leadId}` as Array<{ householdId: string | null }>;
+    if (row?.householdId) return String(row.householdId);
+  }
+  // No stored household yet — a lead a pull has just created. The address key keeps it
+  // suppressible, and materialiseHouseholds rewrites this row when it assigns the id.
+  return lead ? householdScopeKey(lead) : null;
+}
+
 /** Record a suppression. Idempotent per (scope, key, reason) while it is still active. */
 export async function suppress(input: SuppressInput): Promise<{ scope: SuppressionScope; created: boolean }> {
   const reason = input.reason;
   const scope = scopeForReason(reason, input.scope);
   const email = input.email ? input.email.toLowerCase().trim() : null;
   const leadId = input.leadId ?? (input.lead?.id ? String(input.lead.id) : null);
-  const householdKey = scope === 'household' && input.lead ? householdKeyOf(input.lead) : null;
+  const householdKey = scope === 'household'
+    ? await householdKeyForSuppression(input.lead, leadId)
+    : null;
 
   if (scope === 'address' && !email) {
     throw new Error('An address-scope suppression needs the address it applies to.');
@@ -125,7 +161,9 @@ export async function suppressionFor(
   email: string,
 ): Promise<SuppressionHit | null> {
   const addr = email.toLowerCase().trim();
-  const hk = householdKeyOf(lead);
+  // Resolved the same way it was written, so a partial lead object cannot make the
+  // lookup ask for a different key than suppress() stored.
+  const hk = await householdKeyForSuppression(lead, lead?.id ? String(lead.id) : null);
   const rows = await sql`
     SELECT "scope", "reason", "createdAt"::text AS "createdAt", "email"
       FROM "Suppression"
@@ -222,9 +260,36 @@ export async function suppressWithClient(
   const scope = scopeForReason(reason, input.scope);
   const email = input.email ? input.email.toLowerCase().trim() : null;
   const leadId = input.leadId ?? (input.lead?.id ? String(input.lead.id) : null);
-  const householdKey = scope === 'household'
-    ? (input.householdKey ?? (input.lead ? householdKeyOf(input.lead) : null))
-    : null;
+
+  /**
+   * The stored household wins over anything the caller worked out for itself.
+   *
+   * It used to be `input.householdKey ?? resolve(...)`, which reads as a sensible
+   * override and was not: the campaign webhook computed a key from a lead literal holding
+   * only id, street and zip, so it derived the ADDRESS key and passed it explicitly — and
+   * the explicit value beat the resolver. Unsubscribes and complaints, the two most
+   * consequential suppressions there are, were therefore recorded under a string no
+   * reader asks for. It would have recorded cleanly, reported cleanly, and never fired.
+   *
+   * Resolved through the caller's client, not `sql`: this runs inside the webhook's
+   * transaction, and a read on a different connection cannot see anything that
+   * transaction has written.
+   */
+  let householdKey: string | null = null;
+  if (scope === 'household') {
+    const onObject = String(input.lead?.householdId ?? '').trim();
+    if (onObject) householdKey = onObject;
+    else if (leadId) {
+      const { rows } = await client.query(
+        `SELECT "householdId" FROM "Lead" WHERE "id" = $1`, [leadId],
+      ) as { rows: Array<{ householdId: string | null }> };
+      householdKey = rows[0]?.householdId ?? null;
+    }
+    // Only when the lead genuinely has no household yet. An explicitly supplied key is
+    // the last resort, not the first choice.
+    householdKey ??= input.householdKey
+      ?? (input.lead ? householdScopeKey(input.lead) : null);
+  }
 
   if (scope === 'address' && !email) return { scope, created: false };
   if (scope === 'household' && !householdKey) return { scope, created: false };

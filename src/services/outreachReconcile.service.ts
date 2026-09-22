@@ -1,7 +1,7 @@
 import { sql } from '@/lib/neon';
 import { listLeadsInCampaign, deleteLead, type VendorLead } from '@/lib/integrations/leadCampaign';
 import { loadActiveSuppressions } from './suppression.service';
-import { householdKeyOf } from './household.service';
+import { householdScopeKey } from './household.service';
 import { isRunFatal, VendorError } from './vendorErrors';
 
 /**
@@ -96,11 +96,14 @@ type EventRow = {
   stoppedAt: Date | null;
   stoppedReason: string | null;
   /**
-   * DERIVED, not selected. There is no "householdKey" column on Lead — the household is
-   * computed from the address every time it is needed (the thing question 2 of the
-   * architecture answers argues should change). Selecting it as a column looks right,
-   * typechecks, and fails at runtime only when a household-scoped suppression is in
-   * play, which is the rarest path here.
+   * The stored household (migration 034), with the address-derived key as a fallback for
+   * a lead a pull has just created and materialiseHouseholds has not reached yet.
+   *
+   * It used to be derived here, always. That was wrong twice: it disagreed with the key
+   * a suppression was recorded under whenever a household spanned two properties, and the
+   * derivation itself was not stable — the union-find dropped roughly half its unions
+   * depending on row order, so the same lead could land in a different household between
+   * two reads.
    */
   householdKey: string | null;
 };
@@ -110,20 +113,25 @@ async function eventsForCampaign(campaignId: string) {
   const raw = await sql`
     SELECT e."id", e."leadId", LOWER(e."recipientEmail") AS "recipientEmail",
            e."vendorLeadId", e."vendorCampaignId", e."stoppedAt", e."stoppedReason",
-           l."addressStreet", l."addressZip"
+           l."householdId", l."addressStreet", l."addressZip"
       FROM "OutreachEvent" e
       LEFT JOIN "Lead" l ON l."id" = e."leadId"
      WHERE e."vendorCampaignId" = ${campaignId}` as Array<
-       Omit<EventRow, 'householdKey'> & { addressStreet: string | null; addressZip: string | null }
+       Omit<EventRow, 'householdKey'> & {
+         householdId: string | null;
+         addressStreet: string | null;
+         addressZip: string | null;
+       }
      >;
 
-  // Same function the suppression writer used, so the key we look up is the key that was
-  // stored. Computing it a second way here is exactly how a household stop would miss.
-  const rows: EventRow[] = raw.map(({ addressStreet, addressZip, ...e }) => ({
+  // householdScopeKey, the same function the suppression writer calls, so the key looked
+  // up here is the key that was stored. Computing it a second way is how a household stop
+  // comes to cover some of a household and not the rest.
+  const rows: EventRow[] = raw.map(({ householdId, addressStreet, addressZip, ...e }) => ({
     ...e,
-    householdKey: addressStreet && addressZip
-      ? householdKeyOf({ id: e.leadId, addressStreet, addressZip })
-      : null,
+    householdKey: householdId || (addressStreet && addressZip
+      ? householdScopeKey({ id: e.leadId, addressStreet, addressZip })
+      : null),
   }));
 
   const byVendorLeadId = new Map<string, EventRow>();

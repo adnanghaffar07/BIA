@@ -14,7 +14,7 @@ import './lib/env.mjs';
 import { sql } from '@/lib/neon';
 import { recordBind, recordLoss, quoteState } from '@/services/quoteOutcomes.service';
 import { suppressionFor, loadActiveSuppressions } from '@/services/suppression.service';
-import { householdKeyOf } from '@/services/household.service';
+import { householdScopeKey } from '@/services/household.service';
 
 let pass = 0; const fail = [];
 const ok = (n, c, d = '') => { if (c) pass++; else { fail.push(n); console.log(`  FAIL  ${n} ${d}`); } };
@@ -25,7 +25,10 @@ const [seed] = await sql`
    WHERE "addressStreet" IS NOT NULL AND "addressZip" IS NOT NULL
    ORDER BY "id" LIMIT 1`;
 if (!seed) { console.error('no usable lead'); process.exit(1); }
-const HK = householdKeyOf(seed);
+// The key a suppression is actually recorded under: the STORED household id since
+// migration 034, not the address-derived string. Asserting on the old one tested a
+// scheme no reader uses any more.
+const HK = householdScopeKey(seed);
 console.log(`lead ${seed.id} · household ${HK}\n`);
 
 const restore = async () => {

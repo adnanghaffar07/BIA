@@ -19,17 +19,20 @@
 import './lib/env.mjs';
 import { sql } from '@/lib/neon';
 import { reconcileOutreach, summarise } from '@/services/outreachReconcile.service';
-import { householdKeyOf } from '@/services/household.service';
+import { householdScopeKey } from '@/services/household.service';
 
 let pass = 0; const fail = [];
 const ok = (n, c, d = '') => { if (c) pass++; else { fail.push(n); console.log(`  FAIL  ${n} ${d}`); } };
 
 const TEST_CAMPAIGN = `recon-test-${Date.now()}`;
-const LEAD = (await sql`SELECT "id","addressStreet","addressZip" FROM "Lead"
+const LEAD = (await sql`SELECT "id","addressStreet","addressZip","householdId" FROM "Lead"
                          WHERE "addressStreet" IS NOT NULL AND "addressZip" IS NOT NULL
                          ORDER BY "id" LIMIT 1`)[0];
 if (!LEAD) { console.error('no usable lead'); process.exit(1); }
-const HK = householdKeyOf(LEAD);
+// The stored household id (migration 034) — what suppress() writes and every reader
+// looks up. The address-derived key it replaced could not name a household spanning two
+// properties, which is precisely the case case 3 below exercises.
+const HK = householdScopeKey(LEAD);
 console.log(`lead ${LEAD.id} · household ${HK}\n`);
 
 const ev = async (email, vendorLeadId, stoppedAt = null) => {

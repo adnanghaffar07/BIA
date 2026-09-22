@@ -1,6 +1,6 @@
 import { sql } from '@/lib/neon';
 import { insuredEmails, coInsuredEmails, coInsuredName } from './recipients.service';
-import { groupHouseholds, householdKeyOf, type Household } from './household.service';
+import { groupHouseholds, householdScopeKey, type Household } from './household.service';
 import { loadActiveSuppressions, type SuppressionHit } from './suppression.service';
 
 /**
@@ -128,14 +128,29 @@ export async function buildSendList(
   for (const l of leads) {
     const id = String(l.id);
     const hh: Household | undefined = byLeadId.get(id);
-    const hhKey = hh?.key ?? householdKeyOf(l);
-    const persistedKey = householdKeyOf(l);
+    /**
+     * ONE key, from householdScopeKey — the stored householdId, or the address key for a
+     * lead materialisation has not reached yet.
+     *
+     * There used to be two here: `hh?.key ?? householdKeyOf(l)` on one line and
+     * `householdKeyOf(l)` on the next. groupHouseholds names a group after its lowest
+     * lead id while householdKeyOf returns an address key, so for the same household
+     * those are different strings — and the suppression lookup used one of them while
+     * the count below used the other.
+     */
+    const hhKey = householdScopeKey(l);
 
     // 1. Household suppression outranks everything, including a confirmed address. A
     //    household that said stop does not get mail because one of its addresses once
     //    replied.
+    /**
+     * The household's own key first. The per-lead fallback after it covers a suppression
+     * written against a lead that had no usable address at the time — householdKeyOf
+     * returns `hh:lead:<id>` in that case — which would otherwise be invisible to a
+     * household that has since been given a proper key.
+     */
     const hhHit: SuppressionHit | undefined =
-      sup.byHousehold.get(persistedKey)
+      sup.byHousehold.get(hhKey)
       ?? hh?.leadIds.map((x) => sup.byHousehold.get(`hh:lead:${x}`)).find(Boolean);
     if (hhHit) {
       exclude(l, 'suppressed_household', `${hhHit.reason} on ${hhHit.createdAt.slice(0, 10)}`);
@@ -223,7 +238,7 @@ export async function buildSendList(
     exclusions,
     counts: {
       leadsConsidered: leads.length,
-      households: new Set(leads.map((l) => byLeadId.get(String(l.id))?.key ?? householdKeyOf(l))).size,
+      households: new Set(leads.map((l) => householdScopeKey(l))).size,
       recipients: recipients.length,
       excluded,
     },

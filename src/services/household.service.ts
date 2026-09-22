@@ -127,9 +127,26 @@ export function groupHouseholds(leads: LeadLike[]): {
     while (parent.get(c) && parent.get(c) !== r) { const n = parent.get(c)!; parent.set(c, r); c = n; }
     return r;
   };
+  /**
+   * Link the two roots, lowest id winning so the group key stays reproducible.
+   *
+   * ── The bug this replaces ───────────────────────────────────────────────
+   * It read `parent.set(ra, rb < ra ? rb : ra)`. When `ra` was already the lower of the
+   * two roots that assigns `parent[ra] = ra` — a self-loop — and the union silently does
+   * nothing. So a union only took effect when it happened to be discovered from the
+   * higher root, and whether that happened depended on the order rows came back from
+   * Postgres, which has no order without ORDER BY.
+   *
+   * The effect was households under-merged about half the time, differently on each run:
+   * 9,916 groups in one row order and 9,919 in another, on identical data. Two leads
+   * sharing an email address would sometimes be one household and sometimes two — and
+   * this is the function that decides who a household-wide suppression covers, so the
+   * failure mode was a stop that reached some of a household and not the rest.
+   */
   const union = (a: string, b: string) => {
     const ra = find(a), rb = find(b);
-    if (ra !== rb) parent.set(ra, rb < ra ? rb : ra);  // lowest id wins, so the key is reproducible
+    if (ra === rb) return;
+    if (ra < rb) parent.set(rb, ra); else parent.set(ra, rb);
   };
 
   for (const id of ids) parent.set(id, id);
@@ -181,4 +198,31 @@ export function groupHouseholds(leads: LeadLike[]): {
 export function householdKeyOf(lead: LeadLike): string {
   const ak = addressKeyOf(lead);
   return ak ? `hh:${ak}` : `hh:lead:${String(lead.id ?? '')}`;
+}
+
+/**
+ * The key a suppression is recorded under, and the key a send-time check tests.
+ *
+ * Prefer the STORED household (migration 034). Everything about a derived key is a
+ * liability for something that has to outlive the run that wrote it: it changes when the
+ * derivation changes, it cannot name a household spanning two properties, and until the
+ * union-find bug above was fixed it was not even stable between two reads of the same
+ * data.
+ *
+ * ── Why the fallback still exists ───────────────────────────────────────────
+ * A lead arriving from a pull has no householdId until materialiseHouseholds() runs. It
+ * must still be suppressible in that window, so it falls back to the address key.
+ *
+ * The one seam that leaves: a lead suppressed before materialisation and read after it
+ * would be recorded under the address key and looked up under the id. materialiseHouseholds
+ * closes that by rewriting those Suppression rows as it assigns ids — the fallback is a
+ * bridge, not a second scheme.
+ *
+ * Both sides of every comparison call THIS function. That is the whole point: sendList
+ * used to test `group key or address key` on one line and `address key` on the next, and
+ * those are different answers for the same household.
+ */
+export function householdScopeKey(lead: LeadLike): string {
+  const stored = String((lead as Record<string, unknown>).householdId ?? '').trim();
+  return stored || householdKeyOf(lead);
 }

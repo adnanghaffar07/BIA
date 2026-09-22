@@ -5,7 +5,7 @@ import { cohortOf } from './cohort';
 import { pool } from '@/lib/neon';
 import { getLeadsFromDb } from '@/services/storage.service';
 import { loadActiveSuppressions } from './suppression.service';
-import { householdKeyOf } from './household.service';
+import { householdScopeKey } from './household.service';
 // `LeadInput` is a TYPE. Imported as a value it works under Next, whose bundler elides
 // it, and throws "does not provide an export named 'LeadInput'" the moment this module is
 // loaded by plain Node ESM — which is how every script in scripts/ loads it.
@@ -118,7 +118,7 @@ function suppressionReason(
   if (lead.hardBounced === true) return 'suppressed';
   if (lead.campaignUnsubscribedAt) return 'suppressed';
   if (String(lead.campaignStatus ?? '') === 'suppressed') return 'suppressed';
-  if (sup.households.has(householdKeyOf(lead))) return 'suppressed';
+  if (sup.households.has(householdScopeKey(lead))) return 'suppressed';
   return null;
 }
 
