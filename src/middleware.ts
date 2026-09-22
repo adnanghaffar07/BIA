@@ -12,7 +12,11 @@ const JWT_SECRET = new TextEncoder().encode(
 // '/c/' is the public CTA landing page and '/api/cta/' its confirm endpoint
 // (playbook §05). Both are reached from a homeowner's email, so neither can require a
 // session — the signed link token is the only credential, and it is verified in the route.
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/enrich', '/api/webhooks/campaign', '/c/', '/api/cta/'];
+// '/api/cron/' is Vercel Cron, which presents `Authorization: Bearer $CRON_SECRET` and
+// has no CRM session to offer. Each route under it verifies that secret in constant time
+// and fails closed in production — see outreach-reconcile. The same rule as above holds:
+// nothing joins this list without carrying its own equivalent check.
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/enrich', '/api/webhooks/campaign', '/c/', '/api/cta/', '/api/cron/'];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

@@ -46,9 +46,28 @@ type LedgerRow = {
   noInsuredContact: number;
   directMailOnly: number;
   stillA: number; gainedOther: number; aNow: number; mailable: number;
-  lost: number; lostPct: number | null; noPullRecord: number; unexplained: number;
+  lost: number; lostPct: number | null;
+  /** Of the downgrades, the ones that were never contactable on any channel. */
+  downgradedUncontactable: number;
+  /** lostPct with those excluded — the loss among leads outreach could have worked. */
+  workableLostPct: number | null;
+  noPullRecord: number; unexplained: number;
   rated: number; unworkedGradeA: number;
   unworkedTopCounty: string | null; unworkedTopCountyShare: number | null;
+};
+
+/**
+ * Frank's canonical cohort codes (directive Sec. 1), keyed by the Monday of the week.
+ *
+ * He writes and speaks in C1…C7; the ledger rows are renewal weeks. They are the same
+ * seven weeks, and until the code appeared on the row nobody could line one up against
+ * the other without counting Mondays. A week outside the range simply has no code — the
+ * numbering is his, not ours, so inventing a C8 would be asserting something he has not
+ * said.
+ */
+const COHORT_CODES: Record<string, string> = {
+  '2026-10-05': 'C1', '2026-10-12': 'C2', '2026-10-19': 'C3', '2026-10-26': 'C4',
+  '2026-11-02': 'C5', '2026-11-09': 'C6', '2026-11-16': 'C7',
 };
 
 type ReportType = 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability';
@@ -304,6 +323,265 @@ function columnsFor(report: ReportType): QcColumn[] {
 
   return all;
 }
+
+/**
+ * Reports that draw their own table and never populate `rows`.
+ *
+ * The generic per-lead table below renders for every other report. For these it drew an
+ * empty one underneath the real one, headed "0 records — No records match", which reads
+ * as a failed query sitting under a working report.
+ *
+ * Named as a set rather than repeated as `report !== 'x' && report !== 'y'` in the two
+ * places that need it: the ledger was added months after the blast tab and inherited the
+ * same bug, because the condition was a literal in two spots and nothing said what it was
+ * for.
+ */
+const REPORTS_WITH_OWN_TABLE: ReportType[] = ['blast_skiptrace', 'cohort_ledger'];
+
+/**
+ * One renewal week's worth of column definitions — the ledger's answer to columnsFor().
+ *
+ * Same contract as QcColumn and for the same reason, stated at the top of this file: the
+ * table and the CSV read one list, so the file cannot say something different from the
+ * screen. The ledger previously rendered a hand-written header array and a hand-written
+ * body, and could not be exported at all — `setLedger` leaves `rows` empty, so the Export
+ * CSV button was permanently disabled on the one report Frank actually asked to be sent.
+ *
+ * `value` is the exported string; `cell` is the richer on-screen version where there is
+ * one. Anything a tooltip explains has to survive into `value` as a plain number, because
+ * a spreadsheet has no hover.
+ */
+type LedgerColumn = {
+  header: string;
+  value: (d: LedgerRow) => string;
+  cell?: (d: LedgerRow) => React.ReactNode;
+  /** Right-aligned on screen; numbers read better that way. */
+  numeric?: boolean;
+};
+
+const LEDGER_COLUMNS: LedgerColumn[] = [
+  {
+    header: 'Cohort',
+    value: (d) => COHORT_CODES[d.cohort] ?? '',
+    cell: (d) => {
+      const code = COHORT_CODES[d.cohort];
+      return code
+        ? <Chip size="small" label={code} sx={{ height: 19, fontSize: 11, fontWeight: 700, bgcolor: '#e8eefc', color: '#1a3d7c' }} />
+        : <span style={{ color: '#c2c7d0' }}>—</span>;
+    },
+  },
+  { header: 'Renewal week', value: (d) => d.label },
+  { header: 'Leads', value: (d) => String(d.total), numeric: true },
+  { header: 'Grade A at pull', value: (d) => String(d.aAtPull), numeric: true },
+  {
+    header: 'Downgraded',
+    value: (d) => String(d.downgraded),
+    numeric: true,
+    cell: (d) => (d.downgraded ? `−${d.downgraded}` : '—'),
+  },
+  { header: 'Low point', value: (d) => String(d.trough), numeric: true },
+  {
+    header: 'Regained A',
+    value: (d) => String(d.recovered),
+    numeric: true,
+    cell: (d) => (
+      <Tooltip arrow title={
+        d.recovered
+          ? `${d.recovered} lead${d.recovered === 1 ? '' : 's'} left Grade A and ${d.recovered === 1 ? 'is' : 'are'} Grade A again — a grade round trip. This is NOT the skip trace count; see "Email found".`
+          : 'Nothing that left Grade A has come back to it. Contact recovery is counted under "Email found".'
+      }>
+        <span style={{ cursor: 'help' }}>{d.recovered ? `+${d.recovered}` : '—'}</span>
+      </Tooltip>
+    ),
+  },
+  {
+    header: 'Grade A now',
+    // The ↑ suffix is a screen affordance; the CSV gets the plain count and a separate
+    // column below, because "141+18↑" is not a number a spreadsheet can total.
+    value: (d) => String(d.aNow),
+    numeric: true,
+    cell: (d) => (
+      <>
+        {d.aNow.toLocaleString()}
+        {d.gainedOther ? <Typography component="span" variant="caption" sx={{ color: '#166534', ml: 0.5 }}>+{d.gainedOther}↑</Typography> : null}
+      </>
+    ),
+  },
+  { header: 'Climbed in', value: (d) => String(d.gainedOther), numeric: true },
+  {
+    /* What the skip trace actually bought — the number that moves Mailable. */
+    header: 'Email found',
+    value: (d) => String(d.emailRecovered),
+    numeric: true,
+    cell: (d) => (
+      <Tooltip arrow title={
+        d.emailRecovered
+          ? `Tracerfy or BatchData found an insured email for ${d.emailRecovered} isolated lead${d.emailRecovered === 1 ? '' : 's'} in this week. They were Grade A throughout — unmailable, not downgraded — so this shows up in Mailable rather than in the grade columns.`
+          : 'No isolated lead in this week has had an insured email found for it yet.'
+      }>
+        <span style={{ cursor: 'help' }}>{d.emailRecovered ? `+${d.emailRecovered}` : '—'}</span>
+      </Tooltip>
+    ),
+  },
+  {
+    /* Reach, not eligibility. Grade A says quote-ready; this says contactable. */
+    header: 'Mailable',
+    value: (d) => String(d.mailable),
+    numeric: true,
+    cell: (d) => {
+      const share = d.aNow ? d.mailable / d.aNow : 1;
+      return (
+        <Tooltip arrow title={
+          d.aNow
+            ? `${d.mailable} of ${d.aNow} Grade A leads have an insured email — ${Math.round(share * 100)}%. The rest are quote-ready and unmailable.`
+            : 'No Grade A leads in this week.'
+        }>
+          <span style={{ cursor: 'help' }}>
+            {d.mailable.toLocaleString()}
+            {d.aNow > 0 && d.mailable < d.aNow && (
+              <Typography component="span" variant="caption" sx={{ color: '#8a5a00', ml: 0.75, fontWeight: 400 }}>
+                {`· ${Math.round(share * 100)}%`}
+              </Typography>
+            )}
+          </span>
+        </Tooltip>
+      );
+    },
+  },
+  {
+    header: 'Mailable %',
+    // Written out because a reader of the file cannot divide two columns in their head,
+    // and this is the ratio the cohort is judged on.
+    value: (d) => (d.aNow ? String(Math.round((d.mailable / d.aNow) * 100)) : ''),
+    numeric: true,
+  },
+  {
+    /* Phone but no email — the call queue, not a loss. */
+    header: 'Call queue',
+    value: (d) => String(d.phoneOnly),
+    numeric: true,
+    cell: (d) => (
+      <Tooltip arrow title={
+        d.phoneOnly
+          ? `${d.phoneOnly} Grade A lead${d.phoneOnly === 1 ? '' : 's'} with a phone but no insured email. They go to the call queue, not the email campaign, and they are not downgraded for it.`
+          : 'Every Grade A lead in this week with a phone also has an email.'
+      }>
+        <span style={{ cursor: 'help' }}>{d.phoneOnly || '—'}</span>
+      </Tooltip>
+    ),
+  },
+  {
+    /* Nothing anywhere on the card — the post is the only channel left. */
+    header: 'Direct mail',
+    value: (d) => String(d.directMailOnly),
+    numeric: true,
+    cell: (d) => (
+      <Tooltip arrow title={
+        `${d.directMailOnly} lead${d.directMailOnly === 1 ? '' : 's'} have no phone and no email anywhere on the card — direct mail by property address.`
+        + (d.noInsuredContact > d.directMailOnly
+          ? ` A further ${d.noInsuredContact - d.directMailOnly} have nothing for the INSURED but a co-insured contact, so the household can still be called.`
+          : '')
+      }>
+        <span style={{ cursor: 'help' }}>
+          {d.directMailOnly || '—'}
+          {d.noInsuredContact > d.directMailOnly && (
+            <Typography component="span" variant="caption" sx={{ color: '#8a5a00', ml: 0.5, fontWeight: 400 }}>
+              {`+${d.noInsuredContact - d.directMailOnly}`}
+            </Typography>
+          )}
+        </span>
+      </Tooltip>
+    ),
+  },
+  {
+    /*
+     * The amber "+n" on screen, given its own column in the file.
+     *
+     * Grade A with nothing for the INSURED but a contact somewhere on the household. On
+     * screen it is a superscript next to Direct mail; in a spreadsheet a superscript is
+     * nothing at all, and this is the population the insured-only send rule cannot reach.
+     */
+    header: 'No insured contact',
+    value: (d) => String(d.noInsuredContact),
+    numeric: true,
+  },
+  {
+    /* Grade A nobody has put in front of a producer. Not lost — unseen. */
+    header: 'Unworked A',
+    value: (d) => (d.rated === 0 ? '' : String(d.unworkedGradeA)),
+    numeric: true,
+    cell: (d) => (
+      d.rated === 0
+        ? <Tooltip arrow title="This week has not been worked yet"><span style={{ color: '#9098a6' }}>—</span></Tooltip>
+        : d.unworkedGradeA
+          ? <Tooltip arrow title={
+              d.unworkedTopCounty
+                ? `${d.unworkedGradeA} Grade A still unrated — ${d.unworkedTopCountyShare}% of them in ${d.unworkedTopCounty}. ${d.rated} leads in this week have been rated, so these were available and never surfaced.`
+                : `${d.unworkedGradeA} Grade A still unrated, spread across counties. ${d.rated} leads in this week have been rated.`
+            }>
+              <span style={{ cursor: 'help' }}>{d.unworkedGradeA.toLocaleString()}</span>
+            </Tooltip>
+          : '0'
+    ),
+  },
+  { header: 'Lost', value: (d) => String(d.lost), numeric: true },
+  {
+    /*
+     * Of the losses, the ones that were never contactable on any channel.
+     *
+     * Split out because the loss target is about outreach, and these are a data outcome.
+     * Averaging them together produced a 20-40% loss against a 5% target with nothing on
+     * screen to say what it was made of.
+     */
+    header: 'Lost: no contact',
+    value: (d) => String(d.downgradedUncontactable),
+    numeric: true,
+    cell: (d) => (
+      <Tooltip arrow title={
+        d.downgradedUncontactable
+          ? `${d.downgradedUncontactable} of the ${d.lost} lost had no phone and no email after the skip trace — they were never contactable, so they are not outreach attrition.`
+          : 'Every loss in this week is for some reason other than being uncontactable.'
+      }>
+        <span style={{ cursor: 'help' }}>{d.downgradedUncontactable || '—'}</span>
+      </Tooltip>
+    ),
+  },
+  {
+    header: 'Lost %',
+    value: (d) => (d.lostPct == null ? '' : String(d.lostPct)),
+    numeric: true,
+    cell: (d) => (d.lostPct == null ? '—' : `${d.lostPct}%`),
+  },
+  {
+    /* The same loss with the never-contactable taken out. Both are shown, never one. */
+    header: 'Workable lost %',
+    value: (d) => (d.workableLostPct == null ? '' : String(d.workableLostPct)),
+    numeric: true,
+    cell: (d) => (
+      <Tooltip arrow title={
+        d.workableLostPct == null
+          ? 'No workable Grade A leads at pull in this week.'
+          : `Of the leads that could actually be contacted, ${d.workableLostPct}% left Grade A. The headline ${d.lostPct}% includes ${d.downgradedUncontactable} that never had a phone or an email.`
+      }>
+        <span style={{ cursor: 'help' }}>{d.workableLostPct == null ? '—' : `${d.workableLostPct}%`}</span>
+      </Tooltip>
+    ),
+  },
+  {
+    /*
+     * Carried into the file rather than left in the footnote under the table.
+     *
+     * A loss percentage quoted without saying how many leads it could not see is the kind
+     * of number that gets argued about a month later. On screen these live in a caption;
+     * an exported row has no caption to sit under.
+     */
+    header: 'No pull record',
+    value: (d) => String(d.noPullRecord),
+    numeric: true,
+  },
+  { header: 'Left A unexplained', value: (d) => String(d.unexplained), numeric: true },
+  { header: 'Rated', value: (d) => String(d.rated), numeric: true },
+];
 
 export default function QcReportsPage() {
   // Filters persist across navigation until reset (Frank Aug-2026).
@@ -657,8 +935,6 @@ export default function QcReportsPage() {
    * matching row, which is the one place the two differ and the only sane way round.
    */
   const exportCsv = () => {
-    const cols = tableColumns;
-
     const esc = (v: string) => {
       let s = String(v ?? '');
       // A cell starting with = + - @ is executed as a formula by Excel and Sheets when
@@ -668,8 +944,21 @@ export default function QcReportsPage() {
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
 
-    const lines = [cols.map((c) => esc(c.header)).join(',')];
-    for (const r of shownRows) lines.push(cols.map((c) => esc(c.value(r))).join(','));
+    /**
+     * The ledger is one row per WEEK, not per lead, so it has its own column list and
+     * never populates `rows`. Handled as a branch rather than by inventing a QcRow per
+     * cohort — which is the same reason it has its own endpoint and its own table.
+     */
+    const isLedger = rowsReport === 'cohort_ledger';
+    const lines = isLedger
+      ? [
+        LEDGER_COLUMNS.map((c) => esc(c.header)).join(','),
+        ...ledger.map((d) => LEDGER_COLUMNS.map((c) => esc(c.value(d))).join(',')),
+      ]
+      : [
+        tableColumns.map((c) => esc(c.header)).join(','),
+        ...shownRows.map((r) => tableColumns.map((c) => esc(c.value(r))).join(',')),
+      ];
 
     // CRLF and a UTF-8 BOM, both for Excel. Without the BOM it reads the file as ANSI and
     // the em dashes and middot separators in Detail come out as mojibake — the export
@@ -678,10 +967,12 @@ export default function QcReportsPage() {
 
     // Name says which report, and whether it is filtered — so a narrowed export is never
     // mistaken later for the full set.
-    const filtered = shownRows.length !== rows.length ? '_filtered' : '';
+    // A drill-down chip narrows the per-lead reports; the ledger has no chips, so it is
+    // never "filtered" and must not be labelled as though it might be.
+    const filtered = !isLedger && shownRows.length !== rows.length ? '_filtered' : '';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `BIA_QC_${report}${filtered}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `BIA_QC_${rowsReport ?? report}${filtered}_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
   };
@@ -698,6 +989,9 @@ export default function QcReportsPage() {
    * that way if someone clicked during the fetch.
    */
   const tableColumns = useMemo(() => columnsFor(rowsReport ?? report), [rowsReport, report]);
+  // Keyed off the SELECTED report, not the one last run, so switching to the ledger hides
+  // the generic table immediately rather than leaving the previous report's rows on screen.
+  const rendersOwnTable = REPORTS_WITH_OWN_TABLE.includes(report);
 
   // Contact-coverage tallies (Frank's breakdown) — computed from the returned rows.
   /**
@@ -991,7 +1285,17 @@ const MAX_RENDERED = 300;
           <TextField size="small" type="date" label="Eff to" value={effTo} onChange={(e) => setEffTo(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
           <Button variant="contained" size="small" startIcon={<SearchIcon />} onClick={run} disabled={loading || (report === 'keyword' && !q.trim())}>Run</Button>
           <Box sx={{ flex: 1 }} />
-          <Button variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={exportCsv} disabled={!shownRows.length}>Export CSV</Button>
+          {/*
+            The ledger keeps its rows in `ledger`, not `rows`, so gating purely on
+            shownRows left Export CSV permanently greyed out on the one report anybody
+            actually needed to send anywhere.
+          */}
+          <Button
+            variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={exportCsv}
+            disabled={rowsReport === 'cohort_ledger' ? !ledger.length : !shownRows.length}
+          >
+            Export CSV
+          </Button>
         </Stack>
       </Paper>
 
@@ -1021,149 +1325,61 @@ const MAX_RENDERED = 300;
                   Grade A population split by how it can actually be reached, so the row
                   says what can be done with the week rather than only how big it is.
                 */}
-                {['Renewal week', 'Leads', 'Grade A at pull', 'Downgraded', 'Low point',
-                  'Regained A', 'Grade A now', 'Email found', 'Mailable', 'Call queue', 'Direct mail',
-                  'Unworked A', 'Lost', 'Lost %'].map((h, i) => (
-                  <TableCell key={h} align={i > 1 ? 'right' : 'left'}
-                    sx={{ fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{h}</TableCell>
+                {LEDGER_COLUMNS.map((c) => (
+                  <TableCell key={c.header} align={c.numeric ? 'right' : 'left'}
+                    sx={{ fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{c.header}</TableCell>
                 ))}
               </TableRow>
             </TableHead>
             <TableBody>
+              {/*
+                One row, rendered from LEDGER_COLUMNS — the same list the CSV writes.
+                Each column's tooltip and its own conditional formatting live in its
+                `cell`; what is left here is the formatting that depends on the ROW.
+              */}
               {ledger.map((d) => {
-                // The target is the whole point of the column, so it is coloured rather
-                // than left for the reader to compare against a number in a blurb.
                 const over = d.lostPct != null && d.lostPct > LOST_TARGET_PCT;
+                const emphasis: Record<string, boolean> = {
+                  'Renewal week': true,
+                  'Grade A at pull': true,
+                  'Grade A now': true,
+                  Mailable: true,
+                  'Lost %': true,
+                  'Workable lost %': true,
+                  'Regained A': !!d.recovered,
+                  'Email found': !!d.emailRecovered,
+                  'Unworked A': !!d.unworkedGradeA,
+                };
+                const colour: Record<string, string> = {
+                  Downgraded: d.downgraded ? '#b3261e' : 'inherit',
+                  'Regained A': d.recovered ? '#166534' : 'inherit',
+                  'Email found': d.emailRecovered ? '#166534' : 'inherit',
+                  Mailable: d.aNow && d.mailable / d.aNow < 0.8 ? '#8a5a00' : '#166534',
+                  'Call queue': d.phoneOnly ? '#8a5a00' : 'inherit',
+                  'Direct mail': d.directMailOnly ? '#b3261e' : 'inherit',
+                  'No insured contact': d.noInsuredContact ? '#8a5a00' : 'inherit',
+                  'Unworked A': d.unworkedGradeA ? '#8a5a00' : 'inherit',
+                  // The only colour set by a target rather than by being non-zero.
+                  'Lost %': over ? '#b3261e' : '#166534',
+                  'Workable lost %': d.workableLostPct != null && d.workableLostPct > LOST_TARGET_PCT ? '#b3261e' : '#166534',
+                  'Lost: no contact': d.downgradedUncontactable ? '#8a5a00' : 'inherit',
+                };
                 return (
                   <TableRow key={d.cohort} hover>
-                    <TableCell sx={{ fontSize: 12, whiteSpace: 'nowrap', fontWeight: 600 }}>{d.label}</TableCell>
-                    <TableCell sx={{ fontSize: 12 }}>{d.total.toLocaleString()}</TableCell>
-                    <TableCell align="right" sx={{ fontSize: 12, fontWeight: 700 }}>{d.aAtPull.toLocaleString()}</TableCell>
-                    <TableCell align="right" sx={{ fontSize: 12, color: d.downgraded ? '#b3261e' : 'inherit' }}>
-                      {d.downgraded ? `−${d.downgraded}` : '—'}
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontSize: 12 }}>{d.trough.toLocaleString()}</TableCell>
-                    <TableCell align="right" sx={{ fontSize: 12, color: d.recovered ? '#166534' : 'inherit', fontWeight: d.recovered ? 700 : 400 }}>
-                      <Tooltip arrow title={
-                        d.recovered
-                          ? `${d.recovered} lead${d.recovered === 1 ? '' : 's'} left Grade A and ${d.recovered === 1 ? 'is' : 'are'} Grade A again — a grade round trip. This is NOT the skip trace count; see "Email found".`
-                          : 'Nothing that left Grade A has come back to it. Contact recovery is counted under "Email found".'
-                      }>
-                        <span style={{ cursor: 'help' }}>{d.recovered ? `+${d.recovered}` : '—'}</span>
-                      </Tooltip>
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontSize: 12, fontWeight: 700 }}>
-                      {d.aNow.toLocaleString()}
-                      {d.gainedOther ? <Typography component="span" variant="caption" sx={{ color: '#166534', ml: 0.5 }}>+{d.gainedOther}↑</Typography> : null}
-                    </TableCell>
-                    {/*
-                      What the skip trace actually bought.
-
-                      Sits beside Mailable because it is the number that moves it: every
-                      one of these is a Grade A lead that could not be emailed and now can.
-                    */}
-                    <TableCell align="right" sx={{ fontSize: 12, color: d.emailRecovered ? '#166534' : 'inherit', fontWeight: d.emailRecovered ? 700 : 400 }}>
-                      <Tooltip arrow title={
-                        d.emailRecovered
-                          ? `Tracerfy or BatchData found an insured email for ${d.emailRecovered} isolated lead${d.emailRecovered === 1 ? '' : 's'} in this week. They were Grade A throughout — unmailable, not downgraded — so this shows up in Mailable rather than in the grade columns.`
-                          : 'No isolated lead in this week has had an insured email found for it yet.'
-                      }>
-                        <span style={{ cursor: 'help' }}>{d.emailRecovered ? `+${d.emailRecovered}` : '—'}</span>
-                      </Tooltip>
-                    </TableCell>
-                    {/*
-                      Reach, not eligibility.
-                      
-                      "Grade A now" says how many are quote-ready; this says how many can
-                      actually be emailed. On the Oct 12 week those are 87 and 46. Shown
-                      next to each other so the gap cannot be read past, and coloured when
-                      it is wide — a week can look like its best on the loss column while
-                      barely half of it is contactable.
-                    */}
-                    {(() => {
-                      const share = d.aNow ? d.mailable / d.aNow : 1;
-                      return (
-                        <TableCell align="right" sx={{ fontSize: 12, fontWeight: 700, color: share < 0.8 ? '#8a5a00' : '#166534' }}>
-                          <Tooltip arrow title={
-                            d.aNow
-                              ? `${d.mailable} of ${d.aNow} Grade A leads have an insured email — ${Math.round(share * 100)}%. The rest are quote-ready and unmailable.`
-                              : 'No Grade A leads in this week.'
-                          }>
-                            <span style={{ cursor: 'help' }}>
-                              {d.mailable.toLocaleString()}
-                              {d.aNow > 0 && d.mailable < d.aNow && (
-                                <Typography component="span" variant="caption" sx={{ color: '#8a5a00', ml: 0.75, fontWeight: 400 }}>
-                                  {`· ${Math.round(share * 100)}%`}
-                                </Typography>
-                              )}
-                            </span>
-                          </Tooltip>
-                        </TableCell>
-                      );
-                    })()}
-                    {/*
-                      Phone but no email — Ruben's queue, not a loss. These leads are
-                      correctly Grade A: the grading rule is about appetite, and a
-                      phone-reachable prospect is still a prospect.
-                    */}
-                    <TableCell align="right" sx={{ fontSize: 12, color: d.phoneOnly ? '#8a5a00' : 'inherit' }}>
-                      <Tooltip arrow title={
-                        d.phoneOnly
-                          ? `${d.phoneOnly} Grade A lead${d.phoneOnly === 1 ? '' : 's'} with a phone but no insured email. They go to the call queue, not the email campaign, and they are not downgraded for it.`
-                          : 'Every Grade A lead in this week with a phone also has an email.'
-                      }>
-                        <span style={{ cursor: 'help' }}>{d.phoneOnly || '—'}</span>
-                      </Tooltip>
-                    </TableCell>
-                    {/*
-                      Nothing anywhere on the card. The post is the only channel left —
-                      flagged, never regraded, because a lead with no email is not a worse
-                      prospect, it is a prospect on a different channel.
-
-                      The amber count beside it is the gap worth watching: leads with
-                      nothing for the INSURED but something for the household. A call
-                      queue containing people with no number is not a queue, and until
-                      these two were counted apart they were the same column.
-                    */}
-                    <TableCell align="right" sx={{ fontSize: 12, color: d.directMailOnly ? '#b3261e' : 'inherit' }}>
-                      <Tooltip arrow title={
-                        `${d.directMailOnly} lead${d.directMailOnly === 1 ? '' : 's'} have no phone and no email anywhere on the card — direct mail by property address.`
-                        + (d.noInsuredContact > d.directMailOnly
-                          ? ` A further ${d.noInsuredContact - d.directMailOnly} have nothing for the INSURED but a co-insured contact, so the household can still be called.`
-                          : '')
-                      }>
-                        <span style={{ cursor: 'help' }}>
-                          {d.directMailOnly || '—'}
-                          {d.noInsuredContact > d.directMailOnly && (
-                            <Typography component="span" variant="caption" sx={{ color: '#8a5a00', ml: 0.5, fontWeight: 400 }}>
-                              {`+${d.noInsuredContact - d.directMailOnly}`}
-                            </Typography>
-                          )}
-                        </span>
-                      </Tooltip>
-                    </TableCell>
-                    {/*
-                      Grade A leads nobody has put in front of a producer. Amber rather
-                      than red: they are not lost, they are unseen — and a rated lead
-                      gets an indicative price in email 2 while these cannot.
-                    */}
-                    <TableCell align="right" sx={{ fontSize: 12, fontWeight: d.unworkedGradeA ? 700 : 400, color: d.unworkedGradeA ? '#8a5a00' : 'inherit' }}>
-                      {d.rated === 0
-                        ? <Tooltip arrow title="This week has not been worked yet"><span style={{ color: '#9098a6' }}>—</span></Tooltip>
-                        : d.unworkedGradeA
-                          ? <Tooltip arrow title={
-                              d.unworkedTopCounty
-                                ? `${d.unworkedGradeA} Grade A still unrated — ${d.unworkedTopCountyShare}% of them in ${d.unworkedTopCounty}. ${d.rated} leads in this week have been rated, so these were available and never surfaced.`
-                                : `${d.unworkedGradeA} Grade A still unrated, spread across counties. ${d.rated} leads in this week have been rated.`
-                            }>
-                              <span style={{ cursor: 'help' }}>{d.unworkedGradeA.toLocaleString()}</span>
-                            </Tooltip>
-                          : '0'}
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontSize: 12 }}>{d.lost.toLocaleString()}</TableCell>
-                    <TableCell align="right" sx={{ fontSize: 12, fontWeight: 700, color: over ? '#b3261e' : '#166534' }}>
-                      {d.lostPct == null ? '—' : `${d.lostPct}%`}
-                    </TableCell>
+                    {LEDGER_COLUMNS.map((c) => (
+                      <TableCell
+                        key={c.header}
+                        align={c.numeric ? 'right' : 'left'}
+                        sx={{
+                          fontSize: 12,
+                          whiteSpace: c.header === 'Renewal week' ? 'nowrap' : undefined,
+                          fontWeight: emphasis[c.header] ? 700 : 400,
+                          color: colour[c.header] ?? 'inherit',
+                        }}
+                      >
+                        {c.cell ? c.cell(d) : (c.value(d) || '—')}
+                      </TableCell>
+                    ))}
                   </TableRow>
                 );
               })}
@@ -2009,13 +2225,13 @@ const MAX_RENDERED = 300;
         </Paper>
       )}
 
-      {report !== 'blast_skiptrace' && (
+      {!rendersOwnTable && (
         <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
           {loading ? <CircularProgress size={18} /> : <Typography variant="body2" color="text.secondary"><strong>{shownRows.length}</strong> record{shownRows.length === 1 ? '' : 's'}</Typography>}
         </Box>
       )}
 
-      {report !== 'blast_skiptrace' && (
+      {!rendersOwnTable && (
       <Paper variant="outlined" sx={{ overflowX: 'auto' }}>
         <Table size="small" stickyHeader>
           <TableHead>

@@ -111,6 +111,13 @@ export type CohortLedgerRow = {
   /** lost / aAtPull, as a percentage. Frank's target is <= 5. */
   lostPct: number | null;
   /**
+   * Of `downgraded`, the ones that left Grade A because the skip trace found no phone and
+   * no email — never contactable, so never really workable.
+   */
+  downgradedUncontactable: number;
+  /** `lostPct` with those excluded: the loss among leads outreach could have worked. */
+  workableLostPct: number | null;
+  /**
    * Leads in this cohort with no recorded starting grade.
    *
    * Carried on every row rather than footnoted: these leads are outside the measurement
@@ -191,13 +198,30 @@ export async function getCohortLedger(
     flagged AS (
       SELECT s.*,
              EXISTS (SELECT 1 FROM "GradeChange" g
-                      WHERE g."leadId" = s."id" AND g."fromGrade" = 'A') AS left_a
+                      WHERE g."leadId" = s."id" AND g."fromGrade" = 'A') AS left_a,
+             /*
+              * Of those, the ones that left because nobody could ever contact them.
+              *
+              * Frank's target is a loss of 5% or less, and without this split the
+              * ledger reports a loss of 20-40% against it with no way to see what the
+              * loss is made of. A lead the skip trace could find no phone and no email
+              * for was never workable — it is a data outcome, not outreach attrition,
+              * and averaging the two together makes the number mean nothing.
+              *
+              * Matched on the reason text written by the re-grade, which is the only
+              * place that distinction is recorded.
+              */
+             EXISTS (SELECT 1 FROM "GradeChange" g
+                      WHERE g."leadId" = s."id" AND g."fromGrade" = 'A'
+                        AND g."reason" ILIKE '%no phone and no email%') AS left_a_uncontactable
         FROM scoped s
     )
     SELECT "cohort",
            COUNT(*)::int                                                              AS total,
            COUNT(*) FILTER (WHERE "gradeAtPull" = 'A')::int                           AS a_at_pull,
            COUNT(*) FILTER (WHERE "gradeAtPull" = 'A' AND left_a)::int                AS downgraded,
+           COUNT(*) FILTER (WHERE "gradeAtPull" = 'A' AND left_a
+                              AND left_a_uncontactable)::int                          AS downgraded_uncontactable,
            COUNT(*) FILTER (WHERE "gradeAtPull" = 'A' AND left_a
                               AND now_grade = 'A')::int                               AS recovered,
            COUNT(*) FILTER (WHERE "recoveryStage" = 'recovered')::int                 AS email_recovered,
@@ -334,6 +358,19 @@ export async function getCohortLedger(
       lost,
       // A cohort with no Grade A at pull has no loss rate — not a loss rate of zero.
       lostPct: aAtPull ? Math.round((lost / aAtPull) * 1000) / 10 : null,
+      downgradedUncontactable: Number(r.downgraded_uncontactable),
+      /**
+       * The loss with the never-contactable leads taken out — what outreach actually lost.
+       *
+       * Both rates are reported, never one. `lostPct` is the honest total and stays the
+       * headline; this one answers the question the total cannot: of the leads we could
+       * have worked, how many did we lose. Quoting only this would flatter the number,
+       * and quoting only the total buries a real result under a data problem.
+       */
+      workableLostPct: aAtPull - Number(r.downgraded_uncontactable) > 0
+        ? Math.round(((lost - Number(r.downgraded_uncontactable))
+          / (aAtPull - Number(r.downgraded_uncontactable))) * 1000) / 10
+        : null,
       noPullRecord: Number(r.no_pull_record),
       rated: Number(r.rated),
       unworkedGradeA: Number(r.unworked_a),
