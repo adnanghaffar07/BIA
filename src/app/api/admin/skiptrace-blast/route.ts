@@ -4,6 +4,7 @@ import { getSessionUser, actorLabel } from '@/lib/auth';
 import { traceAndApply, skipTraceBlocker, effectiveGrade } from '@/services/skipTraceApply.service';
 import { isRunFatal, VendorError } from '@/services/vendorErrors';
 import { insuredEmails } from '@/services/recipients.service';
+import { ownerEntityOf, type EntityLead } from '@/lib/ownerEntity';
 
 /**
  * Deep Skip Trace Blast over an effective-date range (Frank Sep-2026).
@@ -110,6 +111,12 @@ type Triage = {
   wrongGrade: number;
   /** Skipped because we already hold an insured address — only when onlyMissingEmail. */
   alreadyReachable: number;
+  /**
+   * Owned by a trust, company or municipality (Frank Sep-2026). NOT merged into the
+   * counts above: these are listed in full, because "we are not tracing 22 of your
+   * leads" is a statement somebody has to be able to check.
+   */
+  entityOwned: EntityLead[];
 };
 
 /** Split the filtered population into what we would trace and what we would skip. */
@@ -117,18 +124,42 @@ async function triage(f: ReturnType<typeof parseFilters>): Promise<Triage> {
   // No practical cap: the blast must see the whole matching set, not a page of it.
   const candidates = await getLeadsFromDb({ ...f, limit: 100000, orderBy: 'xdate' });
   const eligible: any[] = [];
+  const entityOwned: EntityLead[] = [];
   let alreadyTraced = 0, missingName = 0, wrongGrade = 0, alreadyReachable = 0;
 
   for (const lead of candidates) {
     if (!BLAST_GRADES.includes(effectiveGrade(lead))) { wrongGrade++; continue; }
     if (lead.deepSkipTracedAt) { alreadyTraced++; continue; }
+
+    /**
+     * Entity-owned: listed, never traced.
+     *
+     * Placed before the name check on purpose. "Maybloom Family Trust" HAS a first and
+     * last name as far as the columns are concerned, so it would sail past that rule
+     * and into the eligible list — which is exactly how 22 trusts ended up sitting at
+     * Grade A waiting for a trace that would have billed and found nothing.
+     */
+    const entity = ownerEntityOf(lead);
+    if (entity) {
+      entityOwned.push({
+        propertyId: lead.propertyId,
+        owner: [lead.owner1FirstName, lead.owner1LastName].filter(Boolean).join(' ').trim(),
+        address: [lead.addressStreet, lead.addressCity].filter(Boolean).join(', '),
+        effectiveDate: lead.effectiveDate ?? null,
+        grade: effectiveGrade(lead),
+        label: entity.label,
+        matched: entity.matched,
+      });
+      continue;
+    }
+
     if (!String(lead.owner1FirstName ?? '').trim() || !String(lead.owner1LastName ?? '').trim()) {
       missingName++; continue;
     }
     if (f.onlyMissingEmail && insuredEmails(lead).length > 0) { alreadyReachable++; continue; }
     eligible.push(lead);
   }
-  return { candidates, eligible, alreadyTraced, missingName, wrongGrade, alreadyReachable };
+  return { candidates, eligible, alreadyTraced, missingName, wrongGrade, alreadyReachable, entityOwned };
 }
 
 /** FREE — what the blast would do, so nobody spends credits to find out. */
@@ -163,7 +194,10 @@ export async function GET(req: NextRequest) {
         missingName: t.missingName,
         wrongGrade: t.wrongGrade,
         alreadyReachable: t.alreadyReachable,
+        entityOwned: t.entityOwned.length,
       },
+      // Listed in full, not just counted — see EntityLead.
+      entityOwned: t.entityOwned,
       // Ceiling, not a charge: a miss costs nothing, so real spend lands lower.
       maxCredits: t.eligible.length * CREDITS_PER_HIT,
     });

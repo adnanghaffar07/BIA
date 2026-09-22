@@ -2,6 +2,7 @@ import type { Lead } from '@/types/lead';
 import type { LeadGrade } from '@/types/grade';
 import type { CarrierEligibilityResult } from '@/types/carrier';
 import { checkCarrierEligibility } from './carrier.service';
+import { isEntityOwned } from '@/lib/ownerEntity';
 
 // ─── Critical fields ──────────────────────────────────────────────────────────
 //
@@ -199,6 +200,10 @@ export function getCompletenessPercentage(lead: Lead): number {
  */
 export function canRunSkipTrace(lead: Lead, _eligibility?: CarrierEligibilityResult): boolean {
   if ((lead as any).skipTraced) return false;
+  // Frank (Sep-2026): an entity owner — trust, company, municipality — has no natural
+  // person behind it, so the enhanced lookup bills and finds nothing. Refused here so
+  // the button never offers an action the server will reject.
+  if (isEntityOwned(lead as any)) return false;
   const grade = (lead as any).manualGrade || (lead as any).grade;
   return grade === 'A' || grade === 'B' || grade === 'C';
 }

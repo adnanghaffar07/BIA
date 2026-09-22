@@ -4,6 +4,7 @@ import { updateLead } from '@/services/storage.service';
 import { runTracerfy } from '@/services/tracerfy.service';
 import { buildTraceUpdate } from '@/services/skipTraceApply.service';
 import { compareOwnerNames } from '@/services/ownerNameMatch.service';
+import { ownerEntityOf } from '@/lib/ownerEntity';
 
 /**
  * Retroactive Tracerfy skip-trace batch (Frank Aug-2026). Runs the NEW skip trace across
@@ -33,15 +34,32 @@ function ratedInRange(from: string) {
 
 const fullName = (f: any, l: any) => [String(f ?? '').replace(/\bnull\b/gi, '').trim(), String(l ?? '').trim()].filter(Boolean).join(' ').trim();
 
+/**
+ * Drop entity-owned accounts before anything bills (Frank Sep-2026).
+ *
+ * This route reaches runTracerfy() directly and never calls skipTraceBlocker(), so the
+ * guard that protects the blast and the lead card does not protect it. Filtering at the
+ * population is the equivalent — and it is the honest place for it, because the credit
+ * estimate in the GET must match what the POST will actually do.
+ */
+function splitEntities(rows: any[]) {
+  const people: any[] = [];
+  const entities: any[] = [];
+  for (const r of rows) (ownerEntityOf(r) ? entities : people).push(r);
+  return { people, entities };
+}
+
 export async function GET(req: NextRequest) {
   try {
     const from = req.nextUrl.searchParams.get('from') || DEFAULT_FROM;
-    const rows = await ratedInRange(from);
+    const { people, entities } = splitEntities(await ratedInRange(from));
     return NextResponse.json({
       success: true, dryRun: true, from,
-      accounts: rows.length,
-      estimatedCredits: rows.length * DEEP_CREDITS_PER_LEAD,
-      note: `Would run Tracerfy on ${rows.length} rated accounts effective ${from}+ (≈${rows.length * DEEP_CREDITS_PER_LEAD} credits at 15/account).`,
+      accounts: people.length,
+      entityOwnedSkipped: entities.length,
+      estimatedCredits: people.length * DEEP_CREDITS_PER_LEAD,
+      note: `Would run Tracerfy on ${people.length} rated accounts effective ${from}+ (≈${people.length * DEEP_CREDITS_PER_LEAD} credits at 15/account)`
+        + (entities.length ? `. ${entities.length} trust/company-owned account(s) excluded — no named person to look up.` : '.'),
     });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err?.message || 'Dry run failed' }, { status: 500 });
@@ -51,7 +69,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const from = req.nextUrl.searchParams.get('from') || DEFAULT_FROM;
-    const rows = await ratedInRange(from);
+    const { people: rows, entities } = splitEntities(await ratedInRange(from));
 
     const discrepancies: { address: string; oldName: string; tracerfyName: string; verdict: string }[] = [];
     const noEmail: { address: string; owner: string; hasPhone: boolean }[] = [];
@@ -103,6 +121,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true, dryRun: false, from,
       creditsSpent: coverage.processed * DEEP_CREDITS_PER_LEAD,
+      entityOwnedSkipped: entities.length,
       coverage, discrepancies, noEmail,
     });
   } catch (err: any) {

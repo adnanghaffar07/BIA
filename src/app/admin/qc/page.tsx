@@ -98,6 +98,8 @@ type PipelineRow = {
   effectiveDate: string | null; grade: string | null; status: string | null;
   hasEmail: boolean; hasPhone: boolean; triedTracerfyAt: string | null; triedBatchDataAt: string | null;
   recoveredBy: string | null;
+  /** Trust / company / municipality owned — never sent to a vendor. */
+  entity: { label: string; matched: string } | null;
 };
 
 /**
@@ -429,6 +431,21 @@ export default function QcReportsPage() {
     stopped?: { reason: 'no_credits' | 'auth' | 'vendor_error'; vendor: string; detail: string; remaining: number } | null;
   }>({ stage: 'isolated', rows: [], counts: null, busy: false, msg: '', stopped: null });
 
+  /**
+   * Split the stage into what a blast can work and what it will never touch.
+   *
+   * Trust- and company-owned leads sit at their stage permanently: there is no named
+   * person for a vendor to look up, so no run ever clears them. Left in the main table
+   * they make the pipeline look stuck, and they inflate the "Run Tracerfy on N" button
+   * into promising work it will skip. Separated here so both numbers tell the truth.
+   */
+  const pipelineWorkable = useMemo(
+    () => pipeline.rows.filter((r) => !r.entity), [pipeline.rows],
+  );
+  const pipelineEntities = useMemo(
+    () => pipeline.rows.filter((r) => r.entity), [pipeline.rows],
+  );
+
   const loadPipeline = useCallback(async (stage: PipelineStage) => {
     stageRef.current = stage;
     try { sessionStorage.setItem('qc:pipeStage', stage); } catch { /* blocked storage is not worth failing over */ }
@@ -495,7 +512,9 @@ export default function QcReportsPage() {
         msg: `${name}: tried ${j.attempted}, matched ${j.matched}, `
           + `recovered ${j.recovered}`
           + (j.phoneOnly ? `, ${j.phoneOnly} gained a phone but no email` : '')
-          + `, ${j.movedOn} moved on`,
+          + `, ${j.movedOn} moved on`
+          // Said out loud: otherwise "tried 9" against a stage of 31 reads as a failure.
+          + (j.entityOwned ? `, ${j.entityOwned} trust/company owned and not called` : ''),
       }));
       await loadPipeline(vendor === 'tracerfy' ? 'isolated' : 'tracerfy');
     } catch (e) {
@@ -1772,7 +1791,15 @@ const MAX_RENDERED = 300;
               */}
               {(() => {
                 const vendor = pipeline.stage === 'isolated' ? 'tracerfy' : 'batchdata';
-                const pool = pipeline.counts?.[pipeline.stage] ?? 0;
+                /**
+                 * The workable rows, NOT counts[stage].
+                 *
+                 * counts[stage] includes trust-owned leads, which the run skips without
+                 * calling anyone — so the button used to offer "Run Tracerfy on 31" and
+                 * then attempt 9. The figure on a button that spends money has to be the
+                 * number it will actually spend on.
+                 */
+                const pool = pipelineWorkable.length;
                 return (
                   <>
                     <Button
@@ -1835,7 +1862,7 @@ const MAX_RENDERED = 300;
                 </TableRow>
               </TableHead>
               <TableBody>
-                {pipeline.rows.slice(0, MAX_RENDERED).map((r) => (
+                {pipelineWorkable.slice(0, MAX_RENDERED).map((r) => (
                   <TableRow key={r.id} hover>
                     <TableCell sx={{ fontSize: 11, fontFamily: 'monospace' }}>
                       <Link href={`/leads/${r.id}?from=qc`} style={{ color: '#6b7280', textDecoration: 'none' }}>{r.id}</Link>
@@ -1865,16 +1892,83 @@ const MAX_RENDERED = 300;
                     </TableCell>
                   </TableRow>
                 ))}
-                {!pipeline.rows.length && (
+                {!pipelineWorkable.length && (
                   <TableRow>
                     <TableCell colSpan={11} sx={{ fontSize: 12, color: '#5a6675', py: 2 }}>
-                      Nothing at this stage for the chosen dates.
+                      {pipelineEntities.length
+                        ? `Nothing workable at this stage — the ${pipelineEntities.length} lead${pipelineEntities.length === 1 ? '' : 's'} here ${pipelineEntities.length === 1 ? 'is' : 'are'} trust or company owned, listed below.`
+                        : 'Nothing at this stage for the chosen dates.'}
                     </TableCell>
                   </TableRow>
                 )}
               </TableBody>
             </Table>
           </Box>
+
+          {/*
+            Trust- and company-owned leads at this stage.
+
+            Held out of the table above and out of the blast because the vendors key off a
+            named person and an entity is not one — the call bills and returns nothing. Of
+            686 entity-owned leads in the book exactly one has ever been traced, and the
+            number it returned was logged as a bad number the next day.
+
+            They are shown rather than hidden because they are the reason this stage never
+            reaches zero. A queue that will not drain with no explanation gets re-run, and
+            re-running is what costs money. The matched word sits next to each owner so a
+            real homeowner wrongly caught here is visible instead of silently dropped.
+          */}
+          {!!pipelineEntities.length && (
+            <Box
+              sx={{
+                mt: 2, p: 1.5, borderRadius: 1,
+                border: '1px solid #e0b84c', bgcolor: '#fdf7e7',
+              }}
+            >
+              <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#6b4e00', mb: 0.25 }}>
+                Trust &amp; company owned — not skip traced ({pipelineEntities.length})
+              </Typography>
+              <Typography sx={{ fontSize: 12, color: '#6b5a2e', mb: 1.25 }}>
+                The owner of record is an entity, not a person, so there is no named
+                individual for Tracerfy or BatchData to look up. These are excluded from
+                every blast and cost nothing. They stay at this stage — that is expected,
+                not a stuck queue.
+              </Typography>
+              <Box sx={{ maxHeight: 260, overflowY: 'auto' }}>
+                <Table size="small">
+                  <TableBody>
+                    {pipelineEntities.slice(0, MAX_RENDERED).map((r) => (
+                      <TableRow key={r.id} hover>
+                        <TableCell sx={{ fontSize: 11, fontFamily: 'monospace', border: 0, py: 0.4 }}>
+                          <Link href={`/leads/${r.id}?from=qc`} style={{ color: '#6b7280', textDecoration: 'none' }}>{r.id}</Link>
+                        </TableCell>
+                        <TableCell sx={{ fontSize: 12, border: 0, py: 0.4 }}>
+                          <Link href={`/leads/${r.id}?from=qc`} style={{ color: '#1565c0', textDecoration: 'none' }}>{r.owner || '(no owner name)'}</Link>
+                        </TableCell>
+                        <TableCell sx={{ fontSize: 12, border: 0, py: 0.4 }}>
+                          {r.city} <span style={{ color: '#9098a6' }}>{r.zip}</span>
+                        </TableCell>
+                        <TableCell sx={{ fontSize: 12, border: 0, py: 0.4 }}>{r.effectiveDate ?? '—'}</TableCell>
+                        <TableCell sx={{ border: 0, py: 0.4 }}>
+                          <Chip
+                            size="small"
+                            label={r.entity!.label}
+                            title={`Identified by "${r.entity!.matched}"`}
+                            sx={{ height: 19, fontSize: 11, bgcolor: '#e0b84c', color: '#3d2c00', fontWeight: 700 }}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+              {pipelineEntities.length > MAX_RENDERED && (
+                <Typography sx={{ fontSize: 11, color: '#6b5a2e', mt: 0.75 }}>
+                  Showing {MAX_RENDERED} of {pipelineEntities.length}.
+                </Typography>
+              )}
+            </Box>
+          )}
         </Paper>
       )}
 

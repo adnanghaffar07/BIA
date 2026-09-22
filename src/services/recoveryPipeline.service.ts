@@ -7,6 +7,7 @@ import { insuredEmails, insuredPhones, coInsuredEmails, coInsuredPhones } from '
 import { calculateLeadGrade } from './grade.service';
 import { recordGradeChange } from './gradeHistory.service';
 import { isRunFatal, VendorError } from './vendorErrors';
+import { ownerEntityOf } from '@/lib/ownerEntity';
 
 /**
  * The contact-recovery pipeline (Frank, 18 Sep 2026).
@@ -133,6 +134,12 @@ export type PipelineRow = {
   triedTracerfyAt: string | null;
   triedBatchDataAt: string | null;
   recoveredBy: string | null;
+  /**
+   * Set when the owner of record is a trust, company or municipality (Frank Sep-2026).
+   * These sit at their stage and are never sent to a vendor — there is no named person
+   * to look up — so the pipeline reports them rather than quietly never draining them.
+   */
+  entity: { label: string; matched: string } | null;
 };
 
 export async function leadsAtStage(
@@ -173,6 +180,10 @@ export async function leadsAtStage(
       triedTracerfyAt: iso(r.recoveryTracerfyAt),
       triedBatchDataAt: iso(r.recoveryBatchDataAt),
       recoveredBy: r.recoveredBy ?? null,
+      entity: (() => {
+        const e = ownerEntityOf(r as any);
+        return e ? { label: e.label, matched: e.matched } : null;
+      })(),
     }));
 }
 
@@ -193,6 +204,12 @@ export type BlastResult = {
   regraded: number;
   /** Advanced without calling the vendor because it had already run on them. */
   skippedAlreadyTraced: number;
+  /**
+   * Held back because the owner is a trust, company or municipality. NOT included in
+   * `pool` — the pool is what this run could actually work on, and quoting a figure the
+   * blast will never touch is how a queue looks stuck for no stated reason.
+   */
+  entityOwned: number;
   errors: { id: string; error: string }[];
   /**
    * Set when the run ended itself instead of finishing the pool — out of credits, a bad
@@ -374,11 +391,28 @@ async function runBlast(
   const { effFrom, effTo, limit = 25, dryRun = true, createdBy = null } = opts;
   const fromStage: RecoveryStage = vendor === 'tracerfy' ? 'isolated' : 'tracerfy';
 
-  const pool = await leadsAtStage(fromStage, effFrom, effTo);
+  const stageRows = await leadsAtStage(fromStage, effFrom, effTo);
+
+  /**
+   * Entity-owned leads never go to a vendor (Frank Sep-2026).
+   *
+   * Split BEFORE the limit is applied, not inside the loop. Filtering later would let a
+   * run of 100 spend its whole allowance skipping trusts and never reach the people
+   * behind them — the pool is ordered, so a cluster of trusts at the front would stall
+   * the pipeline while reporting a successful run.
+   *
+   * They keep their stage rather than being advanced. Advancing them would claim a
+   * vendor had been asked and found nothing, which is not what happened; the honest
+   * statement is that we never asked, and `entityOwned` below is how the tab says so
+   * instead of leaving a queue that mysteriously never drains.
+   */
+  const entityOwned = stageRows.filter((r) => r.entity !== null);
+  const pool = stageRows.filter((r) => r.entity === null);
+
   const out: BlastResult = {
     vendor, dryRun, pool: pool.length,
     attempted: 0, matched: 0, recovered: 0, phoneOnly: 0, movedOn: 0, regraded: 0,
-    skippedAlreadyTraced: 0, errors: [],
+    skippedAlreadyTraced: 0, entityOwned: entityOwned.length, errors: [],
   };
   if (dryRun) return out;
 
@@ -394,6 +428,15 @@ async function runBlast(
   for (const [i, row] of batch.entries()) {
     const lead = await getLeadByPropertyId(row.id) as any;
     if (!lead) continue;
+
+    /**
+     * Re-checked on the freshly read lead, not just on the row from the pool.
+     *
+     * The re-read above exists because the lead may have changed since the pool was
+     * built — and the owner name is one of the things that changes, when a property
+     * transfers into a trust. This costs one regex and is the last point before a charge.
+     */
+    if (ownerEntityOf(lead)) { out.entityOwned++; continue; }
 
     /**
      * Never pay a vendor to answer a question it has already answered.

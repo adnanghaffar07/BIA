@@ -6,6 +6,9 @@ import {
   LinearProgress, Alert, Chip, Stack, CircularProgress, Divider,
 } from '@mui/material';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
+// Type-only, so it is erased at compile. The module it comes from has no imports of its
+// own, which is what makes it safe for a client component to read from at all.
+import type { EntityLead } from '@/lib/ownerEntity';
 
 /**
  * Deep Skip Trace Blast (Frank Sep-2026) — traces every Grade A lead in the
@@ -40,7 +43,16 @@ export type BlastFilters = {
 type Preview = {
   matching: number;
   eligible: number;
-  skipped: { alreadyTraced: number; missingName: number; wrongGrade: number };
+  skipped: {
+    alreadyTraced: number;
+    missingName: number;
+    wrongGrade: number;
+    /** Present since Sep-2026; older responses omit it. */
+    alreadyReachable?: number;
+    entityOwned?: number;
+  };
+  /** Listed in full rather than counted — see the trust section below. */
+  entityOwned?: EntityLead[];
   maxCredits: number;
 };
 
@@ -239,7 +251,72 @@ export default function SkipTraceBlastDialog({
               {preview.skipped.wrongGrade > 0 && (
                 <Chip size="small" variant="outlined" label={`${fmt(preview.skipped.wrongGrade)} not Grade A`} />
               )}
+              {(preview.entityOwned?.length ?? 0) > 0 && (
+                <Chip
+                  size="small"
+                  color="warning"
+                  variant="outlined"
+                  label={`${fmt(preview.entityOwned!.length)} trust / company owned`}
+                />
+              )}
             </Stack>
+
+            {/**
+              * Trust- and company-owned leads, listed rather than counted.
+              *
+              * They are excluded from every blast and can never be traced — the enhanced
+              * lookup keys off a named person, and "Maybloom Family Trust" is not one, so
+              * the call bills and returns nothing. Showing the matched word next to each
+              * owner is deliberate: it is how somebody spots a real homeowner wrongly
+              * caught here, which a bare count would hide.
+              */}
+            {(preview.entityOwned?.length ?? 0) > 0 && (
+              <Box
+                sx={{
+                  mt: 2, p: 1.5, borderRadius: 1,
+                  border: '1px solid', borderColor: 'warning.light',
+                  bgcolor: (t) => (t.palette.mode === 'dark' ? 'warning.dark' : 'warning.50'),
+                }}
+              >
+                <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                  Trust &amp; company owned — not traced ({fmt(preview.entityOwned!.length)})
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.25 }}>
+                  The owner of record is an entity, not a person, so there is no named
+                  individual to look up. These are excluded from the blast and cost nothing.
+                </Typography>
+                <Box sx={{ maxHeight: 220, overflowY: 'auto', pr: 0.5 }}>
+                  <Stack spacing={0.75}>
+                    {preview.entityOwned!.map((e) => (
+                      <Box
+                        key={e.propertyId}
+                        sx={{
+                          display: 'flex', alignItems: 'flex-start', gap: 1,
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap title={e.owner}>
+                            {e.owner || '(no owner name)'}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" noWrap title={e.address}>
+                            {e.address || '—'}
+                            {e.effectiveDate ? ` · renews ${String(e.effectiveDate).slice(0, 10)}` : ''}
+                          </Typography>
+                        </Box>
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={e.label}
+                          title={`Identified by "${e.matched}"`}
+                          sx={{ flexShrink: 0 }}
+                        />
+                      </Box>
+                    ))}
+                  </Stack>
+                </Box>
+              </Box>
+            )}
           </>
         )}
 

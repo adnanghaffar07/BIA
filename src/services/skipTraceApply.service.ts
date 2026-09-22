@@ -2,6 +2,7 @@ import { updateLead, addActivity } from '@/services/storage.service';
 import { runBatchData } from './batchData.service';
 import { runTracerfy } from '@/services/tracerfy.service';
 import { coInsuredEmails, coInsuredPhones } from './recipients.service';
+import { ownerEntityOf, entityTraceRefusal } from '@/lib/ownerEntity';
 
 /**
  * One place where a deep skip trace is decided and written.
@@ -40,6 +41,13 @@ export function skipTraceBlocker(lead: any, opts?: { grades?: string[]; skipIfTr
   if (!String(lead?.owner1FirstName ?? '').trim() || !String(lead?.owner1LastName ?? '').trim()) {
     return 'Skip trace needs the insured first and last name on file.';
   }
+  // Frank (Sep-2026): never trace an entity. Same reason as the missing-name rule above
+  // and enforced in the same place — "Maybloom Family Trust" is a name, but not a
+  // person's, so the lookup bills and returns nothing. Checked here rather than only in
+  // the blast's triage because this function is the last gate before a charge, and the
+  // lead card reaches the vendor without passing through triage at all.
+  const entity = ownerEntityOf(lead);
+  if (entity) return entityTraceRefusal(entity);
   // Only the blast sets this. A single lead may be re-run deliberately (Frank
   // Sep-2026) so a producer can verify an empty result rather than trust it; at
   // blast scale the same permissiveness would re-charge a whole cohort.
