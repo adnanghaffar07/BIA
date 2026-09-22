@@ -1,5 +1,6 @@
 import { sql } from '@/lib/neon';
 import { LOSS_REASONS, RE_ENGAGE_DAYS_BEFORE_RENEWAL, type LossReason } from '@/lib/lossReasons';
+import { suppress } from './suppression.service';
 
 /**
  * Band accuracy and lost quotes (directive Sec. 10.9 and Sec. 10.6).
@@ -198,6 +199,136 @@ export async function recordLoss(input: {
   return { reEngageAt, premiumGap: gap, premiumGapPct: gapPct };
 }
 
+/**
+ * The sale (directive Sec. 11.5 question 6). The counterpart to recordLoss.
+ *
+ * Frank, 22 Sep 2026: no HawkSoft integration for now — a sale is typed into the card the
+ * way the other interim KPIs are. At a few sales a week that is not a compromise: it
+ * closes the measurement loop on the day it is entered, where an integration closes it in
+ * November with the same number.
+ *
+ * ── Three things happen here, and the order matters ─────────────────────────
+ *  1. The policy is recorded.
+ *  2. The band is measured against what was PUBLISHED, not against a band we may have
+ *     re-rated since — same rule as recordQuote, for the same reason.
+ *  3. The household is suppressed.
+ *
+ * Step 3 is the one that has to be here rather than left to the caller. A bound customer
+ * who keeps receiving cold email about the policy they just bought is the most visible
+ * failure this system has available to it, and "the UI remembers to call suppress()" is
+ * not a guarantee — it is a hope that survives exactly until the second caller is added.
+ *
+ * The suppression is household-scope, so it covers the co-insured's addresses too. A
+ * policy covers the property; every person on that card is now a customer.
+ */
+export async function recordBind(input: {
+  leadId: string;
+  premium: number;
+  carrier: string;
+  policyNumber?: string | null;
+  /** When cover starts — NOT when this was typed in. */
+  effectiveDate?: string | null;
+  notes?: string | null;
+  by?: string | null;
+}): Promise<{
+  bandHit: boolean | null;
+  variancePct: number | null;
+  suppressed: boolean;
+  /** Set when the sale could not be suppressed — the caller must surface this. */
+  suppressionError: string | null;
+}> {
+  if (!Number.isFinite(input.premium) || input.premium <= 0) {
+    throw new Error('A bound premium must be a positive number.');
+  }
+  if (!String(input.carrier ?? '').trim()) {
+    throw new Error('A bind needs the carrier that wrote it.');
+  }
+
+  const [lead] = await sql`
+    SELECT "id","propertyId","addressStreet","addressZip",
+           "publishedBandLow","publishedBandHigh","indicativeBandLow","indicativeBandHigh",
+           "email1","email2","owner2Email","emailsAll","skipTraceData",
+           "owner1FirstName","owner1LastName","owner2FirstName","owner2LastName"
+      FROM "Lead" WHERE "id" = ${input.leadId} OR "propertyId" = ${input.leadId} LIMIT 1` as Row[];
+  if (!lead) throw new Error('Lead not found');
+  const leadId = String(lead.id);
+
+  // Against the band the homeowner READ, falling back to the current one. Measuring a
+  // sale against a band re-rated after the email flatters or damns us for a number
+  // nobody ever saw.
+  const low = num(lead.publishedBandLow) ?? num(lead.indicativeBandLow);
+  const high = num(lead.publishedBandHigh) ?? num(lead.indicativeBandHigh);
+  const hit = low != null && high != null ? input.premium >= low && input.premium <= high : null;
+  const mid = low != null && high != null ? (low + high) / 2 : null;
+  const variancePct = mid ? Math.round(((input.premium - mid) / mid) * 10000) / 100 : null;
+
+  await sql`
+    UPDATE "Lead"
+       SET "status" = 'bound',
+           "boundDate" = COALESCE("boundDate", NOW()),
+           "boundPremium" = ${input.premium},
+           "boundCarrier" = ${String(input.carrier).trim()},
+           "boundPolicyNumber" = ${input.policyNumber?.trim() || null},
+           "boundEffectiveDate" = ${input.effectiveDate || null},
+           "boundNotes" = ${input.notes ?? null},
+           "boundBy" = ${input.by ?? 'crm'},
+           "bandHit" = ${hit},
+           "bandVariancePct" = ${variancePct},
+           "bandMeasuredAt" = COALESCE("bandMeasuredAt", NOW()),
+           -- A sale is not a loss. If one was recorded in error, clear it rather than
+           -- leaving the lead both won and lost, which no report could reconcile.
+           "lostAt" = NULL, "lostReason" = NULL, "lostNotes" = NULL,
+           "revisitFlag" = FALSE, "revisitDate" = NULL, "revisitNote" = NULL,
+           "updatedAt" = NOW()
+     WHERE "id" = ${leadId}`;
+
+  /**
+   * Suppression failing must not lose the sale that was just typed in, and must not be
+   * silent either. The policy is already committed above; this reports the failure up so
+   * the panel can say so, and the fifteen-minute reconciliation sweep will still stop the
+   * sends from the Suppression row once one exists.
+   */
+  let suppressed = false;
+  let suppressionError: string | null = null;
+  try {
+    await suppress({
+      lead: lead as Record<string, unknown>,
+      leadId,
+      reason: 'bound',
+      source: 'bind',
+      createdBy: input.by ?? null,
+      note: `Bound with ${String(input.carrier).trim()}`
+        + (input.policyNumber ? ` · policy ${input.policyNumber.trim()}` : ''),
+    });
+    suppressed = true;
+  } catch (err) {
+    suppressionError = err instanceof Error ? err.message : 'Could not suppress the household';
+  }
+
+  await sql`
+    INSERT INTO "Activity" ("id","leadId","type","content","metadata","createdBy","createdAt")
+    VALUES (${globalThis.crypto.randomUUID()}, ${leadId}, 'note',
+            ${`Bound with ${String(input.carrier).trim()} at $${input.premium}`
+              + (input.policyNumber ? ` · policy ${input.policyNumber.trim()}` : '')
+              + (input.effectiveDate ? ` · effective ${input.effectiveDate}` : '')
+              + (hit === null ? ' · no band to measure against'
+                : hit ? ' · inside the published band'
+                  : ` · outside the published band (${variancePct! >= 0 ? '+' : ''}${variancePct}% vs midpoint)`)
+              + (suppressed ? ' · outreach stopped for the household'
+                : ` · OUTREACH NOT STOPPED: ${suppressionError}`)},
+            ${JSON.stringify({
+              bound: {
+                premium: input.premium, carrier: String(input.carrier).trim(),
+                policyNumber: input.policyNumber?.trim() ?? null,
+                effectiveDate: input.effectiveDate ?? null,
+              },
+              bandHit: hit, variancePct, suppressed,
+            })}::jsonb,
+            ${input.by ?? 'crm'}, NOW())`;
+
+  return { bandHit: hit, variancePct, suppressed, suppressionError };
+}
+
 // ─── Reporting ────────────────────────────────────────────────────────────────
 
 export type BandAccuracyCut = {
@@ -345,7 +476,13 @@ export type QuoteState = {
   /** Inside the PUBLISHED band, measured at quote. Null when there was no band to compare. */
   bandHitAtQuote: boolean | null;
   varianceVsMidpointPct: number | null;
-  bound: { premium: number; hit: boolean | null; variancePct: number | null } | null;
+  bound: {
+    premium: number; hit: boolean | null; variancePct: number | null;
+    carrier: string | null; policyNumber: string | null;
+    /** When cover starts — not when the sale was typed in. */
+    effectiveDate: string | null;
+    at: string | null; by: string | null; notes: string | null;
+  } | null;
   loss: {
     at: string | null; reason: string | null; notes: string | null;
     competingCarrier: string | null; competingPremium: number | null;
@@ -368,6 +505,8 @@ export async function quoteState(leadId: string): Promise<QuoteState> {
            "publishedBandLow","publishedBandHigh",
            "quotedPremium","quotedCarrier","quotedAt"::text AS "quotedAt",
            "bandHitAtQuote","boundPremium","bandHit","bandVariancePct",
+           "boundCarrier","boundPolicyNumber","boundEffectiveDate","boundNotes","boundBy",
+           "boundDate"::text AS "boundDate",
            "lostAt"::text AS "lostAt","lostReason","lostNotes",
            "competitorCarrier","competitorPremium",
            "revisitDate"::text AS "revisitDate"
@@ -401,7 +540,17 @@ export async function quoteState(leadId: string): Promise<QuoteState> {
     bandHitAtQuote: (l.bandHitAtQuote as boolean) ?? null,
     varianceVsMidpointPct: variance,
     bound: num(l.boundPremium) != null
-      ? { premium: num(l.boundPremium)!, hit: (l.bandHit as boolean) ?? null, variancePct: num(l.bandVariancePct) }
+      ? {
+          premium: num(l.boundPremium)!,
+          hit: (l.bandHit as boolean) ?? null,
+          variancePct: num(l.bandVariancePct),
+          carrier: (l.boundCarrier as string) ?? null,
+          policyNumber: (l.boundPolicyNumber as string) ?? null,
+          effectiveDate: (l.boundEffectiveDate as string) ?? null,
+          at: (l.boundDate as string) ?? null,
+          by: (l.boundBy as string) ?? null,
+          notes: (l.boundNotes as string) ?? null,
+        }
       : null,
     loss: l.lostAt || l.lostReason
       ? {

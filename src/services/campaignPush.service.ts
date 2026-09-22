@@ -4,7 +4,12 @@ import { bestInsuredAddress, bestCoInsuredAddress, type AddressSignals } from '.
 import { cohortOf } from './cohort';
 import { pool } from '@/lib/neon';
 import { getLeadsFromDb } from '@/services/storage.service';
-import { addLeadsToCampaign, findLeadsByEmail, LeadInput } from '@/lib/integrations/leadCampaign';
+import { loadActiveSuppressions } from './suppression.service';
+import { householdKeyOf } from './household.service';
+// `LeadInput` is a TYPE. Imported as a value it works under Next, whose bundler elides
+// it, and throws "does not provide an export named 'LeadInput'" the moment this module is
+// loaded by plain Node ESM — which is how every script in scripts/ loads it.
+import { addLeadsToCampaign, findLeadsByEmail, type LeadInput } from '@/lib/integrations/leadCampaign';
 
 /**
  * Push CRM leads into a campaign.
@@ -79,12 +84,41 @@ export type PushTriage = {
   leadsByMode: { insured: number; coinsured: number; both: number };
 };
 
-/** Why a lead must not be mailed, or null. */
-function suppressionReason(lead: any): string | null {
+/**
+ * Why a lead must not be mailed, or null.
+ *
+ * ── The Suppression table has to be consulted here ──────────────────────────
+ * This used to read four columns on the Lead and nothing else, which meant the entire
+ * Suppression table was invisible to the one code path that actually sends. Everything
+ * written by suppress() — a bind, an unsubscribe, a complaint, a "not interested" reply,
+ * a do-not-contact scrub — was recorded, reported, and then pushed to anyway.
+ *
+ * It was not visibly broken because the reconciliation sweep removes a suppressed
+ * recipient from the campaign afterwards. That is a repair, not a guard: between the push
+ * and the next sweep the recipient is live, and a scheduled send inside that window goes
+ * out. For a household that has just bought a policy from us, that send is the single most
+ * embarrassing message this system can produce.
+ *
+ * ── Only the HOUSEHOLD scope is checked here ────────────────────────────────
+ * The two scopes mean different things and must not be collapsed. A household stop —
+ * a bind, an unsubscribe, a complaint — ends outreach to the card, so it belongs at this
+ * level. An address stop is about one mailbox: a hard bounce on the insured's old work
+ * address says nothing about their personal one, and skipping the whole lead for it would
+ * discard a reachable prospect. Address-scope suppressions are applied to the candidate
+ * addresses after ranking instead.
+ *
+ * `sup` is loaded once per triage and passed in, rather than queried per lead — the bulk
+ * loader exists for exactly this and a push covers thousands of leads.
+ */
+function suppressionReason(
+  lead: any,
+  sup: { households: Set<string> },
+): string | null {
   if (lead.holdoutFlag === true) return 'holdout';
   if (lead.hardBounced === true) return 'suppressed';
   if (lead.campaignUnsubscribedAt) return 'suppressed';
   if (String(lead.campaignStatus ?? '') === 'suppressed') return 'suppressed';
+  if (sup.households.has(householdKeyOf(lead))) return 'suppressed';
   return null;
 }
 
@@ -134,6 +168,15 @@ export async function triagePush(
     verification: undefined,
   };
 
+  /**
+   * Every active suppression, loaded once.
+   *
+   * Read here rather than per lead: a push covers thousands of leads and the bulk loader
+   * exists for this. Household keys and addresses come back as sets, so the per-lead test
+   * below is in memory.
+   */
+  const sup = await loadActiveSuppressions();
+
   const mode: RecipientMode = opts.recipients ?? 'insured';
 
   const skipped = { noEmail: 0, suppressed: 0, holdout: 0, alreadyInCampaign: 0, duplicateAddress: 0 };
@@ -148,7 +191,7 @@ export async function triagePush(
   const leadsByMode = { insured: 0, coinsured: 0, both: 0 };
 
   for (const lead of leads) {
-    const suppress = suppressionReason(lead);
+    const suppress = suppressionReason(lead, sup);
     if (suppress === 'holdout') { skipped.holdout++; continue; }
     if (suppress) { skipped.suppressed++; continue; }
 
@@ -162,8 +205,17 @@ export async function triagePush(
      */
     const insBest = bestInsuredAddress(lead, signals);
     const coBest = bestCoInsuredAddress(lead, signals);
-    const ins = insBest ? [insBest.email] : [];
-    const co = coBest ? [coBest.email] : [];
+    /**
+     * Address-scope suppressions applied to the chosen address, not to the lead.
+     *
+     * A mailbox suppressed on its own account (a hard bounce, or an opt-out that named
+     * only that address) is dropped here. If the person's other address survives ranking
+     * the lead still goes — which is the difference between "this mailbox is dead" and
+     * "this household said stop".
+     */
+    const usable = (e: string | undefined) => !!e && !sup.emails.has(e.toLowerCase().trim());
+    const ins = insBest && usable(insBest.email) ? [insBest.email] : [];
+    const co = coBest && usable(coBest.email) ? [coBest.email] : [];
 
     byMode.insured += ins.length;
     byMode.coinsured += co.length;

@@ -32,10 +32,20 @@ export type SuppressionReason =
   | 'hard_bounce'     // the mailbox does not exist. ADDRESS scope, never household
   | 'not_interested'  // said no in a reply
   | 'dnc'             // do-not-call / do-not-contact, incl. the scrub before outbound
+  | 'bound'           // they bought. Now a customer, and cold outreach must stop
   | 'manual';         // a person decided; `note` says why
 
-/** Reasons that always mean the whole household, whatever the caller passes. */
-const ALWAYS_HOUSEHOLD = new Set<SuppressionReason>(['unsubscribe', 'complaint', 'not_interested', 'dnc']);
+/**
+ * Reasons that always mean the whole household, whatever the caller passes.
+ *
+ * `bound` belongs here for a different reason from the rest. The others are refusals, and
+ * a refusal by one person on a card speaks for the address. A bind is not a refusal — it
+ * is the outcome we wanted — but a policy covers the PROPERTY, so every address on that
+ * card now belongs to a customer. Suppressing only the mailbox that answered would leave
+ * the co-insured being cold-emailed about a policy their household has just bought, which
+ * is the single most embarrassing message this system could send.
+ */
+const ALWAYS_HOUSEHOLD = new Set<SuppressionReason>(['unsubscribe', 'complaint', 'not_interested', 'dnc', 'bound']);
 /** Reasons that are always about one mailbox. */
 const ALWAYS_ADDRESS = new Set<SuppressionReason>(['hard_bounce']);
 

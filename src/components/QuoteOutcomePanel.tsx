@@ -11,8 +11,14 @@ import { LOSS_REASONS, type LossReason } from '@/lib/lossReasons';
 /**
  * What happened after the call (directive Sec. 10.9 and Sec. 10.6).
  *
- * Three moments, in the order they occur: the band Ruben rates in a carrier portal, the
- * quote he actually gives, and the loss if it goes that way.
+ * Four moments, in the order they occur: the band Ruben rates in a carrier portal, the
+ * quote he actually gives, and then the sale or the loss.
+ *
+ * ── Why the sale is typed in here ───────────────────────────────────────────
+ * Frank, 22 Sep 2026: no HawkSoft integration for now, sales tracked by hand in the card
+ * alongside the other interim KPIs. Recording it also STOPS outreach to the household —
+ * see recordBind. That is deliberately not something this panel has to remember to do,
+ * because "the UI calls suppress() too" is a hope that survives until the second caller.
  *
  * ── Why the band comparison is shown, not filed ─────────────────────────────
  * The instant a quote is recorded this says whether it landed inside the band the
@@ -34,7 +40,11 @@ type State = {
   quote: { premium: number; carrier: string | null; at: string | null } | null;
   bandHitAtQuote: boolean | null;
   varianceVsMidpointPct: number | null;
-  bound: { premium: number; hit: boolean | null; variancePct: number | null } | null;
+  bound: {
+    premium: number; hit: boolean | null; variancePct: number | null;
+    carrier: string | null; policyNumber: string | null; effectiveDate: string | null;
+    at: string | null; by: string | null; notes: string | null;
+  } | null;
   loss: {
     at: string | null; reason: string | null; notes: string | null;
     competingCarrier: string | null; competingPremium: number | null;
@@ -50,14 +60,27 @@ export default function QuoteOutcomePanel({ leadId }: { leadId: string }) {
   const [s, setS] = useState<State | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  /**
+   * A partial success, which is neither of the other two.
+   *
+   * A sale whose suppression failed IS saved — showing it as an error would have someone
+   * type it again — but it leaves a bound customer still in a live campaign, which cannot
+   * appear under a green tick either.
+   */
+  const [warn, setWarn] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState<'band' | 'quote' | 'loss' | null>(null);
+  const [open, setOpen] = useState<'band' | 'quote' | 'bind' | 'loss' | null>(null);
 
   const [bandLow, setBandLow] = useState('');
   const [bandHigh, setBandHigh] = useState('');
   const [bandCarrier, setBandCarrier] = useState('');
   const [qPremium, setQPremium] = useState('');
   const [qCarrier, setQCarrier] = useState('');
+  const [bPremium, setBPremium] = useState('');
+  const [bCarrier, setBCarrier] = useState('');
+  const [bPolicy, setBPolicy] = useState('');
+  const [bEffective, setBEffective] = useState('');
+  const [bNotes, setBNotes] = useState('');
   const [lReason, setLReason] = useState<LossReason | ''>('');
   const [lCarrier, setLCarrier] = useState('');
   const [lPremium, setLPremium] = useState('');
@@ -74,13 +97,13 @@ export default function QuoteOutcomePanel({ leadId }: { leadId: string }) {
   useEffect(() => { load(); }, [load]);
 
   const post = async (body: Record<string, unknown>, ok: (j: Record<string, unknown>) => string) => {
-    setBusy(true); setError(null); setMsg(null);
+    setBusy(true); setError(null); setMsg(null); setWarn(null);
     try {
       const j = await (await fetch(`/api/leads/${leadId}/outcome`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       })).json();
       if (!j.success) throw new Error(j.error || 'Failed');
-      setMsg(ok(j));
+      if (j.warning) setWarn(String(j.warning)); else setMsg(ok(j));
       setOpen(null);
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); }
@@ -102,6 +125,7 @@ export default function QuoteOutcomePanel({ leadId }: { leadId: string }) {
 
       {error && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError(null)}>{error}</Alert>}
       {msg && <Alert severity="success" sx={{ mb: 1.5 }} onClose={() => setMsg(null)}>{msg}</Alert>}
+      {warn && <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setWarn(null)}>{warn}</Alert>}
 
       {/* ── What we know ────────────────────────────────────────────────── */}
       <Stack spacing={0.5} sx={{ mb: 1.5 }}>
@@ -180,6 +204,47 @@ export default function QuoteOutcomePanel({ leadId }: { leadId: string }) {
           </>
         )}
 
+        {s.bound && (
+          <>
+            <Row label="Sold">
+              <b>{money(s.bound.premium)}</b>
+              {s.bound.carrier && <> · {s.bound.carrier}</>}
+              {s.bound.hit != null && (
+                <Tooltip arrow title={
+                  s.bound.hit
+                    ? 'The written premium landed inside the band the homeowner was sent.'
+                    : 'The written premium landed OUTSIDE the band the homeowner was sent — they bought anyway, but the band was wrong.'
+                }>
+                  <Chip
+                    size="small"
+                    label={s.bound.hit ? 'inside the band' : 'outside the band'}
+                    sx={{
+                      ml: 1, height: 18, cursor: 'help', fontWeight: 700,
+                      bgcolor: s.bound.hit ? '#e7f5ec' : '#fdecea',
+                      color: s.bound.hit ? '#166534' : '#b3261e',
+                    }}
+                  />
+                </Tooltip>
+              )}
+              {s.bound.variancePct != null && (
+                <span style={{ color: '#5a6675' }}>
+                  {' '}· {s.bound.variancePct > 0 ? '+' : ''}{s.bound.variancePct}% vs midpoint
+                </span>
+              )}
+            </Row>
+            <Row label="Policy">
+              {s.bound.policyNumber
+                ? <b>{s.bound.policyNumber}</b>
+                // Not an error — a policy number is often issued after the bind. Amber so
+                // it reads as unfinished rather than broken, because it is the field the
+                // agency's book will eventually be reconciled against.
+                : <span style={{ color: '#8a5a00' }}>not recorded yet</span>}
+              {s.bound.effectiveDate && <span style={{ color: '#9098a6' }}> · effective {s.bound.effectiveDate}</span>}
+              {s.bound.by && <span style={{ color: '#9098a6' }}> · entered by {s.bound.by}</span>}
+            </Row>
+          </>
+        )}
+
         {s.reEngageAt && (
           <Row label="Revisit">
             <b>{s.reEngageAt}</b>
@@ -199,11 +264,68 @@ export default function QuoteOutcomePanel({ leadId }: { leadId: string }) {
           onClick={() => setOpen(open === 'quote' ? null : 'quote')}>
           {s.quote ? 'Update quote' : 'Record quote'}
         </Button>
+        {/*
+          Sold sits before Lost and is the only filled button on the row. Both are
+          terminal, and the one we want a producer to reach for should not be the one
+          styled like an afterthought.
+        */}
+        <Button size="small" variant={open === 'bind' ? 'contained' : 'outlined'} color="success"
+          onClick={() => setOpen(open === 'bind' ? null : 'bind')}>
+          {s.bound ? 'Update sale' : 'Mark as sold'}
+        </Button>
         <Button size="small" variant={open === 'loss' ? 'contained' : 'outlined'} color="error"
           onClick={() => setOpen(open === 'loss' ? null : 'loss')}>
           {s.loss ? 'Update loss' : 'Record loss'}
         </Button>
       </Stack>
+
+      {open === 'bind' && (
+        <Box sx={{ mt: 1.5 }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            <TextField size="small" label="Written premium" type="number" value={bPremium}
+              onChange={(e) => setBPremium(e.target.value)} />
+            <TextField size="small" label="Carrier" fullWidth value={bCarrier}
+              onChange={(e) => setBCarrier(e.target.value)} placeholder="Travelers / Plymouth Rock" />
+            <TextField size="small" label="Policy number" fullWidth value={bPolicy}
+              onChange={(e) => setBPolicy(e.target.value)} placeholder="optional — can be added later" />
+          </Stack>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
+            {/*
+              When cover STARTS, not when this was typed in. They are usually days apart
+              and answer different questions — the second measures our cycle, the first is
+              what next year's renewal week is counted from.
+            */}
+            <TextField size="small" label="Effective date" type="date" value={bEffective}
+              onChange={(e) => setBEffective(e.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }} />
+            <TextField size="small" label="Notes" fullWidth value={bNotes}
+              onChange={(e) => setBNotes(e.target.value)} />
+            <Button
+              size="small" variant="contained" color="success"
+              disabled={busy || !bPremium || !bCarrier.trim()}
+              onClick={() => post(
+                {
+                  action: 'bind',
+                  premium: Number(bPremium),
+                  carrier: bCarrier,
+                  policyNumber: bPolicy || null,
+                  effectiveDate: bEffective || null,
+                  notes: bNotes || null,
+                },
+                // Only the clean case. A failed suppression comes back as `warning` and
+                // post() routes it to the amber alert instead of this one.
+                () => `Sold — ${bCarrier.trim()}. Outreach to this household has stopped.`,
+              )}
+            >
+              Save
+            </Button>
+          </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+            Recording a sale stops all cold outreach to this household, including the
+            co-insured&apos;s addresses. A policy covers the property, not one mailbox.
+          </Typography>
+        </Box>
+      )}
 
       {open === 'band' && (
         <Box sx={{ mt: 1.5 }}>
