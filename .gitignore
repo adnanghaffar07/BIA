@@ -46,10 +46,3 @@ files-for-claude
 #Test files
 Test
 
-# Playwright
-/test-results/
-/playwright-report/
-/blob-report/
-/playwright/.cache/
-# The screenshot the E2E run writes as evidence — regenerated on every run.
-/e2e/*.png
