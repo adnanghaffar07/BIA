@@ -181,7 +181,19 @@ export default function ChannelSections({
       {economics.missing.length > 0 && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           <b>Some figures cannot be computed yet.</b> These settings are not set:{' '}
-          {economics.missing.map((m) => <code key={m} style={{ marginRight: 8 }}>{m}</code>)}
+          {/*
+            Comma-separated in the TEXT, not spaced by CSS.
+            
+            A margin looks like a gap on screen and disappears the moment anyone copies the
+            line — which is how this reached me as "commission_rate_pctcost_per_email_sent".
+            A setting name nobody can copy correctly is a setting nobody can act on.
+          */}
+          {economics.missing.map((m, i) => (
+            <React.Fragment key={m}>
+              {i > 0 ? ', ' : ''}
+              <code>{m}</code>
+            </React.Fragment>
+          ))}
           — commission and cost-per-contact/quote/bind stay blank until they are. They live in
           the <code>AppConfig</code> table.
         </Alert>
