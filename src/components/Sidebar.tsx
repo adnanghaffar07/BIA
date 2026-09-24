@@ -15,6 +15,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import EventRepeatIcon from '@mui/icons-material/EventRepeat';
 import AssessmentIcon from '@mui/icons-material/Assessment';
+import InsightsIcon from '@mui/icons-material/Insights';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useAuth } from '@/context/AuthContext';
@@ -64,6 +65,7 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
     ...(user?.role === 'superadmin' || user?.role === 'admin' ? [
       { label: 'Campaigns',   icon: <CampaignIcon />,        path: '/lead-campaigns' },
       { label: 'QC Reports',  icon: <AssessmentIcon />,      path: '/admin/qc' },
+      { label: 'Outreach',    icon: <InsightsIcon />,        path: '/admin/outreach' },
       { label: 'Weekly Pull', icon: <EventRepeatIcon />,     path: '/admin/pull-weekly' },
     ] : []),
   ];
