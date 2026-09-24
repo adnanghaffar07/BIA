@@ -24,6 +24,7 @@ import type {
 import type { OutreachChannels } from '@/services/outreachChannels.service';
 import type { BandAccuracyCut, LossRow } from '@/services/quoteOutcomes.service';
 import ChannelSections from './ChannelSections';
+import ColumnHeader from './ColumnHeader';
 
 /**
  * What the endpoint returns: the Grade A ladder, plus the per-channel half of Sec 10.7.
@@ -125,21 +126,68 @@ type CohortColumn = {
   header: string;
   value: (r: DashboardCohort) => string | number;
   numeric?: boolean;
+  /** What this column is for, shown on the header. See ColumnHeader. */
+  help: string;
 };
 
 const COHORT_COLUMNS: CohortColumn[] = [
-  { header: 'Renewal week', value: (r) => r.label },
-  { header: 'Grade A at pull', value: (r) => r.atPull, numeric: true },
-  { header: 'Kept', value: (r) => r.kept, numeric: true },
-  { header: 'Upgraded in', value: (r) => r.gained, numeric: true },
-  { header: 'Worked', value: (r) => r.worked, numeric: true },
-  { header: 'With insured email', value: (r) => r.withEmail, numeric: true },
-  { header: 'Loaded', value: (r) => r.loaded, numeric: true },
-  { header: 'Emailed', value: (r) => r.emailed, numeric: true },
-  { header: 'Delivered', value: (r) => r.delivered, numeric: true },
-  { header: 'Engaged', value: (r) => r.engaged, numeric: true },
-  { header: 'Quoted', value: (r) => r.quoted, numeric: true },
-  { header: 'Bound', value: (r) => r.bound, numeric: true },
+  {
+    header: 'Renewal week', value: (r) => r.label,
+    help: 'The week these policies come up for renewal. Leads are pulled 60 days ahead of it, '
+      + 'so this is the week the outreach is aiming at, not the week it happens.',
+  },
+  {
+    header: 'Grade A at pull', value: (r) => r.atPull, numeric: true,
+    help: 'How many Grade A leads the week started with. Frozen at the moment of the pull, so '
+      + 'it never moves afterwards and everything else can be measured against it.',
+  },
+  {
+    header: 'Kept', value: (r) => r.kept, numeric: true,
+    help: 'Of those, how many are still Grade A today. This is the number the 87% retention '
+      + 'target is measured on.',
+  },
+  {
+    header: 'Upgraded in', value: (r) => r.gained, numeric: true,
+    help: 'Leads that were NOT Grade A at the pull and are now, usually a re-grade or a '
+      + 'correction. They are worked like any other lead, but they are not retention, so they '
+      + 'are counted apart rather than allowed to flatter the kept figure.',
+  },
+  {
+    header: 'Worked', value: (r) => r.worked, numeric: true,
+    help: 'Grade A today: kept plus upgraded in. This is the live working population, and '
+      + 'everything to the right is measured against it.',
+  },
+  {
+    header: 'With insured email', value: (r) => r.withEmail, numeric: true,
+    help: 'Of the worked leads, how many have an email address for the named insured, who is '
+      + 'the only person the first email goes to. A co-insured address does not count here.',
+  },
+  {
+    header: 'Loaded', value: (r) => r.loaded, numeric: true,
+    help: 'Handed over to the campaign platform, ready to send.',
+  },
+  {
+    header: 'Emailed', value: (r) => r.emailed, numeric: true,
+    help: 'Recorded as sent. The send is logged at the moment of loading, so this tracks the '
+      + 'column to its left closely. Delivered is the honest measure of reach.',
+  },
+  {
+    header: 'Delivered', value: (r) => r.delivered, numeric: true,
+    help: 'Sent and not bounced. The campaign platform reports no delivery events, so this is '
+      + 'worked out rather than observed.',
+  },
+  {
+    header: 'Engaged', value: (r) => r.engaged, numeric: true,
+    help: 'Replied, or clicked something in the email. Measured against delivered, not sent.',
+  },
+  {
+    header: 'Quoted', value: (r) => r.quoted, numeric: true,
+    help: 'A firm, bindable premium was given to the homeowner.',
+  },
+  {
+    header: 'Bound', value: (r) => r.bound, numeric: true,
+    help: 'The policy was written. The end of the journey this table describes.',
+  },
 ];
 
 export default function OutreachDashboardPage() {
@@ -488,14 +536,38 @@ export default function OutreachDashboardPage() {
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell sx={{ fontWeight: 700, fontSize: 12 }}>Stage</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, fontSize: 12 }}>Count</TableCell>
-                  <TableCell sx={{ fontWeight: 700, fontSize: 12, width: '22%' }}>Share</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, fontSize: 12 }}>Rate</TableCell>
-                  <TableCell sx={{ fontWeight: 700, fontSize: 12 }}>of</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, fontSize: 12 }}>Target</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, fontSize: 12 }}>Floor</TableCell>
-                  <TableCell sx={{ fontWeight: 700, fontSize: 12 }}>Status</TableCell>
+                  <ColumnHeader
+                    label="Stage"
+                    help="One step of the journey, from the leads we pulled down to the policies bound. Each step is a subset of the one above it."
+                  />
+                  <ColumnHeader
+                    label="Count" align="right"
+                    help="How many leads or people reached this step. A dash means the step has not started yet, which is not the same as zero."
+                  />
+                  <ColumnHeader
+                    label="Share" width="22%"
+                    help="The bar draws this step against the widest one, so where the drop-off happens is visible without reading the numbers."
+                  />
+                  <ColumnHeader
+                    label="Rate" align="right"
+                    help="This step as a percentage of the step named in the next column, never as a percentage of the top of the funnel."
+                  />
+                  <ColumnHeader
+                    label="of"
+                    help="Which step the rate is measured against. A percentage only means something against its own starting point, so each one names it."
+                  />
+                  <ColumnHeader
+                    label="Target" align="right"
+                    help="Where we expect this rate to land, taken from the KPI Tracker."
+                  />
+                  <ColumnHeader
+                    label="Floor" align="right"
+                    help="The lowest acceptable figure. Below the floor the plan needs revisiting, not just watching."
+                  />
+                  <ColumnHeader
+                    label="Status"
+                    help="On plan, below target, or below floor. Not started means nothing has happened at this step yet, so there is nothing to judge."
+                  />
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -586,13 +658,34 @@ export default function OutreachDashboardPage() {
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell sx={{ fontWeight: 700, fontSize: 12 }}>Guardrail</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, fontSize: 12 }}>Now</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, fontSize: 12 }}>Target</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, fontSize: 12 }}>Pauses at</TableCell>
-                  <TableCell sx={{ fontWeight: 700, fontSize: 12 }}>Status</TableCell>
-                  <TableCell sx={{ fontWeight: 700, fontSize: 12 }}>Pause rule</TableCell>
-                  <TableCell sx={{ fontWeight: 700, fontSize: 12 }}>How it is measured</TableCell>
+                  <ColumnHeader
+                    label="Guardrail"
+                    help="A rule that can stop a send, rather than a number that only describes one. The period each is measured over is printed underneath its name."
+                  />
+                  <ColumnHeader
+                    label="Now" align="right"
+                    help="Where this figure stands today. A dash means there is nothing to measure yet, not that the figure is zero."
+                  />
+                  <ColumnHeader
+                    label="Target" align="right"
+                    help="Where we want this to be."
+                  />
+                  <ColumnHeader
+                    label="Pauses at" align="right"
+                    help="The figure at which sending stops. Deliberately separate from the target: a campaign sitting exactly on this line has not met its goal, it has reached the limit."
+                  />
+                  <ColumnHeader
+                    label="Status"
+                    help="Pass, watch, off plan, or no target set. PAUSE means the rule has fired and sending should stop."
+                  />
+                  <ColumnHeader
+                    label="Pause rule"
+                    help="What actually happens when the threshold is crossed."
+                  />
+                  <ColumnHeader
+                    label="How it is measured"
+                    help="The exact definition behind the number, so it can be checked rather than taken on trust."
+                  />
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -681,8 +774,12 @@ export default function OutreachDashboardPage() {
               <TableHead>
                 <TableRow>
                   {COHORT_COLUMNS.map((c) => (
-                    <TableCell key={c.header} align={c.numeric ? 'right' : 'left'}
-                      sx={{ fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{c.header}</TableCell>
+                    <ColumnHeader
+                      key={c.header}
+                      label={c.header}
+                      help={c.help}
+                      align={c.numeric ? 'right' : 'left'}
+                    />
                   ))}
                 </TableRow>
               </TableHead>

@@ -3,7 +3,7 @@
 import React from 'react';
 import {
   Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
-  Divider, Chip, Alert, LinearProgress, Tooltip, Stack,
+  Divider, Chip, LinearProgress, Tooltip, Stack,
 } from '@mui/material';
 /**
  * Type-only, every one. These services read @/lib/neon, and a value import would pull the
@@ -13,6 +13,7 @@ import type {
   OutreachChannels, ChannelFunnel, CrossChannelRow, DeliverabilityRow,
 } from '@/services/outreachChannels.service';
 import type { BandAccuracyCut, LossRow } from '@/services/quoteOutcomes.service';
+import ColumnHeader from './ColumnHeader';
 
 /**
  * The per-channel half of the Sec 10.7 dashboard.
@@ -66,11 +67,26 @@ function FunnelCard({ f }: { f: ChannelFunnel }) {
       <Table size="small">
         <TableHead>
           <TableRow>
-            <TableCell sx={{ fontWeight: 700, fontSize: 12 }}>Stage</TableCell>
-            <TableCell align="right" sx={{ fontWeight: 700, fontSize: 12 }}>Count</TableCell>
-            <TableCell sx={{ fontWeight: 700, fontSize: 12, width: '26%' }}>Share</TableCell>
-            <TableCell align="right" sx={{ fontWeight: 700, fontSize: 12 }}>Rate</TableCell>
-            <TableCell sx={{ fontWeight: 700, fontSize: 12 }}>of</TableCell>
+            <ColumnHeader
+              label="Stage"
+              help="One step of this channel's journey. Each step is a subset of the one above it, so the list narrows as leads drop out."
+            />
+            <ColumnHeader
+              label="Count" align="right"
+              help="How many leads or people reached this step. A dash means the channel has not started, which is not the same as zero."
+            />
+            <ColumnHeader
+              label="Share" width="26%"
+              help="The bar draws this step against the widest one, so the drop-off is visible without reading the numbers."
+            />
+            <ColumnHeader
+              label="Rate" align="right"
+              help="This step as a percentage of the step named beside it. Under a tenth of a percent it is shown as a bound rather than rounded down to nothing."
+            />
+            <ColumnHeader
+              label="of"
+              help="Which step the rate is measured against, named so a percentage is never read against the wrong starting point."
+            />
           </TableRow>
         </TableHead>
         <TableBody>
@@ -202,11 +218,20 @@ export default function ChannelSections({
         <Table size="small">
           <TableHead>
             <TableRow>
-              {['Channel', 'Contacts', 'Quotes', 'Binds', 'Bound premium', 'Commission',
-                'Cost', 'Cost / contact', 'Cost / quote', 'Cost / bind'].map((h, i) => (
-                  <TableCell key={h} align={i === 0 ? 'left' : 'right'}
-                    sx={{ fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{h}</TableCell>
-                ))}
+              {([
+                ['Channel', 'How the lead was reached: email, phone, or direct mail. This table is how we decide where the next pound of effort goes.'],
+                ['Contacts', 'A two-way contact, not an attempt. For email that is a reply or a click; for phone it is actually reaching a person.'],
+                ['Quotes', 'Leads given a firm, bindable premium after being reached through this channel.'],
+                ['Binds', 'Policies written off the back of this channel. Alongside the cost columns, this is what decides whether the channel pays for itself.'],
+                ['Bound premium', 'Total annual premium on those policies.'],
+                ['Commission', 'Our share of that premium. Blank until a commission rate has been agreed.'],
+                ['Cost', 'What this channel spent directly. Skip-trace credits are deliberately not split across channels, because one trace serves both email and phone and dividing it needs a rule rather than a guess.'],
+                ['Cost / contact', 'Channel spend divided by contacts. Blank until the cost figures are set.'],
+                ['Cost / quote', 'Channel spend divided by quotes. Blank until the cost figures are set.'],
+                ['Cost / bind', 'Channel spend divided by binds — what it costs us to win one policy through this channel.'],
+              ] as const).map(([h, help], i) => (
+                <ColumnHeader key={h} label={h} help={help} align={i === 0 ? 'left' : 'right'} />
+              ))}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -278,11 +303,18 @@ export default function ChannelSections({
           <Table size="small">
             <TableHead>
               <TableRow>
-                {['Mailbox', 'Sent', 'Bounces', 'Bounce %', 'Complaints', 'Complaint %',
-                  'Unsubscribes', 'Unsub %'].map((h, i) => (
-                    <TableCell key={h} align={i === 0 ? 'left' : 'right'}
-                      sx={{ fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{h}</TableCell>
-                  ))}
+                {([
+                  ['Mailbox', 'The address the email was sent from. Split per mailbox because an average hides which single mailbox is in trouble.'],
+                  ['Sent', 'Messages sent from this mailbox in the last 7 days.'],
+                  ['Bounces', 'Messages the receiving server rejected.'],
+                  ['Bounce %', 'Bounces as a share of what this mailbox sent. A high figure means the list is worse than we think.'],
+                  ['Complaints', 'Recipients who marked the message as spam.'],
+                  ['Complaint %', 'Complaints as a share of what this mailbox sent. This is the one that can compromise every mailbox at once, not just this one.'],
+                  ['Unsubscribes', 'Recipients who opted out.'],
+                  ['Unsub %', 'Unsubscribes as a share of what this mailbox sent. A message-market signal rather than a compliance one: rising means the argument is wrong, not that the list is bad.'],
+                ] as const).map(([h, help], i) => (
+                  <ColumnHeader key={h} label={h} help={help} align={i === 0 ? 'left' : 'right'} />
+                ))}
               </TableRow>
             </TableHead>
             <TableBody>
@@ -327,11 +359,18 @@ export default function ChannelSections({
           <Table size="small">
             <TableHead>
               <TableRow>
-                {['', 'Quoted', 'Inside at quote', 'Accuracy at quote', 'Bound',
-                  'Inside at bind', 'Accuracy at bind', 'Avg variance vs midpoint'].map((h, i) => (
-                    <TableCell key={h || 'cut'} align={i === 0 ? 'left' : 'right'}
-                      sx={{ fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{h || 'Cut'}</TableCell>
-                  ))}
+                {([
+                  ['Cut', 'What the rows are grouped by — carrier, property type, municipality or renewal week.'],
+                  ['Quoted', 'How many quotes had a published price band to be compared against.'],
+                  ['Inside at quote', 'Of those, how many came in inside the band the homeowner was actually shown.'],
+                  ['Accuracy at quote', 'Inside at quote as a percentage. This is the number that says whether the band we advertise is honest.'],
+                  ['Bound', 'How many of those went on to be written.'],
+                  ['Inside at bind', 'Of the policies written, how many landed inside the band.'],
+                  ['Accuracy at bind', 'Inside at bind as a percentage. Shown beside quote-time accuracy and never combined with it: a band that holds at bind but misses at quote means the misses are walking away rather than buying.'],
+                  ['Avg variance vs midpoint', 'On average, how far the premium landed from the middle of the band. Positive means we came in above it.'],
+                ] as const).map(([h, help], i) => (
+                  <ColumnHeader key={h} label={h} help={help} align={i === 0 ? 'left' : 'right'} />
+                ))}
               </TableRow>
             </TableHead>
             <TableBody>
@@ -378,11 +417,17 @@ export default function ChannelSections({
           <Table size="small">
             <TableHead>
               <TableRow>
-                {['Carrier', 'Losses', 'With premium', 'Avg gap', 'Avg gap %',
-                  'Reasons', 'Municipalities'].map((h, i) => (
-                    <TableCell key={h} align={i > 0 && i < 5 ? 'right' : 'left'}
-                      sx={{ fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{h}</TableCell>
-                  ))}
+                {([
+                  ['Carrier', 'Who took the business instead of us, where the producer recorded it.'],
+                  ['Losses', 'How many accounts we lost to them.'],
+                  ['With premium', 'Of those, how many told us the competing price. Only these count toward the averages beside them.'],
+                  ['Avg gap', 'On average, how much more expensive we were, across only the losses where we know both prices.'],
+                  ['Avg gap %', 'The same gap as a percentage of their price, which compares better across different sized homes.'],
+                  ['Reasons', 'The reason the producer recorded at the time, with a count for each.'],
+                  ['Municipalities', 'Where these losses happened. A rating and appetite signal rather than a sales note: a carrier that beats us in one town is a different problem from one that beats us everywhere.'],
+                ] as const).map(([h, help], i) => (
+                  <ColumnHeader key={h} label={h} help={help} align={i > 0 && i < 5 ? 'right' : 'left'} />
+                ))}
               </TableRow>
             </TableHead>
             <TableBody>

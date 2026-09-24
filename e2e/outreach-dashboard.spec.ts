@@ -228,6 +228,42 @@ test.describe('outreach dashboard', () => {
     await page.screenshot({ path: 'e2e/outreach-channels.png', fullPage: true });
   });
 
+  test('every column on every table explains itself', async ({ page }) => {
+    /**
+     * Frank reads this without anyone beside him, so a column called "Kept" or "Inside at
+     * quote" has to say what it means on the screen rather than in a conversation.
+     *
+     * Asserted as "no header lacks help" rather than by listing the columns: a list would
+     * have to be kept in step with eight tables, and the failure this guards against is
+     * someone adding a ninth column without a description — which a fixed list would never
+     * notice.
+     */
+    await login(page);
+    await page.goto('/admin/outreach', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('heading', { name: 'Outreach dashboard' })).toBeVisible();
+    await expect(page.getByText('Lost analysis', { exact: true })).toBeVisible();
+
+    const headers = page.getByRole('columnheader');
+    const total = await headers.count();
+    expect(total, 'the page has column headers at all').toBeGreaterThan(40);
+
+    const bare: string[] = [];
+    const thin: string[] = [];
+    for (let i = 0; i < total; i++) {
+      const cell = headers.nth(i);
+      const label = ((await cell.textContent()) ?? '').trim();
+      if (!label) continue;
+      // ColumnHeader wraps the label in a span carrying the tooltip as its title.
+      const help = await cell.locator('span[aria-label], span[title]').first()
+        .getAttribute('title').catch(() => null)
+        ?? await cell.locator('span').first().getAttribute('aria-label').catch(() => null);
+      if (help == null) bare.push(label);
+      else if (help.trim().length < 25) thin.push(`${label}: "${help}"`);
+    }
+    expect(bare, 'headers with no explanation').toEqual([]);
+    expect(thin, 'headers whose explanation says nothing useful').toEqual([]);
+  });
+
   test('the date range filter re-queries and the CSV export is offered', async ({ page }) => {
     await login(page);
     await page.goto('/admin/outreach', { waitUntil: 'domcontentloaded' });
