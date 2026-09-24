@@ -11,12 +11,21 @@ import { insuredEmails } from './recipients.service';
  * Left at 'rated' it reads as part of the send list, and the first anyone learns otherwise
  * is when a cohort under-delivers against its own forecast.
  *
- * ── Why the previous status is preserved ────────────────────────────────────
- * In the 10/05 week, 31 of the 34 are already 'rated' and one is 'referral'. Overwriting
- * that would erase work a producer has done, and the email cadence is built on it — a
- * rated lead gets an indicative price in email 2 and an unrated one cannot. So
- * isolatedFromStatus carries what the lead was, isolation is reversible, and the moment
- * an address turns up the lead goes back to being exactly what it was before.
+ * ── Isolation is its own field, NOT a status ────────────────────────────────
+ * It used to overwrite status with 'isolated', keeping the old value in isolatedFromStatus
+ * to put back later. That preserved the data and still broke every reader in between:
+ * anything asking "is this lead rated" got "no" for as long as it was parked, which is how
+ * the dashboard came to report 48 rated for a week holding 61.
+ *
+ * Frank, 23 Sep 2026: "A separate 'isolated' dropdown will be added, so pulling a lead for
+ * skip trace never overwrites its 'rated' status."
+ *
+ * So isolatedAt is the marker and status is left alone. A lead that was rated stays rated
+ * while it waits for an address, which is what it actually is — rated AND unreachable are
+ * two different facts about the same lead and were never alternatives to each other.
+ *
+ * isolatedFromStatus is still written, and still read on the way out, because 46 leads were
+ * isolated under the old rule and their real status is only recoverable from it.
  *
  * ── Why this is an action, not a rule ───────────────────────────────────────
  * It would be easy to have the report isolate leads as it renders them. That would make
@@ -26,14 +35,22 @@ import { insuredEmails } from './recipients.service';
 
 const GRADE_A = (l: any) => String(l.manualGrade || l.grade || '') === 'A';
 
-/** Grade A, no insured email, not already isolated. */
+/**
+ * Grade A, no insured email, not already isolated.
+ *
+ * Both tests key on isolatedAt, not on status. The legacy check is kept alongside it only
+ * so the 46 leads isolated under the old rule are still recognised before the backfill
+ * runs — after it, the status arm never matches anything.
+ */
+const isIsolated = (l: any) => l.isolatedAt != null || l.status === 'isolated';
+
 function isTarget(l: any): boolean {
-  return GRADE_A(l) && insuredEmails(l).length === 0 && l.status !== 'isolated';
+  return GRADE_A(l) && insuredEmails(l).length === 0 && !isIsolated(l);
 }
 
 /** An isolated lead that can now be reached — isolation no longer applies. */
 function isRestorable(l: any): boolean {
-  return l.status === 'isolated' && insuredEmails(l).length > 0;
+  return isIsolated(l) && insuredEmails(l).length > 0;
 }
 
 /**
@@ -101,7 +118,8 @@ export async function isolateUnreachable(opts: {
   const now = new Date();
   for (const l of targets) {
     await updateLead(l.propertyId ?? l.id, {
-      status: 'isolated',
+      // status is deliberately NOT written. See the note at the top of this file: a rated
+      // lead stays rated while it waits for an address.
       isolatedAt: now,
       isolatedFromStatus: l.status ?? null,
       isolatedReason: 'Grade A with no insured email — cannot be emailed',
@@ -125,9 +143,9 @@ export async function isolateUnreachable(opts: {
     await addActivity(
       l.id,
       'status_change',
-      `Status: ${l.status ?? '—'} → isolated (Grade A, no insured email)`,
+      `Isolated — Grade A, no insured email. Status stays ${l.status ?? '—'}.`,
       {
-        changes: [{ field: 'Status', from: l.status ?? '(empty)', to: 'isolated' }],
+        changes: [{ field: 'Isolated', from: 'no', to: 'yes' }],
         isolatedFromStatus: l.status ?? null,
       },
       createdBy ? `isolate · ${createdBy}` : 'isolate (system)',
@@ -143,9 +161,17 @@ export async function isolateUnreachable(opts: {
    * withhold a lead the campaign should have.
    */
   for (const l of restorable) {
+    /**
+     * Only put a status back if isolation took one away.
+     *
+     * Leads isolated under the new rule never lost theirs, so writing isolatedFromStatus
+     * over the top would undo any work done while the lead was parked — a lead rated
+     * during isolation would be reset to whatever it was before.
+     */
+    const legacy = l.status === 'isolated';
     const back = l.isolatedFromStatus || 'new';
     await updateLead(l.propertyId ?? l.id, {
-      status: back,
+      ...(legacy ? { status: back } : {}),
       isolatedAt: null,
       isolatedFromStatus: null,
       isolatedReason: null,
@@ -158,8 +184,10 @@ export async function isolateUnreachable(opts: {
     await addActivity(
       l.id,
       'status_change',
-      `Status: isolated → ${back} (insured email found)`,
-      { changes: [{ field: 'Status', from: 'isolated', to: back }] },
+      legacy
+        ? `No longer isolated — insured email found. Status restored to ${back}.`
+        : `No longer isolated — insured email found. Status unchanged (${l.status ?? '—'}).`,
+      { changes: [{ field: 'Isolated', from: 'yes', to: 'no' }] },
       createdBy ? `isolate · ${createdBy}` : 'isolate (system)',
     );
   }

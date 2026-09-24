@@ -10,7 +10,9 @@ import {
 import Link from 'next/link';
 import { getMissingFields } from '@/services/grade.service';
 import { GRADE_INFO, LeadGrade } from '@/types/grade';
-import { LEAD_STATUS_OPTIONS, leadStatusLabel, CLOSED_STATUSES, LeadStatus } from '@/types/lead';
+import {
+  SELECTABLE_LEAD_STATUS_OPTIONS, leadStatusLabel, CLOSED_STATUSES, LeadStatus,
+} from '@/types/lead';
 import { ELIGIBILITY_REASONS } from '@/types/carrier';
 import { WIPP_BY_ZIP } from '@/services/taxRoll.service';
 import { parseRollOwners, compareOwnerNames } from '@/services/ownerNameMatch.service';
@@ -208,6 +210,15 @@ export default function LeadDetailPage() {
 
   // Producer form state
   const [status, setStatus] = useState('');
+  /**
+   * Isolated — its own field, deliberately not a status (Frank, 23 Sep 2026).
+   *
+   * "Isolated" means Grade A with no insured email: we would quote this lead and cannot
+   * email it. That is a fact about REACH, and status is a fact about how far the lead has
+   * got. Storing it as a status made them alternatives, so parking a lead for skip tracing
+   * erased that it was rated — which is how a week holding 61 rated leads reported 48.
+   */
+  const [isolated, setIsolated] = useState(false);
   const [posQuoteNumber, setPosQuoteNumber] = useState('');
   const [posCarrier, setPosCarrier] = useState('');
   const [posQuotePremium, setPosQuotePremium] = useState('');
@@ -250,7 +261,13 @@ export default function LeadDetailPage() {
     if (json.success) {
       const l = json.data;
       setLead(l);
-      setStatus(l.status ?? 'new');
+      /**
+       * A lead isolated before 23 Sep 2026 has 'isolated' sitting IN its status, with the
+       * real one in isolatedFromStatus. Show the real one, so the dropdown never offers a
+       * value it does not contain — 'isolated' is not in LEAD_STATUS_OPTIONS and never was.
+       */
+      setStatus((l.status === 'isolated' ? l.isolatedFromStatus : l.status) ?? 'new');
+      setIsolated(l.isolatedAt != null || l.status === 'isolated');
       setPosQuoteNumber(l.posQuoteNumber ?? '');
       setPosCarrier(l.posCarrier ?? '');
       setPosQuotePremium(l.posQuotePremium != null ? String(l.posQuotePremium) : '');
@@ -344,7 +361,7 @@ export default function LeadDetailPage() {
   // Snapshot every editable field; Save stays disabled until one of them changes.
   const [pristine, setPristine] = useState<string | null>(null);
   const formSnapshot = JSON.stringify({
-    status, posQuotePremium, boundPremium, varianceNotes, varianceReason,
+    status, isolated, posQuotePremium, boundPremium, varianceNotes, varianceReason,
     authorizationMethod, lostReason, lostStage, producerNote, manualGrade,
     gradeOverrideReason, revisitFlag, revisitDate, revisitNote,
     competitorCarrier, competitorPremium, roofYear, roofType, extra,
@@ -383,6 +400,15 @@ export default function LeadDetailPage() {
 
     const body: any = {
       status,
+      /**
+       * Setting it stamps the time; clearing it wipes the whole isolation record, so a
+       * lead that comes back does not keep a stale reason explaining why it was parked.
+       */
+      isolatedAt: isolated ? (lead?.isolatedAt ?? new Date().toISOString()) : null,
+      isolatedReason: isolated
+        ? (lead?.isolatedReason ?? 'Marked isolated by a producer')
+        : null,
+      ...(isolated ? {} : { isolatedFromStatus: null }),
       posQuoteNumber: posQuoteNumber || undefined,
       posCarrier: posCarrier || undefined,
       posQuotePremium: pqp,
@@ -1768,12 +1794,54 @@ export default function LeadDetailPage() {
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
                 <FormControl size="small" fullWidth>
-                  <InputLabel>Lead Status</InputLabel>
-                  <Select value={status} label="Lead Status" onChange={(e) => setStatus(e.target.value)}>
-                    {LEAD_STATUS_OPTIONS.map((o) => (
+                  {/* id/labelId tie the label to the control; MUI's Select is a div, so
+                      without them it has no accessible name. */}
+                  <InputLabel id="lead-status-label">Lead Status</InputLabel>
+                  <Select
+                    labelId="lead-status-label"
+                    id="lead-status"
+                    value={status}
+                    label="Lead Status"
+                    onChange={(e) => setStatus(e.target.value)}
+                  >
+                    {SELECTABLE_LEAD_STATUS_OPTIONS.map((o) => (
                       <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
                     ))}
                   </Select>
+                </FormControl>
+              </Grid>
+
+              {/*
+                Isolated, beside the status rather than inside it.
+
+                The two answer different questions — how far the lead has got, and whether
+                we can reach it — and making them one field meant parking a lead for skip
+                tracing wiped the fact that it was rated.
+              */}
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <FormControl size="small" fullWidth>
+                  <InputLabel id="lead-isolated-label">Isolated</InputLabel>
+                  <Select
+                    labelId="lead-isolated-label"
+                    id="lead-isolated"
+                    value={isolated ? 'yes' : 'no'}
+                    label="Isolated"
+                    onChange={(e) => setIsolated(e.target.value === 'yes')}
+                  >
+                    <MenuItem value="no">No — reachable</MenuItem>
+                    <MenuItem value="yes">Yes — no insured email</MenuItem>
+                  </Select>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ mt: 0.5 }}
+                    data-testid="isolated-help"
+                  >
+                    {isolated
+                      ? (lead?.isolatedReason
+                        || 'Parked for skip tracing. The status above is unaffected.')
+                      : 'Set when a Grade A lead has no insured email to send to.'}
+                  </Typography>
                 </FormControl>
               </Grid>
 

@@ -122,6 +122,8 @@ export async function stageCounts(effFrom?: string, effTo?: string): Promise<Sta
 export type PipelineRow = {
   id: string;
   owner: string;
+  /** Street line — city and ZIP do not identify a property. */
+  address: string | null;
   city: string | null;
   zip: string | null;
   effectiveDate: string | null;
@@ -169,6 +171,7 @@ export async function leadsAtStage(
     .map((r) => ({
       id: r.id,
       owner: `${r.owner1FirstName ?? ''} ${r.owner1LastName ?? ''}`.trim(),
+      address: r.addressStreet,
       city: r.addressCity,
       zip: r.addressZip,
       effectiveDate: iso(r.effectiveDate),
@@ -303,15 +306,19 @@ async function applyAndAdvance(
     /**
      * Back in play.
      *
-     * The status returns to what the lead held BEFORE isolation rather than a blanket
-     * 'new'. Most were 'new' and go back to 'new'; the ones that were already rated stay
-     * rated, because a rated lead gets an indicative price in the second email and an
-     * unrated one cannot — resetting them all would quietly undo Ruben's work and change
-     * which copy they receive.
+     * A status is only put back if isolation took one away. Leads isolated before 23 Sep
+     * 2026 had theirs overwritten with 'isolated', and isolatedFromStatus is the only
+     * record of what they were; leads isolated since keep their status throughout, so
+     * writing the old value over the top would undo anything done while they were parked.
+     *
+     * Where it does apply, it returns to what the lead held BEFORE isolation rather than a
+     * blanket 'new' — a rated lead gets an indicative price in the second email and an
+     * unrated one cannot, so resetting them all would change which copy they receive.
      */
+    const legacyIsolation = lead.status === 'isolated';
     const back = lead.isolatedFromStatus || 'new';
     Object.assign(update, {
-      status: back,
+      ...(legacyIsolation ? { status: back } : {}),
       isolatedAt: null,
       isolatedFromStatus: null,
       isolatedReason: null,
@@ -350,9 +357,11 @@ async function applyAndAdvance(
       lead.id,
       'status_change',
       `After ${vendor === 'tracerfy' ? 'Tracerfy' : 'BatchData'} skip trace — Lead Grade ${finalGrade}, `
-        + `status isolated → ${back} (${found.emails.length} email(s), ${found.phones.length} phone(s) recovered)`,
+        + `no longer isolated`
+        + (legacyIsolation ? ` (status restored to ${back})` : ` (status unchanged)`)
+        + ` — ${found.emails.length} email(s), ${found.phones.length} phone(s) recovered`,
       {
-        changes: [{ field: 'Status', from: 'isolated', to: back }],
+        changes: [{ field: 'Isolated', from: 'yes', to: 'no' }],
         recovery: { vendor, stage: 'recovered' },
         emails: found.emails,
         phones: found.phones,

@@ -62,6 +62,15 @@ export const LEAD_STATUS_OPTIONS: Array<{
   value: LeadStatus;
   label: string;
   color: 'info' | 'warning' | 'primary' | 'secondary' | 'success' | 'error';
+  /**
+   * False for a status a person must never pick from a dropdown.
+   *
+   * Such a status still needs a label — leads hold it and it has to render — so the entry
+   * stays in this list and is filtered out of the picker instead. Deleting it would make
+   * leadStatusLabel() fall through to its 'New' default, and every lead holding it would
+   * silently display as New.
+   */
+  selectable?: boolean;
 }> = [
   { value: 'new',             label: 'New',                     color: 'info' },
   { value: 'rated',           label: 'Rated',                   color: 'secondary' },
@@ -71,9 +80,24 @@ export const LEAD_STATUS_OPTIONS: Array<{
   { value: 'quote_issued',    label: 'Quote Issued',            color: 'primary' },
   { value: 'bound',           label: 'Bound',                   color: 'success' },
   { value: 'lost',            label: 'Lost',                    color: 'error' },
-  { value: 'isolated',        label: 'Isolated (no contact)',   color: 'warning' },
+  /**
+   * Isolated is no longer a status (Frank, 23 Sep 2026) — it is its own field on the card.
+   *
+   * "A separate 'isolated' dropdown will be added, so pulling a lead for skip trace never
+   * overwrites its 'rated' status."
+   *
+   * Kept here only so the leads parked under the old rule still render with a name while
+   * they wait for the backfill. Nobody can choose it.
+   */
+  { value: 'isolated',        label: 'Isolated (no contact)',   color: 'warning', selectable: false },
   { value: 'quarantine',      label: 'Quarantine',              color: 'secondary' },
 ];
+
+/**
+ * The statuses a person may actually choose. Everything else in LEAD_STATUS_OPTIONS is
+ * there to be displayed, not picked.
+ */
+export const SELECTABLE_LEAD_STATUS_OPTIONS = LEAD_STATUS_OPTIONS.filter((o) => o.selectable !== false);
 
 export function leadStatusLabel(s: string | null | undefined): string {
   return LEAD_STATUS_OPTIONS.find((o) => o.value === s)?.label ?? 'New';
