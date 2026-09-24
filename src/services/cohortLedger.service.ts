@@ -189,6 +189,10 @@ export async function getCohortLedger(
              l."gradeAtPull",
              l."status",
              l."recoveryStage",
+             -- The two carrier premiums ARE the rated test (Frank, 23 Sep 2026); see the
+             -- note on the rated aggregate below for why the status column cannot serve.
+             l."travelersPremium",
+             l."plymouthPremium",
              COALESCE(l."manualGrade", l."grade") AS now_grade
         FROM "Lead" l
        WHERE l."cohort" IS NOT NULL
@@ -230,8 +234,33 @@ export async function getCohortLedger(
                               AND now_grade = 'A')::int                               AS gained_other,
            COUNT(*) FILTER (WHERE now_grade = 'A')::int                               AS a_now,
            COUNT(*) FILTER (WHERE "gradeAtPull" IS NULL)::int                         AS no_pull_record,
-           COUNT(*) FILTER (WHERE status = 'rated')::int                              AS rated,
-           COUNT(*) FILTER (WHERE status = 'new' AND now_grade = 'A')::int            AS unworked_a
+           /*
+            * Rated means a carrier premium exists, not that the status column says so.
+            *
+            * Frank, 23 Sep 2026: "The dashboard's 'Rated 48' is wrong. The cause: lead
+            * status was changed from 'rated' to 'new' so leads without an email could be
+            * pulled for the skip trace blast. New rule: a lead counts as rated if it has a
+            * premium in Travelers or Plymouth Rock, whatever its status says."
+            *
+            * Two bugs were in that one number, and only one of them was the status:
+            *
+            *  1. It read the status column, which the blast and the isolation step both
+            *     overwrite. A lead rated on Monday and pulled for tracing on Tuesday
+            *     stopped counting.
+            *  2. It counted EVERY lead in the week regardless of grade, so C2 reported 82
+            *     rated against 65 Grade A — more rated leads than there were leads to rate.
+            *
+            * expectedPremium is deliberately not used: it is the pricing engine's own
+            * output and sits on 9,661 of 9,937 leads, so it would report almost everything
+            * as rated. The carrier premiums are the ones a producer enters.
+            */
+           COUNT(*) FILTER (WHERE now_grade = 'A'
+                              AND ("travelersPremium" IS NOT NULL
+                                OR "plymouthPremium" IS NOT NULL))::int                AS rated,
+           /* The complement of rated, for the same reason — not status = 'new'. */
+           COUNT(*) FILTER (WHERE now_grade = 'A'
+                              AND "travelersPremium" IS NULL
+                              AND "plymouthPremium" IS NULL)::int                      AS unworked_a
       FROM flagged
      GROUP BY "cohort"
      ORDER BY "cohort"`;
