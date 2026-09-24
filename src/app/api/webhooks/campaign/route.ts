@@ -177,6 +177,32 @@ export async function POST(request: NextRequest) {
           WHERE "id" = $1`,
         [row.id, now],
       );
+    } else if (kind === 'delivered') {
+      /**
+       * The platform accepted it AND the receiving server took it.
+       *
+       * This is the denominator Sec 10.7 measures engagement against, and until now
+       * nothing wrote it. sentAt is set too, because a delivery proves a send happened
+       * even if we never saw the send event — vendors drop them, and a delivered message
+       * that reads as never sent would put the funnel's own rungs out of order.
+       */
+      await client.query(
+        `UPDATE "OutreachEvent"
+            SET "deliveredAt" = COALESCE("deliveredAt", $2),
+                "sentAt"      = COALESCE("sentAt", $2),
+                "emailStep"   = COALESCE($3, "emailStep"),
+                "updatedAt"   = $2
+          WHERE "id" = $1`,
+        [row.id, now, p.step],
+      );
+      leadPatch = {
+        sql: `UPDATE "Lead"
+                 SET "campaignLastSentAt" = COALESCE("campaignLastSentAt", $2),
+                     "currentEmailStep" = COALESCE($3, "currentEmailStep"),
+                     "updatedAt" = $2
+               WHERE "id" = $1`,
+        params: [row.leadId, now, p.step],
+      };
     } else if (kind === 'sent') {
       // Nothing about the outcome — only the facts of the send itself. sentAt is already
       // stamped by the push, so this confirms rather than creates.

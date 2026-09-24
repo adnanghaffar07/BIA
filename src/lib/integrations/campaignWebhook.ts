@@ -54,7 +54,9 @@ export function verifyWebhookSecret(headerValue: string | null, queryValue?: str
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-export type OutcomeKind = 'reply' | 'bounce' | 'open' | 'click' | 'unsubscribe' | 'complaint' | 'sent' | null;
+export type OutcomeKind =
+  | 'reply' | 'bounce' | 'open' | 'click' | 'unsubscribe' | 'complaint'
+  | 'sent' | 'delivered' | null;
 
 /**
  * Classify the event.
@@ -74,7 +76,22 @@ export function classifyEvent(eventType: string | null | undefined): OutcomeKind
   if (e.includes('bounc')) return 'bounce';
   if (e.includes('click')) return 'click';
   if (e.includes('open')) return 'open';
-  if (e.includes('sent') || e.includes('deliver')) return 'sent';
+  /**
+   * Delivered is NOT the same event as sent, and folding the two lost the only one that
+   * matters most.
+   *
+   * They were classified together, so a delivery event was handled as a send and
+   * "deliveredAt" was never written by anything, anywhere. Sec 10.7 measures engagement ON
+   * DELIVERED — "Engagement measured on delivered" — so the engagement rate, its 27%
+   * target and the 18% floor that triggers the Pivot Plan all rested on a column nothing
+   * populated. The dashboard would have read zero delivered forever and nobody would have
+   * had a reason to doubt it.
+   *
+   * Checked before 'sent' because vendors label these "email_delivered", which contains
+   * both words.
+   */
+  if (e.includes('deliver')) return 'delivered';
+  if (e.includes('sent')) return 'sent';
   return null;
 }
 
