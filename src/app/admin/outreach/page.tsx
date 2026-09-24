@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Container, Box, Typography, Paper, TextField, Button, Chip, Table, TableHead,
   TableRow, TableCell, TableBody, CircularProgress, Alert, Stack, Tooltip, Divider,
-  LinearProgress, ToggleButton, ToggleButtonGroup,
+  LinearProgress,
 } from '@mui/material';
 import InsightsIcon from '@mui/icons-material/Insights';
 import DownloadIcon from '@mui/icons-material/Download';
@@ -381,25 +381,6 @@ export default function OutreachDashboardPage() {
               htmlInput: { min: dateMin, max: dateMax },
             }}
           />
-          {/*
-            The scope, for when no dates are set. Disabled while a custom range is in the
-            boxes, because the range already answers the question and leaving the toggle
-            live would offer a choice that does nothing.
-          */}
-          <ToggleButtonGroup
-            size="small"
-            exclusive
-            value={customRange ? null : scope}
-            onChange={(_, v) => { if (v) setScope(v); }}
-            disabled={customRange}
-          >
-            <ToggleButton value="programme" sx={{ textTransform: 'none', px: 1.5 }}>
-              Programme
-            </ToggleButton>
-            <ToggleButton value="all" sx={{ textTransform: 'none', px: 1.5 }}>
-              All weeks
-            </ToggleButton>
-          </ToggleButtonGroup>
           {customRange && (
             <Typography variant="caption" color="text.secondary">
               Showing the dates above.
@@ -450,9 +431,39 @@ export default function OutreachDashboardPage() {
                   <b>{fmtNum(data.excluded.worked)}</b> Grade A cards, of which{' '}
                   <b>{fmtNum(data.excluded.withEmail)}</b> have an insured email
                   {data.excluded.withEmail === 0 && ' — none of them was prepared for outreach'}
-                  . Switch to <b>All weeks</b> to include them.
+                  .{' '}
+                  <Button
+                    size="small"
+                    onClick={() => setScope('all')}
+                    sx={{ textTransform: 'none', p: 0, minWidth: 0, verticalAlign: 'baseline' }}
+                  >
+                    Show them too
+                  </Button>
                 </Box>
               )}
+            </Alert>
+          )}
+
+          {/*
+            The other half of the same choice.
+            
+            This used to be a Programme / All weeks toggle in the toolbar, and twice it was
+            read as two unexplained words. The scope never needed a control of its own: the
+            only reason to widen the range is the sentence above saying what is missing, so
+            the action belongs in that sentence, and the way back belongs here.
+          */}
+          {!data.defaultedRange && !customRange && scope === 'all' && (
+            <Alert severity="info" icon={<FilterAltIcon />} sx={{ mb: 2 }}>
+              <b>Showing every renewal week.</b>{' '}This includes weeks pulled before outreach
+              began, which were never skip traced — so email coverage reads far lower here
+              than it does for the weeks actually being worked.{' '}
+              <Button
+                size="small"
+                onClick={() => setScope('programme')}
+                sx={{ textTransform: 'none', p: 0, minWidth: 0, verticalAlign: 'baseline' }}
+              >
+                Back to the outreach weeks
+              </Button>
             </Alert>
           )}
 

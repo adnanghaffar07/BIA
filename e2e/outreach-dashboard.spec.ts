@@ -267,7 +267,7 @@ test.describe('outreach dashboard', () => {
     const scoped = (await coverageRate.textContent())?.trim();
 
     // Widening must actually change the figure, and must drop the programme banner.
-    await page.getByRole('button', { name: 'All weeks' }).click();
+    await page.getByRole('button', { name: 'Show them too' }).click();
     await expect(page.getByText('Showing the outreach programme.')).toBeHidden();
     await expect(async () => {
       expect((await coverageRate.textContent())?.trim()).not.toBe(scoped);
@@ -281,8 +281,9 @@ test.describe('outreach dashboard', () => {
     await expect(page.getByLabel('Renewal week from')).toHaveValue('');
     await expect(page.getByLabel('Renewal week to')).toHaveValue('');
 
-    // ...and Reset must put it back on the programme, not on everything.
-    await page.getByRole('button', { name: 'Reset' }).click();
+    // ...and the way back is offered where the widened view explains itself.
+    await expect(page.getByText('Showing every renewal week.')).toBeVisible();
+    await page.getByRole('button', { name: 'Back to the outreach weeks' }).click();
     await expect(page.getByText('Showing the outreach programme.')).toBeVisible();
     await expect(async () => {
       expect((await coverageRate.textContent())?.trim()).toBe(scoped);
