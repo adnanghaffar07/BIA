@@ -140,7 +140,9 @@ export default function ChannelSections({
   bandAccuracy: { by: string; cuts: BandAccuracyCut[] };
   losses: { rows: LossRow[]; totalLosses: number; missingCompetitor: number };
 }) {
-  const { funnels, crossChannel, responseTime, deliverability, economics, headline } = channels;
+  // economics is deliberately not destructured: the API still returns which settings are
+  // unset, for whoever is setting them, but this screen no longer says so out loud.
+  const { funnels, crossChannel, responseTime, deliverability, headline } = channels;
 
   return (
     <>
@@ -172,32 +174,16 @@ export default function ChannelSections({
       </Paper>
 
       {/*
-        The settings that are missing, named once and loudly.
+        No banner about unset settings.
 
-        Commission has no field anywhere in the schema and no rate has been agreed, so every
-        commission and cost-per figure below is null. Showing them as zero would read as
-        "this channel costs nothing", which is a claim rather than an absence.
+        There was one, naming the four AppConfig keys. It was a developer's note on a screen
+        Frank reads: it turned a rate nobody had agreed yet into something that looked like a
+        fault in the CRM, and the only action it suggested was one he cannot take.
+        `economics.missing` is still returned by the API for whoever is setting them.
+
+        The absence still shows, where it belongs — commission and every cost-per figure read
+        as a dash rather than zero, because zero would claim this channel costs nothing.
       */}
-      {economics.missing.length > 0 && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          <b>Some figures cannot be computed yet.</b> These settings are not set:{' '}
-          {/*
-            Comma-separated in the TEXT, not spaced by CSS.
-            
-            A margin looks like a gap on screen and disappears the moment anyone copies the
-            line — which is how this reached me as "commission_rate_pctcost_per_email_sent".
-            A setting name nobody can copy correctly is a setting nobody can act on.
-          */}
-          {economics.missing.map((m, i) => (
-            <React.Fragment key={m}>
-              {i > 0 ? ', ' : ''}
-              <code>{m}</code>
-            </React.Fragment>
-          ))}
-          — commission and cost-per-contact/quote/bind stay blank until they are. They live in
-          the <code>AppConfig</code> table.
-        </Alert>
-      )}
 
       {funnels.map((f) => <FunnelCard key={f.channel} f={f} />)}
 

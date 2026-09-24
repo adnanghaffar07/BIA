@@ -216,11 +216,13 @@ test.describe('outreach dashboard', () => {
     ]);
 
     /**
-     * Money that needs a setting nobody has entered must stay blank and say why. A zero
-     * would read as "this channel earned nothing", which is a claim rather than an absence.
+     * Money that needs a setting nobody has entered stays blank rather than reading zero,
+     * and the screen does NOT explain itself with config keys — that banner was a
+     * developer's note on a page Frank reads.
      */
-    await expect(page.getByText('Some figures cannot be computed yet.')).toBeVisible();
-    await expect(page.getByText('commission_rate_pct')).toBeVisible();
+    await expect(page.getByText(/Some figures cannot be computed/)).toHaveCount(0);
+    await expect(page.getByText('commission_rate_pct')).toHaveCount(0);
+    await expect(page.getByText('Commission / 1,000')).toBeVisible();
 
     /** Evidence, so the whole screen can be looked at rather than only asserted about. */
     await page.screenshot({ path: 'e2e/outreach-channels.png', fullPage: true });

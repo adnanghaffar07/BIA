@@ -568,7 +568,9 @@ export async function getOutreachChannels(params: {
     note: sends === 0
       ? 'No email has been sent, so the verdict metric has no denominator yet.'
       : economics.commissionRatePct == null
-        ? 'Commission needs a rate — set commission_rate_pct in AppConfig.'
+        // Plainly, and without naming a config key: this screen is read by people who
+        // cannot set one, and "a rate has not been agreed" is the actual situation.
+        ? 'Commission is not shown until a commission rate has been agreed.'
         : 'Bound premium and commission per 1,000 emails sent.',
   };
 
