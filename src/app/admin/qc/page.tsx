@@ -27,6 +27,7 @@ import { LOST_TARGET_PCT } from '@/lib/targets';
 import { CATEGORY_LABEL, RECOVERABLE, type GradeChangeCategory } from '@/services/gradeChangeReason';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import ContactPhoneIcon from '@mui/icons-material/ContactPhone';
+import PhoneIcon from '@mui/icons-material/PhoneInTalk';
 import DownloadIcon from '@mui/icons-material/Download';
 import Link from 'next/link';
 import { useStickyState } from '@/hooks/useStickyState';
@@ -70,7 +71,7 @@ const COHORT_CODES: Record<string, string> = {
   '2026-11-02': 'C5', '2026-11-09': 'C6', '2026-11-16': 'C7',
 };
 
-type ReportType = 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability';
+type ReportType = 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all';
 
 
 const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: string }[] = [
@@ -85,6 +86,9 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
   { key: 'owner_verify', label: 'WIP Verify Fails', icon: <PersonSearchIcon />, blurb: 'Leads that failed tax-roll verification — not found on the roll, or the insured name disagrees with it. Review before outreach.' },
   { key: 'contact_coverage', label: 'Contact Coverage', icon: <ContactPhoneIcon />, blurb: 'Rated accounts by property type (Condo/SFH) and contact status (phone-only / email-only / both / neither) + DOB. The no-email rows drive the downgrade decision.' },
   { key: 'skiptrace_mismatch', label: 'Name Mismatch', icon: <ReportProblemIcon />, blurb: 'Leads where the skip-trace insured name disagrees with the name on file — override per-lead from the card, then fix the carrier portal.' },
+  { key: 'call_outcome', label: 'Calls & Outcomes', icon: <PhoneIcon />, blurb: 'Where every workable lead stands on the two things a producer does to it: the call and the quote. Filter by call status, by what the last call returned, or by quote stage — the same states shown on the lead card.' },
+  { key: 'emails_insured', label: 'Email list — insured', icon: <ContactPhoneIcon />, blurb: 'The go-live send list: every Grade A lead in the range with an email for the NAMED INSURED, which is who E1 mails. One row per lead, with the addresses themselves.' },
+  { key: 'emails_all', label: 'Email list — insured or co-insured', icon: <ContactPhoneIcon />, blurb: 'The same list widened to leads reachable only at the co-insured. The difference between this and the insured list is what the insured-only rule costs in reach.' },
   { key: 'blast_skiptrace', label: 'Blast Skip Traces', icon: <BoltIcon />, blurb: 'Leads traced by a Grade-A cohort blast rather than by hand — when it ran, who ran it, what each lead returned and what it cost. Grouped by run.' },
 ];
 
@@ -113,7 +117,7 @@ const MAX_PER_BLAST = 100;
 
 type PipelineStage = (typeof PIPELINE_STAGES)[number]['key'];
 type PipelineRow = {
-  id: string; owner: string; city: string | null; zip: string | null;
+  id: string; owner: string; address: string | null; city: string | null; zip: string | null;
   effectiveDate: string | null; grade: string | null; status: string | null;
   hasEmail: boolean; hasPhone: boolean; triedTracerfyAt: string | null; triedBatchDataAt: string | null;
   recoveredBy: string | null;
@@ -136,7 +140,8 @@ const REPORT_GROUPS: { label: string; keys: ReportType[] }[] = [
   { label: 'Cohort performance', keys: ['cohort_ledger', 'cohort', 'reachability'] },
   { label: 'Grading', keys: ['grade_overrides', 'roof_b'] },
   { label: 'Data quality', keys: ['type_mismatch', 'skiptrace_mismatch', 'owner_verify', 'contact_coverage'] },
-  { label: 'Outreach', keys: ['referral', 'blast_skiptrace', 'keyword'] },
+  { label: 'Producer work', keys: ['call_outcome'] },
+  { label: 'Outreach', keys: ['emails_insured', 'emails_all', 'referral', 'blast_skiptrace', 'keyword'] },
 ];
 
 const gradeColor = (g: string | null) =>
@@ -200,6 +205,21 @@ function columnsFor(report: ReportType): QcColumn[] {
       cell: (r) => (
         <Link href={`/leads/${r.propertyId}?from=qc`} style={{ color: '#1565c0', textDecoration: 'none' }}>{r.owner}</Link>
       ),
+    },
+    {
+      /**
+       * The street line, next to the town rather than folded into it.
+       *
+       * City and ZIP were the only location on every export, and they identify a
+       * neighbourhood, not a house. A producer working a list, or anyone reconciling two
+       * exports, is looking for the property — and on a street where several cards share
+       * an owner surname the town alone cannot tell them apart.
+       */
+      header: 'Address',
+      value: (r) => r.address ?? '—',
+      cell: (r) => (r.address
+        ? <span style={{ whiteSpace: 'nowrap' }}>{r.address}</span>
+        : <span style={{ color: '#b0b6c0' }}>—</span>),
     },
     {
       header: 'City / ZIP',
@@ -273,8 +293,30 @@ function columnsFor(report: ReportType): QcColumn[] {
         { header: 'Contactability', value: (r) => CONTACTABILITY_LABEL[r.contactability ?? 'none'] },
         { header: 'Channel', value: (r) => CHANNEL_LABEL[r.channel ?? 'mail'] },
       ]
-    : report === 'reachability'
+    : report === 'emails_insured' || report === 'emails_all'
       ? [
+          /**
+           * The send lists (Frank, 23 Sep 2026). Addresses first, because that is what the
+           * file is for — everything else on the row is there so a validated address can be
+           * traced back to a property.
+           *
+           * The insured and co-insured columns stay apart even on the wider list. Merging
+           * them would make the two exports impossible to check against each other, which
+           * is the only reason there are two.
+           */
+          { header: 'Insured Email', value: (r) => (r.insuredEmailList ?? []).join(', ') },
+          ...(report === 'emails_all'
+            ? [
+              { header: 'Co-Insured Name', value: (r: QcRow) => r.coInsuredName ?? '' },
+              { header: 'Co-Insured Email', value: (r: QcRow) => (r.coInsuredEmailList ?? []).join(', ') },
+              // The leads this list adds and the insured-only list loses.
+              { header: 'Co-Insured Only', value: (r: QcRow) => yn(r.coInsuredOnly) },
+            ]
+            : []),
+          { header: 'Renewal Week', value: (r) => r.cohort ?? '' },
+        ]
+      : report === 'reachability'
+        ? [
           { header: 'Insured Emails', value: (r) => String(r.insuredEmailCount ?? 0), numeric: true },
           { header: 'Co-Insured Only', value: (r) => yn(r.coInsuredOnly) },
           { header: 'Reachable', value: (r) => yn((r.insuredEmailCount ?? 0) > 0 || r.coInsuredOnly) },
@@ -292,7 +334,50 @@ function columnsFor(report: ReportType): QcColumn[] {
               { header: 'Phone Found', value: (r) => yn(r.hasPhone) },
               { header: 'Email Found', value: (r) => yn(r.hasEmail) },
             ]
-          : [];
+          : report === 'call_outcome'
+            ? [
+                {
+                  header: 'Call status',
+                  value: (r) => (r.callStatus ?? '').replace('_', ' '),
+                  cell: (r) => {
+                    const c = r.callStatus === 'contacted' ? { bg: '#e7f5ec', fg: '#166534' }
+                      : r.callStatus === 'unreachable' ? { bg: '#fdecea', fg: '#b3261e' }
+                        : r.callStatus === 'attempting' ? { bg: '#fff8e8', fg: '#8a5a00' }
+                          : { bg: '#eef1f5', fg: '#5a6675' };
+                    return (
+                      <Chip size="small" label={(r.callStatus ?? '').replace('_', ' ')}
+                        sx={{ height: 19, fontSize: 11, fontWeight: 700, bgcolor: c.bg, color: c.fg }} />
+                    );
+                  },
+                },
+                // Attempts AND days, because Frank's stop rule needs both: four calls in
+                // one afternoon is not an unreachable lead.
+                { header: 'Attempts', value: (r) => String(r.callAttempts ?? 0), numeric: true },
+                { header: 'Days dialled', value: (r) => String(r.callDays ?? 0), numeric: true },
+                {
+                  header: 'Last outcome',
+                  value: (r) => (r.callLastOutcome ?? '').replace(/_/g, ' '),
+                  cell: (r) => (r.callLastOutcome ? r.callLastOutcome.replace(/_/g, ' ') : '—'),
+                },
+                {
+                  header: 'Quote stage',
+                  value: (r) => (r.quoteStage ?? '').replace('_', ' '),
+                  cell: (r) => {
+                    const c = r.quoteStage === 'sold' ? { bg: '#e7f5ec', fg: '#166534' }
+                      : r.quoteStage === 'lost' ? { bg: '#fdecea', fg: '#b3261e' }
+                        : r.quoteStage === 'quoted' ? { bg: '#e8eefc', fg: '#1a3d7c' }
+                          : { bg: '#eef1f5', fg: '#5a6675' };
+                    return (
+                      <Chip size="small" label={(r.quoteStage ?? '').replace('_', ' ')}
+                        sx={{ height: 19, fontSize: 11, fontWeight: 700, bgcolor: c.bg, color: c.fg }} />
+                    );
+                  },
+                },
+                { header: 'Quoted', value: (r) => (r.quotedPremium == null ? '' : String(r.quotedPremium)), numeric: true },
+                { header: 'Sold for', value: (r) => (r.boundPremium == null ? '' : String(r.boundPremium)), numeric: true },
+                { header: 'Lost reason', value: (r) => r.lostReason ?? '' },
+              ]
+            : [];
 
   const all: QcColumn[] = [
     ...base,
@@ -323,6 +408,88 @@ function columnsFor(report: ReportType): QcColumn[] {
 
   return all;
 }
+
+/**
+ * The recovery pipeline's columns — one definition for the table and the CSV.
+ *
+ * Same contract as LEDGER_COLUMNS and for the same reason. Export CSV used to write
+ * `shownRows`, which on this report is the blast-run lead list — a table that is not on
+ * screen at all, because this report draws its own. So the file described a different
+ * population from the page, and the only clue was the row count.
+ *
+ * That is how "export gave me one lead" happened: the Eff from/to boxes persist across
+ * report switches by design, a single week was still set from an earlier report, and the
+ * blast-run list honestly held one lead for that week while the pipeline table on screen
+ * showed a different number. Both were right; the export was reading the wrong one.
+ */
+type PipelineColumn = {
+  header: string;
+  value: (r: PipelineRow) => string;
+  cell?: (r: PipelineRow) => React.ReactNode;
+};
+
+const PIPELINE_COLUMNS: PipelineColumn[] = [
+  {
+    header: 'Lead ID',
+    value: (r) => r.id,
+    cell: (r) => (
+      <Link href={`/leads/${r.id}?from=qc`} style={{ color: '#6b7280', textDecoration: 'none', fontFamily: 'monospace', fontSize: 11 }}>{r.id}</Link>
+    ),
+  },
+  {
+    header: 'Owner',
+    value: (r) => r.owner || '',
+    cell: (r) => (
+      <Link href={`/leads/${r.id}?from=qc`} style={{ color: '#1565c0', textDecoration: 'none' }}>{r.owner || '(no owner name)'}</Link>
+    ),
+  },
+  {
+    header: 'Address',
+    value: (r) => r.address ?? '',
+    cell: (r) => (r.address
+      ? <span style={{ whiteSpace: 'nowrap' }}>{r.address}</span>
+      : <span style={{ color: '#b0b6c0' }}>—</span>),
+  },
+  {
+    header: 'City / ZIP',
+    value: (r) => [r.city, r.zip].filter(Boolean).join(' '),
+    cell: (r) => <>{r.city} <span style={{ color: '#9098a6' }}>{r.zip}</span></>,
+  },
+  { header: 'Eff date', value: (r) => r.effectiveDate ?? '' },
+  {
+    header: 'Grade',
+    value: (r) => r.grade ?? '',
+    cell: (r) => <Chip label={r.grade ?? '?'} size="small" sx={{ bgcolor: gradeColor(r.grade), color: '#fff', fontWeight: 700, height: 19 }} />,
+  },
+  { header: 'Status', value: (r) => r.status ?? '' },
+  {
+    // Green Yes / red No, never a dash: this is the column that says whether the lead can
+    // be mailed at all, and a dash would read as "unknown" when it is a definite no.
+    header: 'Insured email?',
+    value: (r) => (r.hasEmail ? 'Yes' : 'No'),
+    cell: (r) => (
+      <span style={{ fontWeight: 700, color: r.hasEmail ? '#166534' : '#b3261e' }}>{r.hasEmail ? 'Yes' : 'No'}</span>
+    ),
+  },
+  { header: 'Phone?', value: (r) => (r.hasPhone ? 'Yes' : 'No'), cell: (r) => (r.hasPhone ? 'Yes' : '—') },
+  { header: 'Tracerfy tried', value: (r) => r.triedTracerfyAt ?? '', cell: (r) => r.triedTracerfyAt ?? '—' },
+  { header: 'BatchData tried', value: (r) => r.triedBatchDataAt ?? '', cell: (r) => r.triedBatchDataAt ?? '—' },
+  {
+    header: 'Recovered by',
+    value: (r) => r.recoveredBy ?? '',
+    cell: (r) => (
+      <span style={{ fontWeight: r.recoveredBy ? 700 : 400, color: r.recoveredBy ? '#166534' : 'inherit' }}>{r.recoveredBy ?? '—'}</span>
+    ),
+  },
+  {
+    /*
+     * On screen these sit in their own panel below the table; in a file there is no
+     * "below", so the distinction has to be a column or it is lost.
+     */
+    header: 'Trust / company owned',
+    value: (r) => (r.entity ? r.entity.label : ''),
+  },
+];
 
 /**
  * Reports that draw their own table and never populate `rows`.
@@ -605,6 +772,17 @@ export default function QcReportsPage() {
   const [cohortFilter, setCohortFilter] = useStickyState<{ grade?: string; status?: string; trait?: string }>('qc:cohortFilter', {});
   /** Reachability drill-down: which slice of the population the table is narrowed to. */
   const [reachFilter, setReachFilter] = useStickyState<'all' | 'insured' | 'coOnly' | 'unreachable'>('qc:reachFilter', 'all');
+  /**
+   * Calls & Outcomes drill-down, kept as TWO independent filters.
+   *
+   * The questions worth asking of this report are crossings — "reached and never
+   * quoted", "quoted a fortnight ago and neither sold nor lost" — and a single combined
+   * chip list cannot express either. So the call state and the quote state narrow
+   * separately and compose.
+   */
+  const [callFilter, setCallFilter] = useStickyState<string>('qc:callFilter', 'all');
+  const [quoteFilter, setQuoteFilter] = useStickyState<string>('qc:quoteFilter', 'all');
+  const [outcomeGrade, setOutcomeGrade] = useStickyState<string>('qc:outcomeGrade', 'all');
   const [covFilter, setCovFilter] = useStickyState<'all' | 'sfh' | 'condo' | 'both' | 'phoneOnly' | 'emailOnly' | 'neither' | 'noEmail' | 'hasDob'>('qc:covFilter', 'all');
   const [rows, setRows] = useState<QcRow[]>([]);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
@@ -914,6 +1092,7 @@ export default function QcReportsPage() {
     setCovFilter('all'); // reset the coverage drill-down on report change
     setCohortFilter({});
     setReachFilter('all'); // reset the reachability drill-down on report change
+    setCallFilter('all'); setQuoteFilter('all'); setOutcomeGrade('all');
     // Renewal Week without a range means the entire book — nearly 10,000 rows over the
     // wire for a report whose whole point is one week. It waits for dates, the same way
     // keyword waits for a term.
@@ -949,16 +1128,35 @@ export default function QcReportsPage() {
      * never populates `rows`. Handled as a branch rather than by inventing a QcRow per
      * cohort — which is the same reason it has its own endpoint and its own table.
      */
-    const isLedger = rowsReport === 'cohort_ledger';
+    /**
+     * Each report that draws its own table exports THAT table.
+     *
+     * The generic branch writes `shownRows`, which only exists for the reports that use
+     * the generic table. For the other two it is a different population entirely — and on
+     * Blast Skip Traces it is not even rendered, so the file silently described leads
+     * nobody was looking at. That is what produced a one-row export while the pipeline
+     * table on screen showed a different number: with a single week still in the date
+     * boxes the blast-run list genuinely held one lead, and that is what got written.
+     */
+    const isLedger = report === 'cohort_ledger';
+    const isPipeline = report === 'blast_skiptrace';
     const lines = isLedger
       ? [
         LEDGER_COLUMNS.map((c) => esc(c.header)).join(','),
         ...ledger.map((d) => LEDGER_COLUMNS.map((c) => esc(c.value(d))).join(',')),
       ]
-      : [
-        tableColumns.map((c) => esc(c.header)).join(','),
-        ...shownRows.map((r) => tableColumns.map((c) => esc(c.value(r))).join(',')),
-      ];
+      : isPipeline
+        ? [
+          PIPELINE_COLUMNS.map((c) => esc(c.header)).join(','),
+          // Workable first, then the trust-owned panel, so the file reads in the same
+          // order as the screen. Both are written: they are one stage, shown apart.
+          ...[...pipelineWorkable, ...pipelineEntities]
+            .map((r) => PIPELINE_COLUMNS.map((c) => esc(c.value(r))).join(',')),
+        ]
+        : [
+          tableColumns.map((c) => esc(c.header)).join(','),
+          ...shownRows.map((r) => tableColumns.map((c) => esc(c.value(r))).join(',')),
+        ];
 
     // CRLF and a UTF-8 BOM, both for Excel. Without the BOM it reads the file as ANSI and
     // the em dashes and middot separators in Detail come out as mojibake — the export
@@ -969,10 +1167,15 @@ export default function QcReportsPage() {
     // mistaken later for the full set.
     // A drill-down chip narrows the per-lead reports; the ledger has no chips, so it is
     // never "filtered" and must not be labelled as though it might be.
-    const filtered = !isLedger && shownRows.length !== rows.length ? '_filtered' : '';
+    // Only the generic reports have a drill-down chip that narrows the set. The other
+    // two export their table whole, so labelling their file '_filtered' would be a lie.
+    const filtered = !isLedger && !isPipeline && shownRows.length !== rows.length ? '_filtered' : '';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `BIA_QC_${rowsReport ?? report}${filtered}_${new Date().toISOString().slice(0, 10)}.csv`;
+    // Named for the SELECTED report and, for the pipeline, the stage on screen — so a
+    // file of BatchData-stage leads cannot be mistaken later for the whole pipeline.
+    const what = isPipeline ? `blast_skiptrace_${pipeline.stage}` : (rowsReport ?? report);
+    a.download = `BIA_QC_${what}${filtered}_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
   };
@@ -1055,6 +1258,55 @@ export default function QcReportsPage() {
       total: a.total + w.total, insured: a.insured + w.insured, coOnly: a.coOnly + w.coOnly,
     }), { total: 0, insured: 0, coOnly: 0 });
     return { weeks, ...t };
+  })() : null;
+
+  /**
+   * Counts for the Calls & Outcomes chips.
+   *
+   * Every count is of the WHOLE report, not of the currently filtered set — otherwise
+   * picking a chip rewrites the numbers on all the other chips and there is no way back
+   * to a true denominator. The counts stay put; only the table narrows.
+   */
+  const outcomeTally = report === 'call_outcome' && rowsReport === report && rows.length ? (() => {
+    const call: Record<string, number> = {};
+    const quote: Record<string, number> = {};
+    const grade: Record<string, number> = {};
+
+    /**
+     * Grade narrows the call and quote counts; they do not narrow each other.
+     *
+     * Grade is the coarser cut and the one picked first — "of my Grade A leads, how many
+     * have been called" is the question, and answering it with counts for the whole book
+     * would be answering a different one. Call and quote stay at full width against that
+     * grade, so choosing one still leaves a true denominator for the other; otherwise
+     * every chip rewrites every other chip and there is no way back.
+     */
+    const inGrade = outcomeGrade === 'all'
+      ? rows
+      : rows.filter((r) => String(r.manualGrade || r.grade || 'ungraded') === outcomeGrade);
+
+    // Grade counts are always of the whole report — they are what you choose BETWEEN.
+    for (const r of rows) {
+      const g = String(r.manualGrade || r.grade || 'ungraded');
+      grade[g] = (grade[g] ?? 0) + 1;
+    }
+    for (const r of inGrade) {
+      if (r.callStatus) call[r.callStatus] = (call[r.callStatus] ?? 0) + 1;
+      if (r.callLastOutcome) call[r.callLastOutcome] = (call[r.callLastOutcome] ?? 0) + 1;
+      if (r.quoteStage) quote[r.quoteStage] = (quote[r.quoteStage] ?? 0) + 1;
+    }
+    /**
+     * The gap worth naming: reached, asked for a quote, and never quoted.
+     *
+     * It is the one state in this report that is nobody's queue — the call is done, so it
+     * leaves the call list, and there is no quote, so it never enters the quote list.
+     */
+    const askedNotQuoted = inGrade.filter(
+      (r) => r.callLastOutcome === 'quote_requested'
+        && (r.quoteStage === 'not_rated' || r.quoteStage === 'rated'),
+    ).length;
+    const quotedNoOutcome = inGrade.filter((r) => r.quoteStage === 'quoted').length;
+    return { total: rows.length, inGrade: inGrade.length, call, quote, grade, askedNotQuoted, quotedNoOutcome };
   })() : null;
 
   const coverage = report === 'contact_coverage' && rowsReport === report && rows.length ? (() => {
@@ -1148,6 +1400,21 @@ const MAX_RENDERED = 300;
     if (report === 'grade_overrides') {
       return changeFilter ? rows.filter((r) => (r.changeCategory ?? 'other') === changeFilter) : rows;
     }
+    if (report === 'call_outcome') {
+      if (callFilter === 'all' && quoteFilter === 'all' && outcomeGrade === 'all') return rows;
+      return rows.filter((r) => {
+        // The grade as the card shows it: a producer's override wins over the rules.
+        const g = String(r.manualGrade || r.grade || 'ungraded');
+        if (outcomeGrade !== 'all' && g !== outcomeGrade) return false;
+        // The call side matches either a status or a specific last outcome, so one chip
+        // row can offer both without the user having to know which is which.
+        const callOk = callFilter === 'all'
+          || r.callStatus === callFilter
+          || r.callLastOutcome === callFilter;
+        const quoteOk = quoteFilter === 'all' || r.quoteStage === quoteFilter;
+        return callOk && quoteOk;
+      });
+    }
     if (report === 'reachability') {
       if (reachFilter === 'all') return rows;
       return rows.filter((r) => {
@@ -1171,7 +1438,7 @@ const MAX_RENDERED = 300;
         default: return true;
       }
     });
-  }, [rows, report, covFilter, cohortFilter, reachFilter, changeFilter]);
+  }, [rows, report, covFilter, cohortFilter, reachFilter, changeFilter, callFilter, quoteFilter, outcomeGrade]);
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
@@ -1292,7 +1559,11 @@ const MAX_RENDERED = 300;
           */}
           <Button
             variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={exportCsv}
-            disabled={rowsReport === 'cohort_ledger' ? !ledger.length : !shownRows.length}
+            disabled={
+              report === 'cohort_ledger' ? !ledger.length
+                : report === 'blast_skiptrace' ? !pipeline.rows.length
+                  : !shownRows.length
+            }
           >
             Export CSV
           </Button>
@@ -1751,6 +2022,151 @@ const MAX_RENDERED = 300;
         );
       })()}
 
+      {outcomeTally && (() => {
+        /**
+         * The lead card's own vocabulary, in the card's own order — the status ladder
+         * first, then the eight outcomes, then the quote stages. A producer reading this
+         * board and then opening a lead should meet the same words in the same sequence.
+         */
+        const CALL_STATUS: Array<[string, string]> = [
+          ['not_attempted', 'Not attempted'],
+          ['attempting', 'Attempting'],
+          ['contacted', 'Reached'],
+          ['unreachable', 'Unreachable'],
+        ];
+        const CALL_OUTCOME: Array<[string, string]> = [
+          ['no_answer', 'No answer'],
+          ['voicemail', 'Voicemail left'],
+          ['bad_number', 'Bad number / disconnected'],
+          ['wrong_person', 'Wrong person'],
+          ['callback_scheduled', 'Reached — callback scheduled'],
+          ['quote_requested', 'Reached — quote requested'],
+          ['not_interested', 'Reached — not interested'],
+          ['do_not_call', 'Reached — do not call'],
+        ];
+        const QUOTE_CHIPS: Array<[string, string]> = [
+          ['not_rated', 'Not rated'],
+          ['rated', 'Rated'],
+          ['quoted', 'Quoted'],
+          ['sold', 'Sold'],
+          ['lost', 'Lost'],
+        ];
+        /**
+         * Every state is shown, including the ones at zero.
+         *
+         * Hiding an empty state makes the board describe only what has happened, when the
+         * question a producer is asking is "how many are where" — and "nobody has been
+         * reached yet" is an answer. A zero chip is muted and does nothing when clicked,
+         * so it reads as a count rather than an offer.
+         */
+        const chip = (active: boolean, label: string, n: number, onClick: () => void) => (
+          <Chip
+            key={label} size="small" label={`${label} · ${n.toLocaleString()}`}
+            onClick={n ? onClick : undefined}
+            variant={active ? 'filled' : 'outlined'}
+            sx={{
+              height: 24, fontSize: 12,
+              cursor: n ? 'pointer' : 'default',
+              fontWeight: active ? 700 : 400,
+              bgcolor: active ? '#1a3d7c' : undefined,
+              color: active ? '#fff' : (n ? undefined : '#b6bcc6'),
+              borderColor: n ? undefined : '#e6e8eb',
+            }}
+          />
+        );
+        const label = (t: string) => (
+          <Typography sx={{ fontSize: 10, fontWeight: 700, letterSpacing: '.09em', textTransform: 'uppercase', color: '#8a93a3', mb: 0.6 }}>
+            {t}
+          </Typography>
+        );
+        return (
+          <Paper variant="outlined" sx={{ p: 1.5, mb: 2 }}>
+            <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#2c3440', mb: 1 }}>
+              Where {outcomeTally.inGrade.toLocaleString()} lead{outcomeTally.inGrade === 1 ? '' : 's'} stand
+              {outcomeGrade !== 'all' && (
+                <span style={{ fontWeight: 400, color: '#5a6675' }}>{` · Grade ${outcomeGrade} only, of ${outcomeTally.total.toLocaleString()}`}</span>
+              )}
+            </Typography>
+
+            {/*
+              Grade first, because it is the coarsest cut and the one a producer picks
+              before anything else — "of my Grade A leads, how many have been called".
+              It composes with the two below rather than replacing them, the same way
+              Renewal Week's grade / status / trait compose.
+            */}
+            {label('Grade')}
+            <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: 'wrap', mb: 1.25 }}>
+              {chip(outcomeGrade === 'all', 'All', outcomeTally.total, () => setOutcomeGrade('all'))}
+              {['A', 'B', 'C', 'D', 'ungraded'].map((g) => {
+                const n = outcomeTally.grade[g] ?? 0;
+                const active = outcomeGrade === g;
+                return (
+                  <Chip
+                    key={g} size="small" label={`${g} · ${n.toLocaleString()}`}
+                    onClick={n ? () => setOutcomeGrade(active ? 'all' : g) : undefined}
+                    sx={{
+                      height: 24, fontSize: 12, fontWeight: 700,
+                      cursor: n ? 'pointer' : 'default',
+                      // The grade's own colour, so a grade reads the same here as it does
+                      // on the lead card and in every other report.
+                      bgcolor: n ? gradeColor(g) : '#f4f6f8',
+                      color: n ? '#fff' : '#b6bcc6',
+                      outline: active ? '2px solid #1565c0' : 'none',
+                      outlineOffset: 1,
+                    }}
+                  />
+                );
+              })}
+            </Stack>
+
+            {label('Call status')}
+            <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: 'wrap', mb: 1.25 }}>
+              {chip(callFilter === 'all', 'All', outcomeTally.inGrade, () => setCallFilter('all'))}
+              {CALL_STATUS.map(([k, l]) =>
+                chip(callFilter === k, l, outcomeTally.call[k] ?? 0, () => setCallFilter(k)))}
+            </Stack>
+
+            {label('What the last call returned')}
+            <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: 'wrap', mb: 1.5 }}>
+              {CALL_OUTCOME.map(([k, l]) =>
+                chip(callFilter === k, l, outcomeTally.call[k] ?? 0, () => setCallFilter(k)))}
+            </Stack>
+
+            {label('Quote stage')}
+            <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: 'wrap' }}>
+              {chip(quoteFilter === 'all', 'All', outcomeTally.inGrade, () => setQuoteFilter('all'))}
+              {QUOTE_CHIPS.map(([k, l]) =>
+                chip(quoteFilter === k, l, outcomeTally.quote[k] ?? 0, () => setQuoteFilter(k)))}
+            </Stack>
+
+            {/*
+              The two states that belong to nobody's queue, promoted out of the chip rows
+              because neither is reachable by picking one chip — they are crossings.
+            */}
+            {(outcomeTally.askedNotQuoted > 0 || outcomeTally.quotedNoOutcome > 0) && (
+              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', mt: 1.5, pt: 1.25, borderTop: '1px solid #e6e8eb' }}>
+                {outcomeTally.askedNotQuoted > 0 && (
+                  <Chip
+                    size="small"
+                    label={`${outcomeTally.askedNotQuoted} asked for a quote and never got one`}
+                    onClick={() => { setCallFilter('quote_requested'); setQuoteFilter('all'); }}
+                    sx={{ cursor: 'pointer', height: 24, fontSize: 12, fontWeight: 700, bgcolor: '#fff8e8', color: '#8a5a00' }}
+                  />
+                )}
+                {outcomeTally.quotedNoOutcome > 0 && (
+                  <Chip
+                    size="small"
+                    label={`${outcomeTally.quotedNoOutcome} quoted, neither sold nor lost`}
+                    onClick={() => { setCallFilter('all'); setQuoteFilter('quoted'); }}
+                    sx={{ cursor: 'pointer', height: 24, fontSize: 12, fontWeight: 700, bgcolor: '#e8eefc', color: '#1a3d7c' }}
+                  />
+                )}
+              </Stack>
+            )}
+          </Paper>
+        );
+      })()}
+
       {reach && (() => {
         const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : '—');
         // Every chip filters the table. Clicking the active one clears it, so the way out
@@ -2072,45 +2488,28 @@ const MAX_RENDERED = 300;
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  {['Lead ID', 'Owner', 'City / ZIP', 'Eff date', 'Grade', 'Status', 'Insured email?', 'Phone?', 'Tracerfy tried', 'BatchData tried', 'Recovered by'].map((h) => (
-                    <TableCell key={h} sx={{ fontFamily: 'monospace', fontSize: 10.5, letterSpacing: '.06em', textTransform: 'uppercase', color: '#5a6675', whiteSpace: 'nowrap' }}>{h}</TableCell>
+                  {/*
+                    The Trust column is meaningful only in the file — on screen those leads
+                    have their own panel below the table.
+                  */}
+                  {PIPELINE_COLUMNS.filter((c) => c.header !== 'Trust / company owned').map((c) => (
+                    <TableCell key={c.header} sx={{ fontFamily: 'monospace', fontSize: 10.5, letterSpacing: '.06em', textTransform: 'uppercase', color: '#5a6675', whiteSpace: 'nowrap' }}>{c.header}</TableCell>
                   ))}
                 </TableRow>
               </TableHead>
               <TableBody>
                 {pipelineWorkable.slice(0, MAX_RENDERED).map((r) => (
                   <TableRow key={r.id} hover>
-                    <TableCell sx={{ fontSize: 11, fontFamily: 'monospace' }}>
-                      <Link href={`/leads/${r.id}?from=qc`} style={{ color: '#6b7280', textDecoration: 'none' }}>{r.id}</Link>
-                    </TableCell>
-                    <TableCell sx={{ fontSize: 12 }}>
-                      <Link href={`/leads/${r.id}?from=qc`} style={{ color: '#1565c0', textDecoration: 'none' }}>{r.owner}</Link>
-                    </TableCell>
-                    <TableCell sx={{ fontSize: 12 }}>{r.city} <span style={{ color: '#9098a6' }}>{r.zip}</span></TableCell>
-                    <TableCell sx={{ fontSize: 12 }}>{r.effectiveDate ?? '—'}</TableCell>
-                    <TableCell sx={{ fontSize: 12 }}>
-                      <Chip label={r.grade ?? '?'} size="small" sx={{ bgcolor: gradeColor(r.grade), color: '#fff', fontWeight: 700, height: 19 }} />
-                    </TableCell>
-                    <TableCell sx={{ fontSize: 12 }}>{r.status ?? '—'}</TableCell>
-                    {/*
-                      Green Yes / red No, not a dash: this is the column that says whether
-                      the lead can be mailed at all, which is the whole point of the
-                      pipeline. A dash would read as "unknown" when it is a definite no.
-                    */}
-                    <TableCell sx={{ fontSize: 12, fontWeight: 700, color: r.hasEmail ? '#166534' : '#b3261e' }}>
-                      {r.hasEmail ? 'Yes' : 'No'}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: 12 }}>{r.hasPhone ? 'Yes' : '—'}</TableCell>
-                    <TableCell sx={{ fontSize: 12 }}>{r.triedTracerfyAt ?? '—'}</TableCell>
-                    <TableCell sx={{ fontSize: 12 }}>{r.triedBatchDataAt ?? '—'}</TableCell>
-                    <TableCell sx={{ fontSize: 12, fontWeight: r.recoveredBy ? 700 : 400, color: r.recoveredBy ? '#166534' : 'inherit' }}>
-                      {r.recoveredBy ?? '—'}
-                    </TableCell>
+                    {PIPELINE_COLUMNS.filter((c) => c.header !== 'Trust / company owned').map((c) => (
+                      <TableCell key={c.header} sx={{ fontSize: c.header === 'Lead ID' ? 11 : 12 }}>
+                        {c.cell ? c.cell(r) : (c.value(r) || '—')}
+                      </TableCell>
+                    ))}
                   </TableRow>
                 ))}
                 {!pipelineWorkable.length && (
                   <TableRow>
-                    <TableCell colSpan={11} sx={{ fontSize: 12, color: '#5a6675', py: 2 }}>
+                    <TableCell colSpan={PIPELINE_COLUMNS.length - 1} sx={{ fontSize: 12, color: '#5a6675', py: 2 }}>
                       {pipelineEntities.length
                         ? `Nothing workable at this stage — the ${pipelineEntities.length} lead${pipelineEntities.length === 1 ? '' : 's'} here ${pipelineEntities.length === 1 ? 'is' : 'are'} trust or company owned, listed below.`
                         : 'Nothing at this stage for the chosen dates.'}
@@ -2225,11 +2624,31 @@ const MAX_RENDERED = 300;
         </Paper>
       )}
 
-      {!rendersOwnTable && (
-        <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-          {loading ? <CircularProgress size={18} /> : <Typography variant="body2" color="text.secondary"><strong>{shownRows.length}</strong> record{shownRows.length === 1 ? '' : 's'}</Typography>}
-        </Box>
-      )}
+      {/*
+        Shown for EVERY report, including the two that draw their own table.
+        Those two used to show no count at all, so a date range quietly narrowing the set
+        was invisible — which is how an export of one row came as a surprise. The number
+        here is always the number Export CSV will write.
+      */}
+      <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+        {loading ? <CircularProgress size={18} /> : (() => {
+          const n = report === 'cohort_ledger' ? ledger.length
+            : report === 'blast_skiptrace' ? pipeline.rows.length
+              : shownRows.length;
+          const unit = report === 'cohort_ledger' ? 'renewal week' : 'record';
+          return (
+            <Typography variant="body2" color="text.secondary">
+              <strong>{n.toLocaleString()}</strong> {unit}{n === 1 ? '' : 's'}
+              {report === 'blast_skiptrace' && ` at the ${pipeline.stage} stage`}
+              {(effFrom || effTo) && (
+                <span style={{ color: '#8a5a00' }}>
+                  {' '}· filtered to {effFrom || 'any'} → {effTo || 'any'}
+                </span>
+              )}
+            </Typography>
+          );
+        })()}
+      </Box>
 
       {!rendersOwnTable && (
       <Paper variant="outlined" sx={{ overflowX: 'auto' }}>

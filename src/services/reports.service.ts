@@ -15,11 +15,17 @@ import { classifyGradeChange } from './gradeChangeReason';
  * let Frank/Ruben pull that data back out to spot trends without cross-referencing
  * the Travelers portal by hand.
  */
-export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability';
+export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all';
 
 export interface QcRow {
   propertyId: string;
   owner: string;
+  /**
+   * The street line. City and ZIP alone do not identify a property, and every export is
+   * ultimately about one: a producer reading a file, or Frank reconciling two of them,
+   * needs to see the house, not just the town it is in.
+   */
+  address: string | null;
   city: string | null;
   zip: string | null;
   effectiveDate: string | null;
@@ -88,6 +94,20 @@ export interface QcRow {
    * quoted as the other.
    */
   contactability?: Contactability;
+  /**
+   * Calls & Outcomes report only — where the lead stands on the two things a producer
+   * does to it. Derived, never stored: the card derives the same values on read, and a
+   * cached copy would be the first thing to go stale.
+   */
+  callStatus?: 'not_attempted' | 'attempting' | 'contacted' | 'unreachable';
+  callAttempts?: number;
+  /** Distinct DAYS dialled — half of Frank's Sec. 10.5 stop rule, and not the same as attempts. */
+  callDays?: number;
+  callLastOutcome?: string | null;
+  quoteStage?: 'not_rated' | 'rated' | 'quoted' | 'sold' | 'lost';
+  quotedPremium?: number | null;
+  boundPremium?: number | null;
+  lostReason?: string | null;
   householdReach?: Contactability;
   /** Which queue works this lead: email campaign, Ruben's calls, or the post. */
   channel?: Channel;
@@ -341,6 +361,169 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
       .map((r: any) => rowOf(r, `CRM type: ${r.propertyType ?? '—'} — flagged as likely wrong by producer`));
   }
 
+  if (type === 'call_outcome') {
+    /**
+     * Where every lead stands on the two things a producer actually does to it: the call,
+     * and the quote (directive Sec. 10.5, Sec. 10.6, Sec. 10.9).
+     *
+     * ── Why one report and not two ──────────────────────────────────────────
+     * They are one workflow. "Reached — quote requested but never quoted" and "quoted a
+     * fortnight ago and neither sold nor lost" are the two questions worth asking of this
+     * data, and neither can be asked of the call log or the quote record alone.
+     *
+     * ── Both states are DERIVED here, from the same rules the card uses ──────
+     * callState() and quoteState() run per lead, which would be ~10,000 round trips. So
+     * the same logic is expressed once in SQL below. That is a second implementation and
+     * therefore a liability, so it is kept deliberately thin: the call status is counted
+     * off CallAttempt exactly as callLog.service counts it, and the quote stage reads the
+     * same columns quoteOutcomes.service writes. scripts/test-call-quote-report.mjs
+     * asserts the two agree lead by lead, so a drift becomes a failing test rather than a
+     * report nobody can reconcile.
+     */
+    rows = await sql`
+      WITH attempts AS (
+        SELECT "leadId",
+               COUNT(*)::int                                            AS tries,
+               COUNT(DISTINCT "attemptedAt"::date)::int                 AS days,
+               MAX("attemptedAt")                                       AS last_at,
+               BOOL_OR("outcome" IN ('callback_scheduled','quote_requested',
+                                     'not_interested','do_not_call'))   AS reached,
+               (ARRAY_AGG("outcome" ORDER BY "attemptedAt" DESC))[1]    AS last_outcome,
+               (ARRAY_AGG("calledBy" ORDER BY "attemptedAt" DESC))[1]   AS last_by
+          FROM "CallAttempt"
+         GROUP BY "leadId"
+      )
+      /*
+       * Named columns, not SELECT *.
+       *
+       * This report reads every workable lead — ~7,800 rows — and a star select carries
+       * rawData, a large JSONB blob on each one. It cost eight seconds, which was
+       * survivable when only the QC page used it and stopped being survivable when the
+       * outreach dashboard's phone funnel started reading the same rows.
+       *
+       * The reachability report above already names its columns for exactly this reason.
+       * Every column below is one the mapper actually reads; adding a field to the output
+       * means adding it here too, which is the trade for not shipping the blob.
+       */
+      SELECT l."id", l."propertyId",
+             l."owner1FirstName", l."owner1LastName",
+             l."addressStreet", l."addressCity", l."addressZip",
+             l."effectiveDate", l."grade", l."manualGrade", l."propertyType",
+             l."travelersEligible", l."plymouthEligible",
+             l."status", l."quotedPremium", l."quotedAt",
+             l."boundPremium", l."boundCarrier", l."boundBy",
+             l."lostAt", l."lostReason",
+             l."indicativeBandLow", l."indicativeBandHigh",
+             COALESCE(a.tries, 0)  AS call_tries,
+             a.days                AS call_days,
+             a.last_at             AS call_last_at,
+             a.reached             AS call_reached,
+             a.last_outcome        AS call_last_outcome,
+             a.last_by             AS call_last_by
+        FROM "Lead" l
+        LEFT JOIN attempts a ON a."leadId" = l."id"
+       /*
+        * Workable grades, OR anything a producer has actually touched.
+        *
+        * Restricting to A/B/C alone answers "who still needs working" and silently hides
+        * every piece of work already done on a lead that has since been downgraded — and
+        * a lead is often downgraded BECAUSE of what the call found. Lead 201620523 is
+        * exactly that: a call logged as a bad number, a loss recorded, then overridden to
+        * D for being a trust. In a report about what producers did, that is the most
+        * interesting row there is, and it was the one row being excluded.
+        */
+       WHERE COALESCE(l."manualGrade", l."grade") IN ('A','B','C')
+          OR a."leadId" IS NOT NULL
+          OR l."quotedPremium" IS NOT NULL
+          OR l."boundPremium" IS NOT NULL
+          OR l."lostAt" IS NOT NULL
+          -- A loss recorded from the status dropdown sets a reason and no date, so the
+          -- lostAt test alone let two Grade D leads marked 'lost' fall out of a report
+          -- about what producers did. Same fault as lead 201620523 above, one field over.
+          OR l."lostReason" IS NOT NULL
+          OR l."status" = 'lost'
+          OR l."indicativeBandLow" IS NOT NULL
+       ORDER BY l."effectiveDate"`;
+
+    return rows
+      .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
+      .map((r: any) => {
+        /**
+         * The same ladder as callLog.service: reached wins, then the unreachable rule,
+         * then any attempt at all. `unreachable` is Frank's Sec. 10.5 stop rule — four
+         * attempts across three or more distinct days — and it is checked here rather
+         * than inferred from a count, because "four attempts in one afternoon" is not
+         * the same thing and treating it as such would retire a live lead.
+         */
+        const tries = Number(r.call_tries ?? 0);
+        const days = Number(r.call_days ?? 0);
+        const callStatus = r.call_reached ? 'contacted'
+          : (tries >= 4 && days >= 3) ? 'unreachable'
+            : tries ? 'attempting' : 'not_attempted';
+
+        /**
+         * Terminal states first. A lead that sold and was also once quoted is SOLD — the
+         * later fact is the true one, and ordering these by recency rather than by
+         * precedence would report the same lead differently depending on what it did
+         * last.
+         */
+        /**
+         * Lost is lostAt OR lostReason, because there are two ways to record one.
+         *
+         * The outcome panel calls recordLoss() and stamps lostAt. The lead card's own
+         * status dropdown sets status 'lost' and a reason and does NOT stamp it — two real
+         * leads are in exactly that state. quoteState() on the card tests both, so testing
+         * only lostAt here made this report disagree with the card it describes, and the
+         * suite that checks for that drift never sampled a lead with a reason and no date.
+         */
+        const quoteStage = r.boundPremium != null || r.status === 'bound' ? 'sold'
+          : (r.lostAt != null || r.lostReason != null) ? 'lost'
+            : r.quotedPremium != null ? 'quoted'
+              // BOTH ends, matching quoteState. Two leads carry a low with no high —
+              // a half-written band is not a price anybody was given, and counting them
+              // as rated made this report disagree with the card it describes.
+              : (r.indicativeBandLow != null && r.indicativeBandHigh != null) ? 'rated'
+                : 'not_rated';
+
+        const bits = [
+          `Call: ${callStatus.replace('_', ' ')}`,
+          tries ? `${tries} attempt${tries === 1 ? '' : 's'} over ${days} day${days === 1 ? '' : 's'}` : null,
+          r.call_last_outcome ? `last: ${String(r.call_last_outcome).replace(/_/g, ' ')}` : null,
+          `Quote: ${quoteStage.replace('_', ' ')}`,
+          r.quotedPremium != null ? `quoted $${r.quotedPremium}` : null,
+          r.boundPremium != null ? `sold $${r.boundPremium}${r.boundCarrier ? ` with ${r.boundCarrier}` : ''}` : null,
+          r.lostReason ? `lost: ${r.lostReason}` : null,
+        ].filter(Boolean);
+
+        const row = rowOf(
+          r, bits.join(' · '),
+          r.call_last_by ?? r.boundBy ?? null,
+          iso(r.call_last_at) ?? iso(r.quotedAt) ?? null,
+          /**
+           * The producer-chosen loss reason, or nothing.
+           *
+           * This first carried `${callStatus}|${quoteStage}`, which put "not_attempted|
+           * not_rated" in the Reason column of every untouched row — machine vocabulary,
+           * on screen, next to the Call Status and Quote Stage columns that already say
+           * the same thing properly. Reason means a reason somebody gave; where nobody
+           * gave one it should be blank.
+           */
+          r.lostReason ?? null,
+        );
+        return {
+          ...row,
+          callStatus,
+          callAttempts: tries,
+          callDays: days,
+          callLastOutcome: (r.call_last_outcome as string) ?? null,
+          quoteStage,
+          quotedPremium: r.quotedPremium == null ? null : Number(r.quotedPremium),
+          boundPremium: r.boundPremium == null ? null : Number(r.boundPremium),
+          lostReason: r.lostReason ?? null,
+        };
+      });
+  }
+
   if (type === 'skiptrace_mismatch') {
     // Frank Aug-2026: leads where the skip-trace insured name disagrees with the on-file
     // name. Producers override per-lead from the card; this lists them for carrier-portal QC.
@@ -389,6 +572,93 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
       });
   }
 
+  if (type === 'emails_insured' || type === 'emails_all') {
+    /**
+     * The two go-live email lists (Frank, 23 Sep 2026).
+     *
+     * "Two email export reports for C1-C3 (Oct 5-25): insured emails, and insured or
+     * co-insured emails."
+     *
+     * -- Why two reports and not one with a column --------------------------
+     * They are different populations, and the difference is the decision. E1 mails the
+     * named insured; a co-insured address is reach the CRM holds and the campaign does not
+     * currently use. Frank asked for both so he can see what the insured-only rule costs in
+     * reach before the first send, and a single list with a "whose address" column makes
+     * that a spreadsheet exercise rather than two numbers.
+     *
+     * -- The insured list is a SUBSET of the other, by construction ----------
+     * `emails_all` returns every lead `emails_insured` returns, plus the leads reachable
+     * only at the co-insured. Built by widening the same filter rather than by a separate
+     * query, so the two can never describe different populations of the same week.
+     *
+     * -- Addresses come from the recipient rules, never from the columns -----
+     * A trace attributes addresses per person inside its payload, so `email1 IS NOT NULL`
+     * both misses addresses and credits the co-insured's to the insured. That mismatch is
+     * what had two tabs of this CRM reporting 95 and 93 mailable for the same week.
+     */
+    const from = effFrom || null;
+    const to = effTo || null;
+    rows = await sql`
+      SELECT "propertyId", "owner1FirstName", "owner1LastName",
+             "addressStreet", "addressCity", "addressZip",
+             "effectiveDate", "cohort", "grade", "manualGrade", "propertyType",
+             "travelersEligible", "plymouthEligible",
+             "travelersPremium", "plymouthPremium",
+             "email1", "email2", "owner2Email", "skipTraceData", "emailsAll",
+             "phone1", "phone2", "owner2Phone",
+             "owner2FirstName", "owner2LastName"
+        FROM "Lead"
+       WHERE "effectiveDate" IS NOT NULL
+         AND (${from}::text IS NULL OR left("effectiveDate", 10) >= ${from})
+         AND (${to}::text   IS NULL OR left("effectiveDate", 10) <= ${to})
+       ORDER BY "cohort", "addressCity", "owner1LastName"`;
+    // Same guard as the reachability report, for the same reason: a hand-written column
+    // list feeding the recipient rules is the one thing that can silently drift from them.
+    assertRecipientCols(rows[0], `${type} report`);
+
+    const insuredOnly = type === 'emails_insured';
+    return rows
+      .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
+      /**
+       * Grade A only. These lists go to a sending tool, and the go-live is Grade A: a
+       * B or C address in the file is one nobody decided to mail.
+       */
+      .filter((r: any) => String(r.manualGrade || r.grade || '') === 'A')
+      .map((r: any) => {
+        const insured = insuredEmails(r);
+        const co = coInsuredEmails(r);
+        const list = insuredOnly ? insured : [...insured, ...co];
+        return { r, insured, co, list };
+      })
+      // Rows with nothing to send to are dropped: this is a send list, not a coverage
+      // report. The Renewal Week report is where the gaps are counted.
+      .filter((x: any) => x.list.length > 0)
+      .map(({ r, insured, co }: any) => {
+        const who = insured.length
+          ? (co.length && !insuredOnly ? 'insured + co-insured' : 'insured')
+          : 'co-insured only';
+        const context = [
+          who,
+          `${insured.length} insured`,
+          !insuredOnly && co.length ? `${co.length} co-insured` : null,
+          r.travelersPremium != null || r.plymouthPremium != null ? 'rated' : 'not rated',
+        ].filter(Boolean).join(' · ');
+
+        return {
+          ...rowOf(r, context, null, null, null),
+          cohort: r.cohort ?? null,
+          insuredEmailList: insured,
+          coInsuredEmailList: insuredOnly ? [] : co,
+          coInsuredName: insuredOnly ? null : coInsuredName(r),
+          hasInsuredEmail: insured.length > 0,
+          hasCoInsuredEmail: co.length > 0,
+          insuredEmailCount: insured.length,
+          /** Reachable only at the co-insured — the leads the insured-only list loses. */
+          coInsuredOnly: insured.length === 0 && co.length > 0,
+        };
+      });
+  }
+
   if (type === 'reachability') {
     /**
      * Insured / co-insured / combined reachability, per cohort.
@@ -422,7 +692,8 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     const from = effFrom || null;
     const to = effTo || null;
     rows = await sql`
-      SELECT "propertyId", "owner1FirstName", "owner1LastName", "addressCity", "addressZip",
+      SELECT "propertyId", "owner1FirstName", "owner1LastName",
+             "addressStreet", "addressCity", "addressZip",
              "effectiveDate", "cohort", "grade", "manualGrade", "propertyType",
              "travelersEligible", "plymouthEligible", "deepSkipTracedAt",
              "email1", "email2", "owner2Email", "skipTraceData", "emailsAll", "phone1", "phone2",
@@ -596,6 +867,7 @@ function rowOf(r: any, context: string, by: string | null = null, at: string | n
     reason,
     propertyId: r.propertyId,
     owner: nm(r) || '—',
+    address: r.addressStreet ?? null,
     city: r.addressCity ?? null,
     zip: r.addressZip ?? null,
     effectiveDate: iso(r.effectiveDate),

@@ -1,7 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getQcReport, QcReportType } from '@/services/reports.service';
 
-const VALID: QcReportType[] = ['referral', 'grade_overrides', 'keyword', 'roof_b', 'type_mismatch', 'owner_verify', 'contact_coverage', 'skiptrace_mismatch', 'blast_skiptrace', 'cohort', 'reachability'];
+/**
+ * The allowlist, written as a Record so TypeScript enforces it.
+ *
+ * It used to be a hand-maintained array of the same strings as QcReportType. Adding a
+ * report to the type therefore compiled cleanly and then failed at runtime with "Invalid
+ * report type" — the report appeared in the picker, returned nothing, and the only clue
+ * was a red banner that named no report.
+ *
+ * `Record<QcReportType, true>` makes a missing key a COMPILE error, so the next report
+ * cannot be half-added. The keys are the allowlist; the values carry no meaning.
+ */
+const VALID_REPORTS: Record<QcReportType, true> = {
+  referral: true,
+  grade_overrides: true,
+  keyword: true,
+  roof_b: true,
+  type_mismatch: true,
+  owner_verify: true,
+  contact_coverage: true,
+  skiptrace_mismatch: true,
+  blast_skiptrace: true,
+  cohort: true,
+  reachability: true,
+  call_outcome: true,
+  emails_insured: true,
+  emails_all: true,
+};
+const VALID = Object.keys(VALID_REPORTS) as QcReportType[];
 
 /**
  * GET /api/admin/reports?report=referral|grade_overrides|keyword|roof_b
