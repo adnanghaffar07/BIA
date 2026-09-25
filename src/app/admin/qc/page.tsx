@@ -987,6 +987,14 @@ export default function QcReportsPage() {
   // would describe the previous report — the blast summary read 974 leads from the
   // Referrals list. Summaries render only once this matches.
   const [rowsReport, setRowsReport] = useState<ReportType | null>(null);
+  /**
+   * The home-age band the rows on screen were actually fetched with.
+   *
+   * Held apart from the input boxes so the summary can say which population is being
+   * displayed rather than which one is being asked for. Those two drift the moment somebody
+   * types without pressing Run, and the table gives no sign of it.
+   */
+  const [ranAge, setRanAge] = useState<{ min: number; max: number } | null>(null);
 
   /**
    * Restoring the view after a trip to a lead (Abdullah Sep-2026).
@@ -1027,6 +1035,8 @@ export default function QcReportsPage() {
       if (report === 'roof_b') {
         if (ageMin.trim()) url.searchParams.set('ageMin', ageMin.trim());
         if (ageMax.trim()) url.searchParams.set('ageMax', ageMax.trim());
+        // Recorded as sent, so the summary describes the rows rather than the boxes.
+        setRanAge({ min: Number(ageMin) || 20, max: Number(ageMax) || 75 });
       }
       if (effFrom) url.searchParams.set('effFrom', effFrom);
       if (effTo) url.searchParams.set('effTo', effTo);
@@ -1756,18 +1766,44 @@ const MAX_RENDERED = 300;
                 a range nobody can filter on: the roof year is NULL on every row here, so
                 any roof-year band returns an empty report.
               */}
+              {/*
+                Labelled "years old", and the build years it works out to are shown beside
+                the boxes as you type.
+
+                It said "Home age from (yrs)", which reads as a year — 2001 was typed into
+                it, meaning houses built in 2001. That asks for houses two thousand years
+                old, correctly returns nothing, and looks like a broken filter rather than a
+                misread label. Showing "built 1951–2006" alongside makes the unit impossible
+                to mistake, because a build year is what the reader is thinking in.
+              */}
               <TextField
-                size="small" type="number" label="Home age from (yrs)" value={ageMin}
+                size="small" type="number" label="Home age from" value={ageMin}
                 onChange={(e) => setAgeMin(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') run(); }}
-                sx={{ width: 150 }} slotProps={{ htmlInput: { min: 0, max: 200 } }}
+                sx={{ width: 140 }}
+                slotProps={{ htmlInput: { min: 0, max: 200 }, inputLabel: { shrink: true } }}
+                helperText="years old"
               />
               <TextField
-                size="small" type="number" label="to (yrs)" value={ageMax}
+                size="small" type="number" label="to" value={ageMax}
                 onChange={(e) => setAgeMax(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') run(); }}
-                sx={{ width: 120 }} slotProps={{ htmlInput: { min: 0, max: 200 } }}
+                sx={{ width: 110 }}
+                slotProps={{ htmlInput: { min: 0, max: 200 }, inputLabel: { shrink: true } }}
+                helperText="years old"
               />
+              {(() => {
+                const thisYear = new Date().getFullYear();
+                const lo = Number(ageMin); const hi = Number(ageMax);
+                const ok = Number.isFinite(lo) && Number.isFinite(hi) && lo >= 0 && hi >= lo && hi <= 200;
+                return (
+                  <Typography variant="caption" sx={{ color: ok ? '#5a6675' : '#b3261e', alignSelf: 'center', maxWidth: 220 }}>
+                    {ok
+                      ? `= built ${thisYear - hi} to ${thisYear - lo}`
+                      : 'That is an age in years, not a build year — Frank\'s band is 20 to 75.'}
+                  </Typography>
+                );
+              })()}
             </>
           )}
           <TextField size="small" type="date" label="Eff from" value={effFrom} onChange={(e) => setEffFrom(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
@@ -2885,6 +2921,26 @@ const MAX_RENDERED = 300;
                 <span style={{ color: '#8a5a00' }}>
                   {' '}· filtered to {effFrom || 'any'} → {effTo || 'any'}
                 </span>
+              )}
+              {/*
+                The band these rows were actually fetched with — not the band in the boxes.
+
+                Changing the boxes does not re-run anything, so the table can sit there
+                showing one population while the controls describe another, with nothing
+                saying so. That is how a working filter reads as a broken one: 2001 was in
+                the box and 176 rows were on screen from the previous 20–75 run.
+              */}
+              {report === 'roof_b' && ranAge && (
+                <>
+                  <span style={{ color: '#8a5a00' }}>
+                    {' '}· homes {ranAge.min}–{ranAge.max} years old
+                  </span>
+                  {(String(ranAge.min) !== ageMin.trim() || String(ranAge.max) !== ageMax.trim()) && (
+                    <span style={{ color: '#b3261e', fontWeight: 700 }}>
+                      {' '}— the boxes have changed since this ran. Press Run.
+                    </span>
+                  )}
+                </>
               )}
             </Typography>
           );
