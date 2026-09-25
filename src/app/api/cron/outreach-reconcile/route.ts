@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { reconcileOutreach, summarise } from '@/services/outreachReconcile.service';
+import { buildDailyNotice, unsentNotices } from '@/services/retroChanges.service';
 
 /**
  * The fifteen-minute sweep that makes the sending platform agree with the CRM.
@@ -67,6 +68,46 @@ export async function GET(req: NextRequest) {
   try {
     const result = await reconcileOutreach({ dryRun: false });
     const line = summarise(result);
+
+    /**
+     * ── The daily retroactive-change notice (Frank, fix 21) ─────────────────
+     *
+     * "No retroactive change to a worked account without notifying Ruben — daily report of
+     *  what changed."
+     *
+     * Folded into THIS route rather than given a cron of its own. On Vercel's Hobby plan a
+     * second cron entry does not merely fail to fire — the comment above records what a bad
+     * cron config already did to this project once, freezing every deploy while the site
+     * looked healthy. This job already runs once a day, after the sending day, which is
+     * exactly when the notice wants building.
+     *
+     * Built for YESTERDAY, not today. At 23:00 UTC it is already tomorrow in UTC terms for
+     * part of the working day, and a notice built for a day still in progress would be
+     * incomplete and then never rebuilt, because a sent notice is never regenerated.
+     *
+     * It never fails the sweep. The reconcile is the job that keeps the platform and the CRM
+     * in agreement; a reporting fault must not take it down.
+     */
+    let notice: { day: string; changeCount: number; accountCount: number } | null = null;
+    let unsent: Array<{ day: string; changeCount: number }> = [];
+    try {
+      const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const p = (n: number) => String(n).padStart(2, '0');
+      const yesterday = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+      const built = await buildDailyNotice(yesterday);
+      notice = { day: built.day, changeCount: built.changeCount, accountCount: built.accountCount };
+      // Logged even when empty. "Nothing changed yesterday" and "the job did not run" must
+      // never look the same, which is the whole reason a notice is written for a quiet day.
+      console.log(`[cron/retro-notice] ${built.day}: ${built.changeCount} change(s) across `
+        + `${built.accountCount} worked account(s)`);
+      unsent = await unsentNotices(10);
+      if (unsent.length) {
+        console.warn(`[cron/retro-notice] ${unsent.length} day(s) with changes Ruben has not been `
+          + `told about: ${unsent.map((u) => `${u.day} (${u.changeCount})`).join(', ')}`);
+      }
+    } catch (e) {
+      console.error('[cron/retro-notice] could not build the daily notice:', e);
+    }
     // Logged unconditionally: a sweep that found nothing is the evidence it ran at all,
     // and "no output for six hours" must not be indistinguishable from "cron is dead".
     console.log('[cron/reconcile]', line);
@@ -74,7 +115,7 @@ export async function GET(req: NextRequest) {
     if (result.unknown) {
       console.warn(`[cron/reconcile] ${result.unknown} live recipient(s) unknown to the CRM — not touched`);
     }
-    return NextResponse.json({ success: true, summary: line, ...result });
+    return NextResponse.json({ success: true, summary: line, ...result, notice, unsent });
   } catch (err: any) {
     console.error('[cron/reconcile] failed:', err);
     return NextResponse.json(

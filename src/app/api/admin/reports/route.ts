@@ -13,6 +13,7 @@ import { getQcReport, QcReportType } from '@/services/reports.service';
  * cannot be half-added. The keys are the allowlist; the values carry no meaning.
  */
 const VALID_REPORTS: Record<QcReportType, true> = {
+  recapture_log: true,
   referral: true,
   grade_overrides: true,
   keyword: true,
@@ -51,6 +52,9 @@ export async function GET(request: NextRequest) {
       q: p.get('q') || '',
       effFrom: p.get('effFrom') || undefined,
       effTo: p.get('effTo') || undefined,
+      // Grade-B roof report: the age band of the HOUSE, not of the roof.
+      ageMin: p.get('ageMin') ? Number(p.get('ageMin')) : undefined,
+      ageMax: p.get('ageMax') ? Number(p.get('ageMax')) : undefined,
     });
     return NextResponse.json({ success: true, count: rows.length, data: rows });
   } catch (error) {

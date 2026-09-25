@@ -1,4 +1,5 @@
 import { sql } from '@/lib/neon';
+import { mergeVarsFor } from './mergeVars.service';
 import { eligibilityReasonLabel } from '@/types/carrier';
 import { compareOwnerNames } from './ownerNameMatch.service';
 import { insuredEmails, coInsuredEmails, insuredPhones, coInsuredPhones, coInsuredName, assertRecipientCols } from './recipients.service';
@@ -15,7 +16,7 @@ import { classifyGradeChange } from './gradeChangeReason';
  * let Frank/Ruben pull that data back out to spot trends without cross-referencing
  * the Travelers portal by hand.
  */
-export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all';
+export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log';
 
 export interface QcRow {
   propertyId: string;
@@ -113,6 +114,25 @@ export interface QcRow {
   channel?: Channel;
   /** Nothing anywhere on the card — the direct-mail segment. Flagged, never regraded. */
   directMailOnly?: boolean;
+  /**
+   * Recapture Log only (Frank, fix 22) — read from RecaptureLog, never recomputed.
+   *
+   * These are what was true at the MOMENT the account came back. Deriving them now from
+   * the Lead would answer a different question: the account has since been re-graded, its
+   * send list may have been rebuilt, and the status it held before is gone. The whole
+   * point of the log is that the event survives the record moving on.
+   */
+  /**
+   * Email-list reports only — everything the campaign email merges, under the names the
+   * sending tool uses. Carried so an export can be imported and mapped without anything
+   * being rebuilt by hand at the other end.
+   */
+  campaignVars?: Record<string, string | number | null>;
+  recaptureProcess?: string;
+  recaptureHeld?: boolean;
+  recaptureNotifiedAt?: string | null;
+  priorGrade?: string | null;
+  priorStatus?: string | null;
   /** Addresses belonging to the named insured — exactly what the push would mail. */
   insuredEmailCount?: number;
   /** A co-insured address we hold and do NOT mail, and which the insured set lacks. */
@@ -138,6 +158,20 @@ export interface QcReportParams {
   q?: string;
   effFrom?: string;
   effTo?: string;
+  /**
+   * Grade-B roof report only: how old the HOUSE is, in years.
+   *
+   * Frank, 24 Sep 2026: "The criterion is homes 75 years or newer where an unknown or aged
+   * roof is the only disqualifier. Our grading rules were written against the year the
+   * house was built, not the age of the roof."
+   *
+   * Note this is the house's age, not the roof's. Every row in that report has a roof year
+   * of NULL — that is what the report selects for — so a roof-year range would return
+   * nothing at all. What varies between rows, and what Frank's criterion is written
+   * against, is how old the house is.
+   */
+  ageMin?: number;
+  ageMax?: number;
 }
 
 const nm = (r: any) => `${String(r.owner1FirstName ?? '').replace('null', '').trim()} ${String(r.owner1LastName ?? '').trim()}`.trim();
@@ -187,6 +221,57 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
   const { carrier = 'any', value = 'review', setBy = 'any', q = '', effFrom, effTo } = params;
 
   let rows: any = [];
+
+  /**
+   * ── Recapture Log (Frank, 24 Sep 2026 · fix 22) ───────────────────────────
+   *
+   * "Recapture Log tab — date, cohort, accounts affected, process, whether Ruben was
+   * notified."
+   *
+   * One row per event, read straight from RecaptureLog. The Lead is joined for the name
+   * and address only — everything that describes the event itself comes off the log row,
+   * because those facts stop being true on the Lead the moment anything else happens to it.
+   *
+   * It goes through the ordinary report machinery rather than getting its own table, so it
+   * inherits the CSV export, the column tooltips and the date filters. A tab that renders
+   * itself is a tab whose export drifts from what is on screen, which this page has already
+   * been through once.
+   */
+  if (type === 'recapture_log') {
+    rows = await sql`
+      SELECT g."id" AS "eventId", g."cohort" AS "logCohort", g."recapturedAt", g."process",
+             g."priorStatus", g."priorGrade", g."newGrade", g."heldFromCohort",
+             g."rubenNotifiedAt", g."note",
+             l."propertyId", l."owner1FirstName", l."owner1LastName",
+             l."addressStreet", l."addressCity", l."addressZip", l."effectiveDate",
+             l."grade", l."manualGrade", l."propertyType",
+             l."travelersEligible", l."plymouthEligible"
+        FROM "RecaptureLog" g
+        LEFT JOIN "Lead" l ON l."id" = g."leadId"
+       ORDER BY g."recapturedAt" DESC`;
+
+    const PROC: Record<string, string> = {
+      tracerfy: 'Tracerfy skip trace',
+      batchdata: 'BatchData skip trace',
+      grade_change: 'Re-grade',
+      manual: 'Entered by hand',
+    };
+    return (rows as any[])
+      // Filtered on the cohort the event was logged against, not the lead's current one:
+      // a lead re-dated afterwards must not fall out of a week that already reported.
+      .filter((r) => inRange(r.logCohort ?? iso(r.effectiveDate), effFrom, effTo))
+      .filter((r) => (!q ? true : [r.propertyId, r.owner1FirstName, r.owner1LastName, r.note]
+        .filter(Boolean).join(' ').toLowerCase().includes(q.toLowerCase())))
+      .map((r) => ({
+        ...rowOf(r, r.note ?? '', PROC[r.process] ?? String(r.process), iso(r.recapturedAt), null),
+        cohort: r.logCohort ?? null,
+        recaptureProcess: PROC[r.process] ?? String(r.process),
+        recaptureHeld: Boolean(r.heldFromCohort),
+        recaptureNotifiedAt: iso(r.rubenNotifiedAt),
+        priorGrade: r.priorGrade ?? null,
+        priorStatus: r.priorStatus ?? null,
+      }));
+  }
 
   if (type === 'referral') {
     // Carrier eligibility = Referral (or the requested value) on one/both carriers.
@@ -293,6 +378,15 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
             system ? 'system (rules)' : r.a_by,
             iso(r.a_at),
           ),
+          /**
+           * The renewal week, so grading changes can be read the way Frank asks for them
+           * (fix 20: "with cohort, account count and process").
+           *
+           * The report carried the effective DATE, which is a different date for every
+           * lead — so counting changes per week meant grouping 400 distinct dates by eye.
+           * The cohort is the column that lines up with everything else he reads.
+           */
+          cohort: r.cohort ?? null,
           // The note path records its reason as free text rather than a dropdown code,
           // so fall back to it — otherwise most rows would show no reason at all.
           reason: system
@@ -335,14 +429,28 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
   }
 
   if (type === 'roof_b') {
-    // Grade-B leads whose only knock is an unconfirmed roof on a 20+ yr home (non-condo).
+    /**
+     * Grade-B leads whose only knock is an unconfirmed roof, on a house inside the age band.
+     *
+     * The upper bound is the part that was missing. The filter tested only "older than 20"
+     * with no ceiling, so it returned 941 houses built between 1850 and 1950 — and Frank
+     * read the output and said so: "If the filter reads build year we'd be writing to a
+     * list of older homes rather than homes with unknown roofs."
+     *
+     * Both bounds are now the caller's to set, defaulting to the criterion he stated:
+     * older than 20, and 75 or newer. The report's own subtitle states them, so nobody has
+     * to infer from the rows which band they are looking at.
+     */
+    const ageMin = Number.isFinite(params.ageMin) ? Number(params.ageMin) : 20;
+    const ageMax = Number.isFinite(params.ageMax) ? Number(params.ageMax) : 75;
     rows = await sql`
       SELECT * FROM "Lead"
       WHERE "grade" = 'B' AND "manualGrade" IS NULL AND "roofYear" IS NULL
         AND ("propertyType" IS NULL OR "propertyType" <> 'CONDO')
         AND ("landUse" IS NULL OR "landUse" NOT ILIKE '%condo%')
         AND "yearBuilt" IS NOT NULL
-        AND (EXTRACT(YEAR FROM NOW())::int - "yearBuilt") > 20
+        AND (EXTRACT(YEAR FROM NOW())::int - "yearBuilt") >  ${ageMin}
+        AND (EXTRACT(YEAR FROM NOW())::int - "yearBuilt") <= ${ageMax}
       ORDER BY "yearBuilt" ASC`;
     const year = new Date().getFullYear();
     return rows
@@ -606,7 +714,13 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
              "travelersPremium", "plymouthPremium",
              "email1", "email2", "owner2Email", "skipTraceData", "emailsAll",
              "phone1", "phone2", "owner2Phone",
-             "owner2FirstName", "owner2LastName"
+             "owner2FirstName", "owner2LastName",
+             -- The campaign assignment, so the export carries the merge fields the sending
+             -- tool needs rather than only the addresses. Without these the file has to be
+             -- joined to something else before it can be imported, which is where the
+             -- renewal date got rebuilt by hand and came out a day early.
+             "id", "campaignSegment", "insuredSubjectVariant", "insuredCtaArm",
+             "coInsuredSubjectVariant", "coInsuredCtaArm", "addressState", "ratedSource"
         FROM "Lead"
        WHERE "effectiveDate" IS NOT NULL
          AND (${from}::text IS NULL OR left("effectiveDate", 10) >= ${from})
@@ -655,6 +769,21 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
           insuredEmailCount: insured.length,
           /** Reachable only at the co-insured — the leads the insured-only list loses. */
           coInsuredOnly: insured.length === 0 && co.length > 0,
+          /**
+           * Everything the email itself merges, built by the SAME function the push uses.
+           *
+           * The export used to carry addresses and nothing else, so importing it meant
+           * rebuilding the renewal date, the month and the subject line by hand at the other
+           * end. That is exactly where the renewal date came out a day early on all 678
+           * accounts. One builder, one set of names, spelled the way the sending tool spells
+           * them.
+           *
+           * Built for the person this row is FOR: the insured where there is an insured
+           * address, the co-insured where the row exists only because of theirs. A row
+           * carrying the insured{{firstName}} against a co-insured address would greet the
+           * wrong person by name.
+           */
+          campaignVars: mergeVarsFor(r, insured.length ? 'insured' : 'coInsured'),
         };
       });
   }

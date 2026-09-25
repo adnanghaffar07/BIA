@@ -13,6 +13,8 @@ import SearchIcon from '@mui/icons-material/Search';
 import RoofingIcon from '@mui/icons-material/Roofing';
 import ReportProblemIcon from '@mui/icons-material/ReportProblem';
 import BoltIcon from '@mui/icons-material/Bolt';
+import HistoryIcon from '@mui/icons-material/History';
+import RunHistory, { type RunRow } from './RunHistory';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 // Type-only import: erased at build, so the server-side reports module never reaches
 // the browser bundle. One definition of a report row, shared by producer and consumer.
@@ -71,7 +73,7 @@ const COHORT_CODES: Record<string, string> = {
   '2026-11-02': 'C5', '2026-11-09': 'C6', '2026-11-16': 'C7',
 };
 
-type ReportType = 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all';
+type ReportType = 'recapture_log' | 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log';
 
 
 const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: string }[] = [
@@ -81,7 +83,7 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
   { key: 'referral', label: 'Referrals / Eligibility', icon: <FactCheckIcon />, blurb: 'Leads a carrier flagged Referral (or Non-eligible), with the reason entered.' },
   { key: 'grade_overrides', label: 'Grade Changes', icon: <SwapVertIcon />, blurb: 'Grade changes from both sides — a producer overriding with a reason, and the rules re-grading a lead. The system tab also flags leads whose stored grade no longer agrees with the rules.' },
   { key: 'keyword', label: 'Keyword Search', icon: <SearchIcon />, blurb: 'Search producer + variance notes and eligibility reasons for a keyword to spot trends.' },
-  { key: 'roof_b', label: 'Grade-B: Roof Only', icon: <RoofingIcon />, blurb: 'Grade-B leads whose only knock is an unconfirmed roof (20+ yr home).' },
+  { key: 'roof_b', label: 'Grade-B: Roof Only', icon: <RoofingIcon />, blurb: 'Grade-B leads whose only knock is an unconfirmed roof. Set the home-age band — the roof year is unknown on every one of these, so age of the house is what separates them. Frank\'s criterion is 20 to 75 years.' },
   { key: 'type_mismatch', label: 'Type Mismatch', icon: <ReportProblemIcon />, blurb: 'Leads a producer flagged where the REAPI property type looks wrong (e.g. condo that’s really a home).' },
   { key: 'owner_verify', label: 'WIP Verify Fails', icon: <PersonSearchIcon />, blurb: 'Leads that failed tax-roll verification — not found on the roll, or the insured name disagrees with it. Review before outreach.' },
   { key: 'contact_coverage', label: 'Contact Coverage', icon: <ContactPhoneIcon />, blurb: 'Rated accounts by property type (Condo/SFH) and contact status (phone-only / email-only / both / neither) + DOB. The no-email rows drive the downgrade decision.' },
@@ -90,6 +92,7 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
   { key: 'emails_insured', label: 'Email list — insured', icon: <ContactPhoneIcon />, blurb: 'The go-live send list: every Grade A lead in the range with an email for the NAMED INSURED, which is who E1 mails. One row per lead, with the addresses themselves.' },
   { key: 'emails_all', label: 'Email list — insured or co-insured', icon: <ContactPhoneIcon />, blurb: 'The same list widened to leads reachable only at the co-insured. The difference between this and the insured list is what the insured-only rule costs in reach.' },
   { key: 'blast_skiptrace', label: 'Blast Skip Traces', icon: <BoltIcon />, blurb: 'Leads traced by a Grade-A cohort blast rather than by hand — when it ran, who ran it, what each lead returned and what it cost. Grouped by run.' },
+  { key: 'recapture_log', label: 'Recapture Log', icon: <HistoryIcon />, blurb: 'Every account that came back into play: when, which renewal week it belongs to, which process returned it, and whether its cohort had already been frozen. A held account is one that arrived after its send list was built, so it is NOT in this cycle — those are the rows that need a decision.' },
 ];
 
 /**
@@ -141,7 +144,7 @@ const REPORT_GROUPS: { label: string; keys: ReportType[] }[] = [
   { label: 'Grading', keys: ['grade_overrides', 'roof_b'] },
   { label: 'Data quality', keys: ['type_mismatch', 'skiptrace_mismatch', 'owner_verify', 'contact_coverage'] },
   { label: 'Producer work', keys: ['call_outcome'] },
-  { label: 'Outreach', keys: ['emails_insured', 'emails_all', 'referral', 'blast_skiptrace', 'keyword'] },
+  { label: 'Outreach', keys: ['emails_insured', 'emails_all', 'referral', 'blast_skiptrace', 'recapture_log', 'keyword'] },
 ];
 
 const gradeColor = (g: string | null) =>
@@ -177,6 +180,35 @@ type QcColumn = {
   /** Right-aligned in the table; numbers read better that way. */
   numeric?: boolean;
 };
+
+/**
+ * The merge fields the campaign email substitutes, as export columns.
+ *
+ * Named exactly as the sending tool must reference them — camelCase, no spaces, because a
+ * header here becomes the variable name on import and the platform's own are {{firstName}}.
+ *
+ * bandLow and bandHigh are present but always EMPTY, and that is deliberate rather than an
+ * oversight. The CRM does hold a low/high pair, but it is derived from a machine-generated
+ * estimate and sits a median 3.2x above what the producer actually rated — on 531 of 540
+ * rated accounts the producer's own figure falls below it. Shipping that would put a price
+ * in front of a homeowner that nobody produced. The columns exist so the mapping can be set
+ * up now and the values dropped in the moment Frank says where a real range comes from.
+ * producerPremium sits beside them so the difference is visible rather than assumed.
+ */
+const CAMPAIGN_VAR_COLUMNS: QcColumn[] = [
+  'firstName', 'lastName', 'streetAddress', 'streetName', 'town',
+  'renewalDate', 'month',
+  'subject1', 'subject2', 'subject3',
+  'cta1', 'cta2', 'cta3',
+  'segment', 'cohort', 'subjectVariant', 'ctaArm', 'versionLabel',
+].map((k) => ({
+  header: k,
+  value: (r: QcRow) => String(r.campaignVars?.[k] ?? ''),
+})).concat([
+  { header: 'bandLow', value: () => '' },
+  { header: 'bandHigh', value: () => '' },
+  { header: 'producerPremium', value: (r: QcRow) => String(r.campaignVars?.producerPremium ?? '') },
+]);
 
 function columnsFor(report: ReportType): QcColumn[] {
   const base: QcColumn[] = [
@@ -314,6 +346,19 @@ function columnsFor(report: ReportType): QcColumn[] {
             ]
             : []),
           { header: 'Renewal Week', value: (r) => r.cohort ?? '' },
+          /**
+           * ── The campaign merge fields ─────────────────────────────────────
+           *
+           * Everything the email itself substitutes, under the names the sending tool uses,
+           * so this file can be imported and mapped without anything being rebuilt at the
+           * other end. Rebuilding is what produced a renewal date one day early on all 678
+           * accounts, and a template asking for {{ first_name }} against a contact carrying
+           * firstName, which renders blank and looks exactly like missing data.
+           *
+           * camelCase and no spaces, deliberately: the platform's own variables are spelled
+           * {{firstName}}, and a header here becomes the variable name on import.
+           */
+          ...CAMPAIGN_VAR_COLUMNS,
         ]
       : report === 'reachability'
         ? [
@@ -388,6 +433,24 @@ function columnsFor(report: ReportType): QcColumn[] {
   ];
 
   /**
+   * Borrow a column from the shared list by its header.
+   *
+   * It throws on a miss instead of returning undefined. `find(...)!` tells the compiler a
+   * lookup cannot fail while leaving it free to fail at runtime — and it did: a branch
+   * below asked for 'City' when the header is 'City / ZIP', so an undefined went into the
+   * column list and the whole page died on `c.numeric`, with a stack pointing at the table
+   * three hundred lines from the mistake. Failing here names the header that is wrong.
+   *
+   * It is the same trap as LEAD_COLS: a hand-written list of strings that another list has
+   * to keep agreeing with, and nothing checking that it does.
+   */
+  const take = (h: string) => {
+    const c = all.find((x) => x.header === h);
+    if (!c) throw new Error(`columnsFor(${report}): no column headed "${h}" — it was renamed or removed`);
+    return c;
+  };
+
+  /**
    * Grade Changes: the date and the category belong at the FRONT.
    *
    * 'When' is the last of fourteen columns, past a Detail column wide enough to push it
@@ -396,14 +459,122 @@ function columnsFor(report: ReportType): QcColumn[] {
    * inferred from the free text in Detail.
    */
   if (report === 'grade_overrides') {
-    const when = all.find((c) => c.header === 'When')!;
+    const when = take('When');
     const rest = all.filter((c) => c.header !== 'When');
     const at = rest.findIndex((c) => c.header === 'Eff Date') + 1;
     rest.splice(at, 0,
       { ...when, header: 'Changed On' },
+      /**
+       * The renewal week, beside the date rather than instead of it (Frank, fix 20:
+       * "with cohort, account count and process").
+       *
+       * Eff Date is a different date for every lead, so counting changes per week meant
+       * grouping four hundred distinct dates by eye. The cohort is the only column here
+       * that lines up with how the weeks are discussed everywhere else.
+       */
+      { header: 'Renewal week', value: (r) => r.cohort ?? '—' },
       { header: 'Why', value: (r) => CATEGORY_LABEL[(r.changeCategory ?? 'other') as GradeChangeCategory] ?? '—' },
     );
     return rest;
+  }
+
+  /**
+   * Recapture Log: the event first, the account second (Frank, fix 22).
+   *
+   * He asked for "date, cohort, accounts affected, process, whether Ruben was notified" —
+   * in that order, because the question the tab answers is "what changed and when", not
+   * "tell me about this lead". The lead columns follow so a row can still be opened.
+   *
+   * Eligibility and property type are dropped. They describe the account as it is now, and
+   * putting them beside columns that describe a moment in the past invites reading all of
+   * them as the same vintage — which is the confusion this log exists to end.
+   */
+  if (report === 'recapture_log') {
+    return [
+      {
+        header: 'Came back',
+        value: (r) => (r.at ? new Date(r.at).toLocaleDateString() : '—'),
+      },
+      {
+        /**
+         * The renewal week as it was LOGGED, not as the lead reads now. A lead re-dated
+         * afterwards must not silently move between weeks in a log that has been read.
+         */
+        header: 'Renewal week',
+        value: (r) => r.cohort ?? '—',
+      },
+      take('Lead ID'),
+      take('Owner'),
+      take('Address'),
+      take('City / ZIP'),
+      {
+        header: 'Returned by',
+        value: (r) => r.recaptureProcess ?? '—',
+      },
+      {
+        /**
+         * Grade before and after in one column. Two columns reading "A" and "A" take twice
+         * the width to say nothing; what matters is the handful where they differ.
+         */
+        header: 'Grade',
+        value: (r) => (r.priorGrade && r.priorGrade !== (r.manualGrade ?? r.grade)
+          ? `${r.priorGrade} → ${r.manualGrade ?? r.grade ?? '?'}`
+          : (r.manualGrade ?? r.grade ?? '—')),
+        cell: (r) => {
+          const now = r.manualGrade ?? r.grade ?? null;
+          const moved = r.priorGrade && r.priorGrade !== now;
+          return (
+            <span style={{ fontSize: 12 }}>
+              {moved && <span style={{ color: '#6b7280' }}>{r.priorGrade} → </span>}
+              <Chip label={now ?? '?'} size="small"
+                sx={{ bgcolor: gradeColor(now), color: '#fff', fontWeight: 700, height: 19 }} />
+            </span>
+          );
+        },
+      },
+      {
+        /**
+         * The column the tab exists for.
+         *
+         * "Held" means the account arrived after its cohort's send list was built, so it is
+         * NOT in this cycle's mail. Frank's fix 19 is precisely that this must be visible
+         * rather than silently absorbed — a cohort that grew after it was counted is the
+         * thing nobody could previously see.
+         */
+        header: 'In this cycle?',
+        value: (r) => (r.recaptureHeld ? 'No — held, arrived after the list was built' : 'Yes'),
+        cell: (r) => (
+          <Chip size="small" label={r.recaptureHeld ? 'Held back' : 'On the list'}
+            sx={{
+              height: 19, fontSize: 11, fontWeight: 700,
+              bgcolor: r.recaptureHeld ? '#fff3d6' : '#e7f5ec',
+              color: r.recaptureHeld ? '#8a5a00' : '#166534',
+            }} />
+        ),
+      },
+      {
+        /** Fix 21: no retroactive change to a worked account without telling Ruben. */
+        header: 'Ruben told',
+        value: (r) => (r.recaptureNotifiedAt
+          ? new Date(r.recaptureNotifiedAt).toLocaleDateString()
+          : (r.recaptureHeld ? 'Not yet' : 'n/a — nothing changed for him')),
+        cell: (r) => {
+          if (r.recaptureNotifiedAt) {
+            return <span style={{ fontSize: 12 }}>{new Date(r.recaptureNotifiedAt).toLocaleDateString()}</span>;
+          }
+          if (!r.recaptureHeld) return <span style={{ color: '#9aa4b2', fontSize: 12 }}>—</span>;
+          return (
+            <Chip size="small" label="Not yet"
+              sx={{ height: 19, fontSize: 11, fontWeight: 700, bgcolor: '#fdecea', color: '#b3261e' }} />
+          );
+        },
+      },
+      {
+        header: 'Status before',
+        value: (r) => r.priorStatus ?? 'Not captured',
+      },
+      { header: 'Detail', value: (r) => r.context ?? '' },
+    ];
   }
 
   return all;
@@ -757,6 +928,19 @@ export default function QcReportsPage() {
   const [value, setValue] = useStickyState<'review' | 'ineligible' | 'eligible'>('qc:value', 'review');
   const [setBy, setSetBy] = useStickyState<'any' | 'producer' | 'system'>('qc:setBy', 'any');
   const [q, setQ] = useStickyState('qc:q', '');
+  /**
+   * The age band for the Grade-B roof report — of the HOUSE, not the roof.
+   *
+   * Every row in that report has an unknown roof year; that is what it selects for. So the
+   * thing worth filtering on is how old the house is, which is what Frank's criterion is
+   * written against: "homes 75 years or newer where an unknown or aged roof is the only
+   * disqualifier."
+   *
+   * Defaults to his stated band rather than to the old behaviour. The old filter had no
+   * upper bound and returned 941 houses built between 1850 and 1950.
+   */
+  const [ageMin, setAgeMin] = useStickyState('qc:ageMin', '20');
+  const [ageMax, setAgeMax] = useStickyState('qc:ageMax', '75');
   const [effFrom, setEffFrom] = useStickyState('qc:effFrom', '');
   const [effTo, setEffTo] = useStickyState('qc:effTo', '');
   // Contact-coverage drill-down: click a summary chip to filter the rows to that slice.
@@ -840,6 +1024,10 @@ export default function QcReportsPage() {
       url.searchParams.set('report', report);
       if (report === 'referral') { url.searchParams.set('carrier', carrier); url.searchParams.set('value', value); url.searchParams.set('setBy', setBy); }
       if (report === 'keyword') url.searchParams.set('q', q.trim());
+      if (report === 'roof_b') {
+        if (ageMin.trim()) url.searchParams.set('ageMin', ageMin.trim());
+        if (ageMax.trim()) url.searchParams.set('ageMax', ageMax.trim());
+      }
       if (effFrom) url.searchParams.set('effFrom', effFrom);
       if (effTo) url.searchParams.set('effTo', effTo);
       const res = await fetch(url.toString());
@@ -885,7 +1073,17 @@ export default function QcReportsPage() {
      * msg reports what a run did, this reports why it did not finish.
      */
     stopped?: { reason: 'no_credits' | 'auth' | 'vendor_error'; vendor: string; detail: string; remaining: number } | null;
-  }>({ stage: 'isolated', rows: [], counts: null, busy: false, msg: '', stopped: null });
+    /**
+     * Every run pointed at this range, newest first (Frank, fix 20).
+     *
+     * Carried beside the counts because it is what makes them readable: "45 waiting" means
+     * one thing if nothing has ever been run against that week and another if three runs
+     * have been over it and found nothing.
+     */
+    runs: RunRow[];
+    /** Rows still saying 'running' an hour on — the process died without closing them. */
+    stalled: RunRow[];
+  }>({ stage: 'isolated', rows: [], counts: null, busy: false, msg: '', stopped: null, runs: [], stalled: [] });
 
   /**
    * Split the stage into what a blast can work and what it will never touch.
@@ -913,7 +1111,10 @@ export default function QcReportsPage() {
       u.searchParams.set('stage', stage);
       const j = await (await fetch(u.toString())).json();
       if (!j.success) throw new Error(j.error || 'Could not read the pipeline');
-      setPipeline((p) => ({ ...p, stage, rows: j.data || [], counts: j.counts, busy: false }));
+      setPipeline((p) => ({
+        ...p, stage, rows: j.data || [], counts: j.counts, busy: false,
+        runs: j.runs || [], stalled: j.stalled || [],
+      }));
     } catch (e) {
       setPipeline((p) => ({ ...p, busy: false, msg: e instanceof Error ? e.message : 'Failed' }));
     }
@@ -1547,6 +1748,27 @@ const MAX_RENDERED = 300;
               onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') run(); }}
               sx={{ minWidth: 320 }}
             />
+          )}
+          {report === 'roof_b' && (
+            <>
+              {/*
+                Labelled "home age", not "roof year". Naming it after the roof would invite
+                a range nobody can filter on: the roof year is NULL on every row here, so
+                any roof-year band returns an empty report.
+              */}
+              <TextField
+                size="small" type="number" label="Home age from (yrs)" value={ageMin}
+                onChange={(e) => setAgeMin(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') run(); }}
+                sx={{ width: 150 }} slotProps={{ htmlInput: { min: 0, max: 200 } }}
+              />
+              <TextField
+                size="small" type="number" label="to (yrs)" value={ageMax}
+                onChange={(e) => setAgeMax(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') run(); }}
+                sx={{ width: 120 }} slotProps={{ htmlInput: { min: 0, max: 200 } }}
+              />
+            </>
           )}
           <TextField size="small" type="date" label="Eff from" value={effFrom} onChange={(e) => setEffFrom(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
           <TextField size="small" type="date" label="Eff to" value={effTo} onChange={(e) => setEffTo(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
@@ -2584,6 +2806,25 @@ const MAX_RENDERED = 300;
               )}
             </Box>
           )}
+
+          {/*
+            The run history (Frank, 24 Sep 2026 · fix 20).
+
+            Underneath the stage counts rather than on a tab of its own, because it is what
+            makes them readable. A stage showing "45 waiting" means one thing if nothing has
+            ever been run against that week and something else entirely if three runs have
+            already been over it and found nothing — and the counts alone cannot tell those
+            apart. That is how 11/09 sat with 47 leads waiting and read as though it had none.
+          */}
+          <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid #e6e9ef' }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+              Runs against this range
+              <Box component="span" sx={{ fontWeight: 400, color: '#5a6675', ml: 0.75 }}>
+                — every blast, including the ones that found nothing
+              </Box>
+            </Typography>
+            <RunHistory runs={pipeline.runs} stalled={pipeline.stalled} />
+          </Box>
         </Paper>
       )}
 

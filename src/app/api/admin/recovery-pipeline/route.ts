@@ -3,6 +3,7 @@ import {
   stageCounts, leadsAtStage, runTracerfyBlast, runBatchDataBlast,
   type RecoveryStage,
 } from '@/services/recoveryPipeline.service';
+import { getProcessRuns, stalledRuns } from '@/services/processRun.service';
 
 const STAGES: RecoveryStage[] = ['isolated', 'tracerfy', 'batchdata', 'recovered'];
 
@@ -26,7 +27,19 @@ export async function GET(request: NextRequest) {
     const rows = stage && STAGES.includes(stage)
       ? await leadsAtStage(stage, effFrom, effTo)
       : [];
-    return NextResponse.json({ success: true, counts, stage, count: rows.length, data: rows });
+    /**
+     * The run history travels with the counts (Frank, fix 20).
+     *
+     * On the same payload rather than its own endpoint because it answers the question the
+     * counts provoke. A stage showing 45 waiting means one thing if nothing has ever been
+     * run against that week and something else entirely if three runs have found nothing —
+     * and the counts alone cannot tell those apart.
+     */
+    const runs = await getProcessRuns({ from: effFrom, to: effTo, limit: 50 });
+    const stalled = await stalledRuns();
+    return NextResponse.json({
+      success: true, counts, stage, count: rows.length, data: rows, runs, stalled,
+    });
   } catch (error) {
     console.error('GET /api/admin/recovery-pipeline error:', error);
     return NextResponse.json({ success: false, error: 'Failed to read the pipeline' }, { status: 500 });

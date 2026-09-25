@@ -1,5 +1,5 @@
 import { sql } from '@/lib/neon';
-import { listLeadsInCampaign, deleteLead, type VendorLead } from '@/lib/integrations/leadCampaign';
+import { listLeadsInCampaign, deleteLead, listCampaigns, type VendorLead } from '@/lib/integrations/leadCampaign';
 import { loadActiveSuppressions } from './suppression.service';
 import { householdScopeKey } from './household.service';
 import { isRunFatal, VendorError } from './vendorErrors';
@@ -71,20 +71,45 @@ export type ReconcileResult = {
   removed: number;
   /** Should have been removed and could not be — the next sweep tries again. */
   failed: number;
-  /** Live there, unknown here. Reported, never touched. */
+  /** Live there, and matching no CRM lead at all. Reported, never touched. */
   unknown: number;
+  /**
+   * Live there with no CRM send record, but matching a lead — a row was written so replies
+   * from that address reach the CRM. However a contact got into the campaign.
+   */
+  registered: number;
   /** Set when the run ended itself: bad key, or the vendor refusing. */
   stopped: { reason: 'auth' | 'no_credits' | 'vendor_error'; vendor: string; detail: string } | null;
   ranAt: string;
 };
 
 /** Every campaign the CRM has actually pushed to. */
-async function knownCampaignIds(): Promise<string[]> {
+/**
+ * Every campaign worth sweeping — ours AND the platform's.
+ *
+ * This asked the CRM alone: "which campaign ids appear in OutreachEvent". That makes a
+ * campaign the CRM has never seen completely invisible, which is exactly the campaign that
+ * needs looking at. A list uploaded by hand into a fresh campaign produces no OutreachEvent
+ * rows, so the sweep did not know the campaign existed, so it never noticed the rows were
+ * missing — the gap hid itself.
+ *
+ * The platform's own list is the truth about what campaigns exist. If it cannot be read, the
+ * CRM's ids are still swept rather than sweeping nothing.
+ */
+async function knownCampaignIds(
+  listAll?: () => Promise<Array<{ id: string }>>,
+): Promise<string[]> {
   const rows = await sql`
     SELECT DISTINCT "vendorCampaignId" AS id
       FROM "OutreachEvent"
      WHERE "vendorCampaignId" IS NOT NULL AND "vendorCampaignId" <> ''` as Array<{ id: string }>;
-  return rows.map((r) => r.id);
+  const ids = new Set(rows.map((r) => r.id));
+  try {
+    for (const c of await (listAll ?? listCampaigns)()) if (c.id) ids.add(c.id);
+  } catch {
+    /* The platform is unreadable; sweep what we know rather than nothing. */
+  }
+  return [...ids];
 }
 
 type EventRow = {
@@ -183,7 +208,7 @@ export async function reconcileOutreach(opts?: {
   const campaigns = opts?.campaignId ? [opts.campaignId] : await knownCampaignIds();
   const out: ReconcileResult = {
     dryRun, campaigns, vendorRecipients: 0, findings: [],
-    removed: 0, failed: 0, unknown: 0, stopped: null,
+    removed: 0, failed: 0, unknown: 0, registered: 0, stopped: null,
     ranAt: new Date().toISOString(),
   };
   if (!campaigns.length) return out;
@@ -240,13 +265,62 @@ export async function reconcileOutreach(opts?: {
         continue;
       }
 
-      // 3. Live there, nothing here. Reported only — see the header.
+      /**
+       * 3. Live there, nothing here — REGISTER it.
+       *
+       * This used to be counted and left alone, and the header explained why: the action
+       * being considered was deleting a live recipient, which is not something a sweep
+       * should decide.
+       *
+       * Registering is the opposite kind of act. It writes a CRM record so a reply from that
+       * address has somewhere to land; it touches nothing on the platform and stops nothing.
+       * Leaving it undone is what actually costs something — the platform reports a reply as
+       * an address and an event, the CRM finds no row, and the reply is discarded with a 200
+       * and no log. The homeowner is waiting for an answer nobody knows to give.
+       *
+       * So however a contact reaches a campaign — our push, a CSV upload, somebody typing it
+       * in — it is recorded within one sweep. Nobody has to remember a step.
+       *
+       * An address that matches no CRM lead is still only reported. There is nothing to
+       * attach it to, and inventing a lead to hold a stranger's address would be worse than
+       * the gap.
+       */
       if (!ev) {
-        out.unknown++;
+        const [match] = await sql`
+          SELECT "id" FROM "Lead"
+           WHERE lower("email1") = ${email} OR lower("email2") = ${email}
+              OR lower("owner2Email") = ${email}
+           LIMIT 1` as Array<{ id: string }>;
+
+        if (!match) {
+          out.unknown++;
+          out.findings.push({
+            kind: 'live_there_unknown_here', campaignId, email, vendorLeadId: v.id,
+            leadId: null,
+            reason: 'on the platform and matches no CRM lead — nothing to attach a reply to',
+          });
+          continue;
+        }
+
+        if (!dryRun) {
+          /**
+           * sentAt stays NULL. The column carries DEFAULT now(), and a row claiming a send
+           * would report an email this sweep has no evidence was ever posted.
+           */
+          await sql`
+            INSERT INTO "OutreachEvent"
+              ("id","leadId","recipientEmail","channel","vendorLeadId","vendorCampaignId",
+               "sentAt","createdAt","updatedAt")
+            VALUES (${crypto.randomUUID()}, ${match.id}, ${email}, 'campaign',
+                    ${v.id ?? null}, ${campaignId}, NULL, NOW(), NOW())`;
+        }
+        out.registered++;
         out.findings.push({
           kind: 'live_there_unknown_here', campaignId, email, vendorLeadId: v.id,
-          leadId: null,
-          reason: 'on the platform but the CRM has no send record for it — not touched',
+          leadId: match.id,
+          reason: dryRun
+            ? 'on the platform with no send record — would be registered so replies route'
+            : 'registered — replies from this address now reach the CRM',
         });
       }
     }

@@ -8,6 +8,9 @@ import { calculateLeadGrade } from './grade.service';
 import { recordGradeChange } from './gradeHistory.service';
 import { isRunFatal, VendorError } from './vendorErrors';
 import { ownerEntityOf } from '@/lib/ownerEntity';
+import { logRecapture } from './recapture.service';
+import { startRun, finishRun } from './processRun.service';
+import { cohortOf } from './cohort';
 
 /**
  * The contact-recovery pipeline (Frank, 18 Sep 2026).
@@ -191,6 +194,14 @@ export async function leadsAtStage(
 }
 
 export type BlastResult = {
+  /**
+   * Recaptures whose cohort had already been frozen, so they did NOT join it (fix 19).
+   *
+   * Surfaced on the blast's own result because that is the screen somebody is looking at
+   * when it happens. "Twelve recovered" and "twelve recovered, nine of which cannot be
+   * mailed this cycle" are very different reports, and the first one reads as a good day.
+   */
+  heldFromFrozenCohort: number;
   vendor: 'tracerfy' | 'batchdata';
   dryRun: boolean;
   /** How many sit at this stage in the range. */
@@ -341,6 +352,30 @@ async function applyAndAdvance(
 
     await updateLead(lead.propertyId ?? lead.id, update);
 
+    /**
+     * ── The recapture event (Frank, fixes 17, 19, 22) ──────────────────────
+     *
+     * Written here, at the moment it happens, because two of the facts it records stop
+     * being true immediately afterwards: what the account read as before it came back, and
+     * whether its cohort had already been frozen. Both are unrecoverable a day later — the
+     * Lead columns will have moved on and the send list may have been rebuilt.
+     *
+     * It never blocks the recovery. A lead that came back and failed to log is a reporting
+     * gap; a lead that came back and was then rolled back because the log failed is a lead
+     * nobody can mail.
+     */
+    const recapture = await logRecapture({
+      leadId: lead.id,
+      propertyId: lead.propertyId ?? null,
+      cohort: lead.cohort ?? null,
+      process: vendor,
+      priorStatus: lead.status ?? null,
+      priorGrade: lead.grade ?? null,
+      newGrade: finalGrade ?? null,
+      note: `${found.emails.length} email(s), ${found.phones.length} phone(s) recovered`,
+    }).catch(() => ({ logged: false, held: false }));
+    if (recapture.held) out.heldFromFrozenCohort++;
+
     if (update.grade) {
       await recordGradeChange({
         leadId: lead.id,
@@ -359,7 +394,11 @@ async function applyAndAdvance(
       `After ${vendor === 'tracerfy' ? 'Tracerfy' : 'BatchData'} skip trace — Lead Grade ${finalGrade}, `
         + `no longer isolated`
         + (legacyIsolation ? ` (status restored to ${back})` : ` (status unchanged)`)
-        + ` — ${found.emails.length} email(s), ${found.phones.length} phone(s) recovered`,
+        + ` — ${found.emails.length} email(s), ${found.phones.length} phone(s) recovered`
+        // Said on the record, not left for somebody to work out from a tab.
+        + (recapture.held
+          ? ` — held from cohort ${lead.cohort}: its send list was already built`
+          : ''),
       {
         changes: [{ field: 'Isolated', from: 'yes', to: 'no' }],
         recovery: { vendor, stage: 'recovered' },
@@ -421,11 +460,39 @@ async function runBlast(
   const out: BlastResult = {
     vendor, dryRun, pool: pool.length,
     attempted: 0, matched: 0, recovered: 0, phoneOnly: 0, movedOn: 0, regraded: 0,
-    skippedAlreadyTraced: 0, entityOwned: entityOwned.length, errors: [],
+    skippedAlreadyTraced: 0, entityOwned: entityOwned.length, heldFromFrozenCohort: 0, errors: [],
   };
   if (dryRun) return out;
 
   const batch = pool.slice(0, limit);
+
+  /**
+   * ── The run log (Frank, fix 20) ──────────────────────────────────────────
+   *
+   * Opened here, before the first vendor call. Three separate reasons it cannot wait until
+   * the run ends:
+   *
+   *   - A run that finds nothing writes no Activity rows at all, so by any after-the-fact
+   *     method it leaves no trace. "We traced that week and got nothing" would keep reading
+   *     as "nobody has ever traced it" — which is how 11/09 sat untouched with 47 waiting.
+   *   - The pool size is only known here. Three recoveries out of a pool of 47 and three
+   *     out of a pool of three leave identical per-lead history and mean opposite things.
+   *   - A run that dies mid-call still has to be visible, and that is the moment somebody
+   *     actually asks what is happening.
+   *
+   * A run that crashes outright is never closed and stays at 'running'. That is deliberate
+   * rather than unhandled: stalledRuns() is what surfaces it, and a row that says it is
+   * still going is a truer account of a crash than one that claims to know why it stopped.
+   */
+  const runId = await startRun({
+    process: vendor === 'tracerfy' ? 'tracerfy_blast' : 'batchdata_blast',
+    cohortFrom: effFrom ?? null,
+    cohortTo: effTo ?? null,
+    considered: pool.length,
+    runBy: createdBy,
+    dryRun: false,
+    detail: { limit, entityOwned: entityOwned.length, batch: batch.length },
+  });
 
   /**
    * A vendor that is simply down looks like a per-lead failure over and over. Three in a
@@ -518,7 +585,52 @@ async function runBlast(
     }
     consecutiveFailures = 0;
   }
+
+  /**
+   * Closed with the counts as they actually ended up, including a run cut short by
+   * out.stopped — which is 'aborted', not 'ok'. A run that ran out of vendor credits after
+   * nine leads and reported success would agree with itself and disagree with the bill.
+   */
+  await finishRun(runId, {
+    outcome: out.stopped ? 'aborted' : 'ok',
+    touched: out.attempted,
+    changed: out.recovered,
+    byCohort: byCohortCounts(batch),
+    detail: {
+      matched: out.matched,
+      phoneOnly: out.phoneOnly,
+      movedOn: out.movedOn,
+      regraded: out.regraded,
+      skippedAlreadyTraced: out.skippedAlreadyTraced,
+      entityOwned: out.entityOwned,
+      heldFromFrozenCohort: out.heldFromFrozenCohort,
+      errors: out.errors.length,
+      stopped: out.stopped ?? null,
+    },
+    error: out.stopped ? `${out.stopped.reason}: ${out.stopped.detail ?? ''}` : null,
+  });
+
   return out;
+}
+
+/**
+ * The per-week split Frank asked for alongside the count.
+ *
+ * Taken from the batch's own rows, so it describes the leads this run actually reached
+ * rather than everything that qualified. A total across seven weeks cannot answer which
+ * week is behind, which is the only question the number gets asked.
+ *
+ * Keyed on the COHORT, not the renewal date. The renewal dates inside one week are all
+ * different, so keying on them would produce a hundred buckets of one and nothing that
+ * lines up with anything Frank reads.
+ */
+function byCohortCounts(batch: PipelineRow[]): Record<string, number> {
+  const n: Record<string, number> = {};
+  for (const r of batch) {
+    const c = cohortOf(r.effectiveDate) ?? 'unknown';
+    n[c] = (n[c] ?? 0) + 1;
+  }
+  return n;
 }
 
 export const runTracerfyBlast = (o: Parameters<typeof runBlast>[1]) => runBlast('tracerfy', o);

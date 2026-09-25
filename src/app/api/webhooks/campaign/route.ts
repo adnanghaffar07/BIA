@@ -5,6 +5,7 @@ import {
   cleanReplyExcerpt, htmlToText,
 } from '@/lib/integrations/campaignWebhook';
 import { stopHousehold, setPrimaryContact, type HouseholdStopResult } from '@/services/householdStop.service';
+import { versionLabel, type Segment } from '@/services/campaignSegment.service';
 import { suppressWithClient, isExplicitStopReply } from '@/services/suppression.service';
 
 /**
@@ -80,17 +81,47 @@ export async function POST(request: NextRequest) {
     // should still land on the right row rather than be discarded.
     // The lead's address comes back too: the household key is derived from it, and a
     // suppression recorded without one would be scoped to a lead rather than a household.
+    /**
+     * ── The campaign id PREFERS a row, it does not require one ───────────────
+     *
+     * The comment above always said the id "is not required", but the SQL did require it the
+     * moment a payload carried one: `e."vendorCampaignId" = $2` is false against a row whose
+     * campaign id is null or different, so the event was dropped and the endpoint answered
+     * `matched: false` — a 200, logged nowhere, with a real reply lost.
+     *
+     * That is exactly what happens to a contact list loaded into the platform by hand: the
+     * CRM has a record of the person but not of the platform's campaign id for them. The row
+     * is right there and the old query walked past it.
+     *
+     * So the match is now ordered, not filtered: same campaign first, then the most recent
+     * send to that address. An address is a person either way — the campaign id only decides
+     * WHICH of their sends this event belongs to.
+     */
     const { rows: found } = await client.query(
-      `SELECT e."id", e."leadId", e."openCount", e."personRole",
+      `SELECT e."id", e."leadId", e."openCount", e."personRole", e."vendorCampaignId",
               l."addressStreet", l."addressZip"
          FROM "OutreachEvent" e
          LEFT JOIN "Lead" l ON l."id" = e."leadId"
         WHERE lower(e."recipientEmail") = $1
-          AND ($2::text IS NULL OR e."vendorCampaignId" = $2)
-        ORDER BY e."vendorCampaignId" IS NOT DISTINCT FROM $2 DESC, e."sentAt" DESC NULLS LAST
+        ORDER BY e."vendorCampaignId" IS NOT DISTINCT FROM $2 DESC,
+                 e."sentAt" DESC NULLS LAST
         LIMIT 1`,
       [p.email, p.campaignId],
     );
+
+    /**
+     * Learn the campaign id from the first event that carries one.
+     *
+     * A row registered ahead of an upload has no campaign id — nobody knew it yet. Stamping
+     * it here means every later event about that person matches on the campaign directly
+     * rather than falling back, and the reconciliation sweep can find them.
+     */
+    if (found.length && p.campaignId && !found[0].vendorCampaignId) {
+      await client.query(
+        `UPDATE "OutreachEvent" SET "vendorCampaignId" = $2, "updatedAt" = NOW() WHERE "id" = $1`,
+        [found[0].id, p.campaignId],
+      );
+    }
 
     if (!found.length) {
       return NextResponse.json({ ok: true, matched: false, event: p.eventType, email: p.email });
@@ -247,15 +278,60 @@ export async function POST(request: NextRequest) {
      * person actually received.
      */
     if (p.sendingMailbox || p.subject || p.bodyHtml) {
+      /**
+       * The sending DOMAIN, split out from the mailbox.
+       *
+       * §6.3: "Our thresholds are written per mailbox and per domain, but the sheet has no
+       * mailbox or domain column, so the formula can only evaluate a whole day's total. One
+       * domain burning inside a healthy average will never trip it — precisely the failure
+       * the pause exists to catch."
+       *
+       * Derived here rather than at report time because that is where the mailbox arrives,
+       * and a report that has to parse an address to group by domain will eventually be
+       * written by someone who forgets to.
+       */
+      const domain = p.sendingMailbox?.includes('@')
+        ? p.sendingMailbox.split('@')[1]?.toLowerCase() ?? null
+        : null;
       await client.query(
         `UPDATE "OutreachEvent"
             SET "sendingMailbox"    = COALESCE("sendingMailbox", $2),
+                "sendingDomain"     = COALESCE("sendingDomain", $6),
                 "emailSubject"      = COALESCE("emailSubject", $3),
                 "emailBody"         = COALESCE("emailBody", $4),
                 "contentCapturedAt" = COALESCE("contentCapturedAt", $5),
                 "updatedAt" = $5
           WHERE "id" = $1`,
-        [row.id, p.sendingMailbox, p.subject, htmlToText(p.bodyHtml), now],
+        [row.id, p.sendingMailbox, p.subject, htmlToText(p.bodyHtml), now, domain],
+      );
+    }
+
+    /**
+     * ── The version label, once the step is known ────────────────────────────
+     *
+     * The segment and the person's arm were stamped at push time; the email step only
+     * arrives with the vendor's own event. So the readable label is assembled here, from
+     * parts already stored, and written once.
+     *
+     * §6: "a reply recorded without knowing which version produced it can never be traced
+     * back to one. That information does not exist later." This is the moment it exists.
+     */
+    const [ev] = (await client.query(
+      `SELECT "segment","cohort","emailStep","subjectVariant","ctaVariant","versionLabel"
+         FROM "OutreachEvent" WHERE "id" = $1`,
+      [row.id],
+    )).rows;
+    if (ev && !ev.versionLabel && ev.segment && ev.cohort && ev.emailStep
+        && ev.subjectVariant && ev.ctaVariant) {
+      await client.query(
+        `UPDATE "OutreachEvent" SET "versionLabel" = $2, "updatedAt" = $3 WHERE "id" = $1`,
+        [row.id, versionLabel({
+          segment: ev.segment as Segment,
+          cohort: String(ev.cohort),
+          step: Number(ev.emailStep),
+          subjectVariant: ev.subjectVariant as 'A' | 'B',
+          ctaArm: Number(ev.ctaVariant) as 1 | 2,
+        }), now],
       );
     }
 

@@ -7,6 +7,12 @@ import { zipsForCountyName } from '@/lib/constants';
 
 /** All Lead columns except rawData — used for list queries to keep responses small */
 const LEAD_COLS = [
+  // The campaign assignment (migration 035). A hand-maintained column list is exactly the
+  // place a new field goes missing: omit it here and the push reads undefined, stamps a
+  // null segment on every send, and nothing errors — the report simply has no segment to
+  // group by, months later, with the sends already gone.
+  'campaignSegment', 'campaignSegmentAt', 'sendListBuiltAt',
+  'insuredSubjectVariant', 'insuredCtaArm', 'coInsuredSubjectVariant', 'coInsuredCtaArm',
   'id', 'propertyId', 'addressStreet', 'addressCity', 'addressState', 'addressZip',
   'addressCounty', 'addressFull', 'mailStreet', 'mailCity', 'mailState', 'mailZip',
   'propertyType', 'propertyUse', 'propertyUseCode', 'landUse', 'yearBuilt', 'squareFeet',

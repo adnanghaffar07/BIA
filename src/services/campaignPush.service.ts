@@ -5,11 +5,14 @@ import { cohortOf } from './cohort';
 import { pool } from '@/lib/neon';
 import { getLeadsFromDb } from '@/services/storage.service';
 import { loadActiveSuppressions } from './suppression.service';
+import { heldAddresses } from './emailNameReview.service';
 import { householdScopeKey } from './household.service';
 // `LeadInput` is a TYPE. Imported as a value it works under Next, whose bundler elides
 // it, and throws "does not provide an export named 'LeadInput'" the moment this module is
 // loaded by plain Node ESM — which is how every script in scripts/ loads it.
 import { addLeadsToCampaign, findLeadsByEmail, type LeadInput } from '@/lib/integrations/leadCampaign';
+import { type Segment } from './campaignSegment.service';
+import { mergeVarsFor } from './mergeVars.service';
 
 /**
  * Push CRM leads into a campaign.
@@ -71,6 +74,15 @@ export type PushTriage = {
     holdout: number;
     alreadyInCampaign: number;
     duplicateAddress: number;
+    /**
+     * Addresses held by the surname review (Frank, second email §7).
+     *
+     * Counted separately from 'suppressed' because it means something different and leads
+     * somewhere different: a suppression is final, a held address is waiting for a person
+     * to say whether it belongs to the insured. Folding it in would hide a queue that
+     * somebody has to work through before these accounts can ever send.
+     */
+    nameReview: number;
   };
   /**
    * How many addresses each mode would add, counted in the SAME pass.
@@ -83,6 +95,23 @@ export type PushTriage = {
   /** Leads with an address for that person, as opposed to addresses. */
   leadsByMode: { insured: number; coinsured: number; both: number };
 };
+
+/**
+ * Is the holdout in force?
+ *
+ * Off unless `holdout_active` is explicitly 'true'. Defaulting to off is the right way round
+ * for exactly one reason: §1.9 is the standing instruction today, and a config key that has
+ * never been set must express the instruction rather than the opposite of it. Wave two turns
+ * it on deliberately, which is a decision somebody makes rather than a default nobody chose.
+ */
+async function isHoldoutActive(): Promise<boolean> {
+  try {
+    const rows = await pool.query(`SELECT "value" FROM "AppConfig" WHERE "key" = 'holdout_active'`);
+    return String(rows.rows[0]?.value ?? '').trim().toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Why a lead must not be mailed, or null.
@@ -113,8 +142,28 @@ export type PushTriage = {
 function suppressionReason(
   lead: any,
   sup: { households: Set<string> },
+  holdoutActive: boolean,
 ): string | null {
-  if (lead.holdoutFlag === true) return 'holdout';
+  /**
+   * ── The holdout does NOT apply in wave one (Frank, §1.9) ─────────────────
+   *
+   * "No holdout group in wave one. We get two directional reads for free: rated against
+   *  unrated, and C5 against C6 ... A proper holdout is the only clean measure of what the
+   *  band price itself is worth, and we'll run one in wave two."
+   *
+   * That sits under "1 · Decisions — These are settled. Build to them." This line refused
+   * 85 Grade A accounts inside C1–C7 that the send list had already counted and dealt test
+   * arms to, so the list promised 850 and the push would have delivered 765 — against an
+   * instruction that says the holdout should not exist yet.
+   *
+   * The FLAG is deliberately left on the record. The assignment is a stable hash of the lead
+   * id and holdoutAssignedAt is the evidence a lead went through the process; wave two needs
+   * both, and clearing them to solve a wave-one problem would destroy the control group
+   * before it is used. The rule is switched off, not the data.
+   *
+   * Set the AppConfig key `holdout_active` to 'true' to bring it back for wave two.
+   */
+  if (lead.holdoutFlag === true && holdoutActive) return 'holdout';
   if (lead.hardBounced === true) return 'suppressed';
   if (lead.campaignUnsubscribedAt) return 'suppressed';
   if (String(lead.campaignStatus ?? '') === 'suppressed') return 'suppressed';
@@ -176,10 +225,30 @@ export async function triagePush(
    * below is in memory.
    */
   const sup = await loadActiveSuppressions();
+  const holdoutActive = await isHoldoutActive();
+  /**
+   * ── The surname hold (Frank, second email §7) ────────────────────────────
+   *
+   * "A surname match between every skip-trace-recovered address and the insured or
+   *  co-insured. Failures go to a review list, not into a send."
+   *
+   * Loaded once, like the suppressions, because a push covers thousands of leads. An
+   * address in this set has a review row that nobody has approved — the account that
+   * prompted the rule had insured Claudia Garcia and one recovered address reading
+   * dburnette19@gmail.com, and sending there discloses a stranger's property details and
+   * estimated premium from a domain with no history to absorb the complaint.
+   *
+   * Frank on why verification does not cover this: "It confirms a mailbox exists, not that
+   * it belongs to the person. It will pass this address and the send will still be wrong."
+   */
+  const held = await heldAddresses();
 
   const mode: RecipientMode = opts.recipients ?? 'insured';
 
-  const skipped = { noEmail: 0, suppressed: 0, holdout: 0, alreadyInCampaign: 0, duplicateAddress: 0 };
+  const skipped = {
+    noEmail: 0, suppressed: 0, holdout: 0, alreadyInCampaign: 0, duplicateAddress: 0,
+    nameReview: 0,
+  };
   const eligible: Recipient[] = [];
   // One address gets one send, even when two leads share it (a couple owning two
   // properties, or a landlord). The second occurrence is reported, not mailed.
@@ -191,7 +260,7 @@ export async function triagePush(
   const leadsByMode = { insured: 0, coinsured: 0, both: 0 };
 
   for (const lead of leads) {
-    const suppress = suppressionReason(lead, sup);
+    const suppress = suppressionReason(lead, sup, holdoutActive);
     if (suppress === 'holdout') { skipped.holdout++; continue; }
     if (suppress) { skipped.suppressed++; continue; }
 
@@ -214,8 +283,16 @@ export async function triagePush(
      * "this household said stop".
      */
     const usable = (e: string | undefined) => !!e && !sup.emails.has(e.toLowerCase().trim());
-    const ins = insBest && usable(insBest.email) ? [insBest.email] : [];
-    const co = coBest && usable(coBest.email) ? [coBest.email] : [];
+    /** Held for surname review — not a suppression, and counted apart from one. */
+    const onHold = (e: string | undefined) => !!e && held.has(e.toLowerCase().trim());
+
+    const insHeld = !!insBest && usable(insBest.email) && onHold(insBest.email);
+    const coHeld = !!coBest && usable(coBest.email) && onHold(coBest.email);
+    if (insHeld) skipped.nameReview++;
+    if (coHeld) skipped.nameReview++;
+
+    const ins = insBest && usable(insBest.email) && !insHeld ? [insBest.email] : [];
+    const co = coBest && usable(coBest.email) && !coHeld ? [coBest.email] : [];
 
     byMode.insured += ins.length;
     byMode.coinsured += co.length;
@@ -329,15 +406,19 @@ export async function pushChunk(
     email: r.email,
     first_name: r.personRole === 'insured' ? (r.lead.owner1FirstName ?? undefined) : (r.lead.owner2FirstName ?? undefined),
     last_name: r.personRole === 'insured' ? (r.lead.owner1LastName ?? undefined) : (r.lead.owner2LastName ?? undefined),
-    custom_variables: {
-      // Carried so a lead in the platform can be traced back to the CRM record, and so
-      // sequence copy can merge real figures rather than generic filler.
-      crm_property_id: r.lead.propertyId ?? null,
-      property_address: [r.lead.addressStreet, r.lead.addressCity].filter(Boolean).join(', ') || null,
-      renewal_date: r.lead.effectiveDate ?? null,
-      band_low: r.lead.indicativeBandLow ?? null,
-      band_high: r.lead.indicativeBandHigh ?? null,
-    },
+    /**
+     * The full set, from the one place that builds it (mergeVars.service).
+     *
+     * This sent five variables: property_address, renewal_date, band_low, band_high and the
+     * CRM id. The CSV export sent nineteen. So a contact pushed from here rendered an email
+     * with no subject line, no CTA and no month, while a contact uploaded by hand rendered
+     * correctly and had no OutreachEvent row — meaning every reply it produced was matched
+     * against nothing and silently dropped.
+     *
+     * Both paths now build their variables here, so the two cannot describe the same person
+     * differently.
+     */
+    custom_variables: mergeVarsFor(r.lead, r.personRole === 'insured' ? 'insured' : 'coInsured'),
   }));
 
   const added = await addLeadsToCampaign(campaignId, payload);
@@ -372,14 +453,33 @@ export async function pushChunk(
          * because the dataset only starts accumulating the day the first band leaves."
          */
         await client.query(
+          /**
+           * The segment and this person's test arm travel WITH the send.
+           *
+           * §6.1: "Segment is written to the lead record and stamped on every send and
+           * every response. It is never inferred at report time." Joining back to the lead
+           * later would read whatever it has become — re-graded, recaptured, re-rated —
+           * rather than what was true when this message went out.
+           *
+           * The email step is not known here: the vendor runs the sequence and tells us
+           * which step a message was on when it reports the send. So the version LABEL is
+           * assembled in the webhook, once the step is known, from these stored parts.
+           */
           `INSERT INTO "OutreachEvent"
-             ("id","leadId","propertyId","personRole","recipientEmail","channel","vendorLeadId","vendorCampaignId","cohort","publishedBandLow","publishedBandHigh","sentAt","createdAt","updatedAt")
-           VALUES ($1,$2,$3,$4,$5,'campaign',$6,$7,$8,$9,$10,NOW(),NOW(),NOW())`,
+             ("id","leadId","propertyId","personRole","recipientEmail","channel","vendorLeadId","vendorCampaignId","cohort","publishedBandLow","publishedBandHigh","segment","subjectVariant","ctaVariant","sentAt","createdAt","updatedAt")
+           VALUES ($1,$2,$3,$4,$5,'campaign',$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW(),NOW())`,
           [
             crypto.randomUUID(), r.lead.id, r.lead.propertyId ?? null, r.personRole, r.email,
             outcome.leadId ?? null, campaignId,
             r.lead.cohort ?? cohortOf(r.lead.effectiveDate),
             r.lead.indicativeBandLow ?? null, r.lead.indicativeBandHigh ?? null,
+            (r.lead.campaignSegment as Segment | null) ?? null,
+            r.personRole === 'insured'
+              ? (r.lead.insuredSubjectVariant ?? null)
+              : (r.lead.coInsuredSubjectVariant ?? null),
+            r.personRole === 'insured'
+              ? (r.lead.insuredCtaArm == null ? null : String(r.lead.insuredCtaArm))
+              : (r.lead.coInsuredCtaArm == null ? null : String(r.lead.coInsuredCtaArm)),
           ],
         );
         // "campaignCohort" is no longer written: it held the push FILTER
