@@ -92,7 +92,53 @@ const LEAD_COLS = [
   // Producer-edit tracking (Recently Edited tab)
   'lastEditedAt', 'lastEditedBy',
   'createdAt', 'updatedAt',
+  /**
+   * ── Columns the outreach decisions read, added 28 Sep 2026 ────────────────
+   *
+   * Every one of these was absent, and every one of them reads back as `undefined` rather
+   * than failing. Found by making the send list and the push agree on the same cohort and
+   * asking why they still differed.
+   *
+   * householdId          householdScopeKey() PREFERS the stored household and falls back to
+   *                      a derived address key only until materialiseHouseholds() has run.
+   *                      Unselected, the push took the fallback for every lead while the
+   *                      send list took the stored id — the exact seam that function's own
+   *                      comment says both sides avoid by calling it. A household suppressed
+   *                      under its stored id was invisible to the push.
+   * confirmed*           who in the household has already answered. The send list stops
+   *                      writing to anybody else; the push could not see it.
+   * personMatchBad*      the surname-review verdict carried on the lead.
+   * blastQueue*          the Grade B skip-trace queue (migration 044).
+   * callUnreachableAt,   phone outreach state.
+   * invalidPhones
+   *
+   * They are scalars and cost nothing. skipTraceData is NOT here — see withTraceData below.
+   */
+  'householdId',
+  'confirmedEmail', 'confirmedAt', 'confirmedVia', 'confirmedRole',
+  'personMatchBad', 'personMatchBadAt',
+  'blastQueuedAt', 'blastQueuedBy', 'blastQueueGrade', 'blastQueueReason',
+  'callUnreachableAt', 'invalidPhones',
 ] as const;
+
+/**
+ * The trace payload, selected only when asked for.
+ *
+ * insuredEmails()/coInsuredEmails() walk this to attribute a recovered address to the
+ * insured or the co-insured. Without it they see only the denormalised columns, so every
+ * address that skip tracing recovered and nothing copied onto email1/email2/emailsAll is
+ * invisible — 314 of them in the 05 Oct – 22 Nov window alone, addresses we had paid for
+ * and would never have written to.
+ *
+ * Kept out of LEAD_COLS rather than simply added because it averages 2.1 KB a row, the same
+ * order as rawData, which that list excludes for exactly that reason. The Leads page does
+ * not need it; anything deciding who to email does.
+ *
+ * Forgetting to pass it is the same silent failure as before, so the guard is not this flag
+ * — it is the assertion in scripts/test-outreach-rules.mjs that the export and the push
+ * offer the same addresses, which fails the moment the two paths see different data.
+ */
+const LEAD_COLS_WITH_TRACE_SQL = [...LEAD_COLS, 'skipTraceData'].map((c) => `"${c}"`).join(', ');
 
 const LEAD_COLS_SQL = LEAD_COLS.map((c) => `"${c}"`).join(', ');
 
@@ -491,6 +537,8 @@ export async function getLeadsFromDb(filters?: {
   propertyType?: string;
   /** Carrier filter: 'travelers' | 'plymouth' — leads strictly eligible for that carrier */
   carrier?: string;
+  /** Also select skipTraceData — required by anything that decides who to email. */
+  withTraceData?: boolean;
   /** Narrow to leads that actually have contact details — see contactCondition. */
   contact?: string;
   /** Exclude leads with these statuses — e.g. ['bound','lost'] for the active queue */
@@ -565,7 +613,7 @@ export async function getLeadsFromDb(filters?: {
   params.push(filters?.limit ?? 100, filters?.offset ?? 0);
 
   const query = `
-    SELECT ${LEAD_COLS_SQL}
+    SELECT ${filters?.withTraceData ? LEAD_COLS_WITH_TRACE_SQL : LEAD_COLS_SQL}
     FROM "Lead"
     ${where}
     ${orderClause}

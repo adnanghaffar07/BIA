@@ -187,3 +187,127 @@ export async function setSignature(email: string, html: string): Promise<Mailbox
   await updateEmailAccount(email, { signature: html });
   return getSignature(email);
 }
+
+/**
+ * ── Applying one signature template across every mailbox ────────────────────
+ *
+ * Frank owns the wording; this owns getting it onto 28 mailboxes correctly. It is written
+ * now, before he has supplied it, so the gap between "here is the block" and "every mailbox
+ * is compliant" is one command rather than an afternoon of pasting.
+ *
+ * ── Why it is a template and not one block ──────────────────────────────────
+ * A mailbox sends as its own producer. §5 requires the signature to name them, and the
+ * compliance check enforces it — so pasting one identical block across 28 mailboxes would
+ * produce 27 signatures naming the wrong person, which reads to a spam filter as spoofing
+ * and to a homeowner as a scam.
+ *
+ * The producer's name comes from the account itself. Licence number and direct phone are
+ * per-person and nothing in this system knows them, so they are supplied and the render
+ * REFUSES on any that are missing rather than writing a signature with a blank where a
+ * licence number belongs.
+ */
+
+export type SignatureValues = {
+  /** Same for every mailbox. */
+  agencyWebsite?: string | null;
+  officeAddress?: string | null;
+  /** Per mailbox, keyed by address, lower-cased. */
+  perMailbox: Map<string, { licenseNumber?: string | null; directPhone?: string | null }>;
+};
+
+export type SignaturePlan = {
+  email: string;
+  name: string;
+  text: string;
+  html: string;
+  /** What would still be wrong AFTER writing this. Empty means compliant. */
+  problems: string[];
+  /** Placeholders the template asked for and nothing supplied. */
+  missing: string[];
+};
+
+/**
+ * Render the template for one mailbox.
+ *
+ * Unresolved placeholders are collected rather than left in the text. A signature reading
+ * "NJ Producer License #{{ license_number }}" is worse than one with no licence line: it
+ * proves nobody checked, and it goes out under a producer's name.
+ */
+export function renderSignature(
+  template: string,
+  mailbox: { email: string; name: string },
+  values: SignatureValues,
+): { text: string; missing: string[] } {
+  const per = values.perMailbox.get(mailbox.email.trim().toLowerCase()) ?? {};
+  const table: Record<string, string | null | undefined> = {
+    producer_name: mailbox.name,
+    license_number: per.licenseNumber,
+    producer_direct_phone: per.directPhone,
+    agency_website: values.agencyWebsite,
+    office_address: values.officeAddress,
+  };
+
+  const missing: string[] = [];
+  const text = String(template ?? '').replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (whole, key: string) => {
+    const v = table[key];
+    if (v == null || String(v).trim() === '') {
+      if (!missing.includes(key)) missing.push(key);
+      return whole;
+    }
+    return String(v).trim();
+  });
+
+  return { text, missing };
+}
+
+/**
+ * What writing this template would produce on every mailbox. Touches nothing.
+ *
+ * Every signature is checked with the SAME rules the audit uses, so a plan reporting no
+ * problems and a later audit reporting some cannot disagree.
+ */
+export async function planSignatures(
+  template: string,
+  values: SignatureValues,
+): Promise<SignaturePlan[]> {
+  const accounts = await listEmailAccounts();
+  return accounts.map((a) => {
+    const email = String(a.email);
+    const name = [(a as Record<string, any>).first_name, (a as Record<string, any>).last_name]
+      .filter(Boolean).join(' ').trim();
+    const { text, missing } = renderSignature(template, { email, name }, values);
+    const html = textToSignatureHtml(text);
+    const { problems } = problemsWith(text, name);
+    return { email, name, text, html, problems, missing };
+  });
+}
+
+/**
+ * Write the plan.
+ *
+ * Refuses any mailbox whose render left a placeholder unresolved or whose result would still
+ * fail the compliance check — writing those would replace an empty signature, which is
+ * visibly broken, with a plausible one that is quietly non-compliant. The refused ones are
+ * returned by name so somebody can supply what is missing.
+ */
+export async function applySignatures(
+  template: string,
+  values: SignatureValues,
+): Promise<{ written: string[]; refused: Array<{ email: string; why: string[] }> }> {
+  const plans = await planSignatures(template, values);
+  const written: string[] = [];
+  const refused: Array<{ email: string; why: string[] }> = [];
+
+  for (const p of plans) {
+    const why = [
+      ...p.missing.map((m) => `nothing supplied for ${m}`),
+      ...p.problems,
+    ];
+    if (why.length) { refused.push({ email: p.email, why }); continue; }
+    // Read back through getSignature, so "written" means the vendor agrees it is there.
+    const after = await setSignature(p.email, p.html);
+    if (after.problems.length) refused.push({ email: p.email, why: after.problems });
+    else written.push(p.email);
+  }
+  return { written, refused };
+}

@@ -2,6 +2,7 @@ import { sql } from '@/lib/neon';
 import { insuredEmails, coInsuredEmails, coInsuredName } from './recipients.service';
 import { groupHouseholds, householdScopeKey, type Household } from './household.service';
 import { blockedAddresses } from './emailVerification.service';
+import { heldAddresses } from './emailNameReview.service';
 import { loadActiveSuppressions, type SuppressionHit } from './suppression.service';
 
 /**
@@ -50,7 +51,8 @@ export type ExclusionReason =
   | 'duplicate_household'     // another lead in the same household is already being mailed
   | 'duplicate_address'       // this exact address is already on the list
   | 'household_cap'           // already at two addresses for this household
-  | 'failed_verification';    // the verifier says this mailbox is dead or hostile
+  | 'failed_verification'     // the verifier says this mailbox is dead or hostile
+  | 'name_review';            // recovered address whose surname nobody has matched yet
 
 export type Exclusion = {
   leadId: string;
@@ -74,7 +76,17 @@ export type SendList = {
   reconciles: boolean;
 };
 
-const MAX_ADDRESSES_PER_HOUSEHOLD = 2;
+/**
+ * How many addresses one household may be written to.
+ *
+ * Was 2, which pre-dated Frank's 28 Sep answer and silently discarded the third and fourth
+ * verified address on a card that had them. He is explicit that every verified address gets
+ * its own email, so the cap is now a guard against absurdity rather than a policy: a card
+ * carrying eight addresses is a trace that has gone wrong, not eight people.
+ *
+ * Kept rather than removed so one bad skip trace cannot mail a household nine times.
+ */
+const MAX_ADDRESSES_PER_HOUSEHOLD = 6;
 
 const LEAD_COLS = `"id","propertyId","cohort","effectiveDate","grade","manualGrade","status",
   "addressStreet","addressCity","addressState","addressZip",
@@ -121,6 +133,22 @@ export async function buildSendList(
    * had asked us to stop.
    */
   const blocked = await blockedAddresses();
+
+  /**
+   * ── The surname hold (Frank, second email §7) ────────────────────────────
+   *
+   * "A surname match between every skip-trace-recovered address and the insured or
+   *  co-insured. Failures go to a review list, not into a send."
+   *
+   * The push has honoured this since it was written. This list did not, and a send list is
+   * a send — it is the file somebody uploads to the platform. The two paths were checked
+   * against each other on 28 Sep and agreed on every address except these: 40 on C1–C3 and
+   * 209 on C4–C7 that the push refuses and the export was handing over.
+   *
+   * Frank on why the verifier does not cover it: "It confirms a mailbox exists, not that it
+   * belongs to the person. It will pass this address and the send will still be wrong."
+   */
+  const heldForReview = await heldAddresses();
 
   const recipients: Recipient[] = [];
   const exclusions: Exclusion[] = [];
@@ -174,14 +202,38 @@ export async function buildSendList(
     // 3. Who may be written to at this step. E1 is the insured only; the co-insured joins
     //    at E2 as a second decision-maker, never as a replacement.
     const ins = insuredEmails(l).map((e) => e.toLowerCase());
-    const co = step === 'E1' ? [] : coInsuredEmails(l).map((e) => e.toLowerCase());
+
+    /**
+     * ── Frank, 28 Sep 2026 ───────────────────────────────────────────────────
+     *
+     * On the co-insured: "We are to be sending individual and personal emails regardless of
+     * same household. We are not sure who will actually receive it and engage, so the whole
+     * premise of insured and co-insured outreach is predicated on it being the first time
+     * someone within that household is seeing our message."
+     *
+     * On several insured addresses: "Individual emails sent to each of the insured's
+     * verified emails — we are not sure which will be primary so we must outreach all."
+     *
+     * Both rules here said the opposite. The co-insured was silent until E2, and only the
+     * FIRST address of each person was ever used — 616 insured and 507 co-insured addresses
+     * on C4–C7 alone that the system held and would never have written to.
+     */
+    const co = coInsuredEmails(l).map((e) => e.toLowerCase());
 
     let candidates: Array<{ email: string; role: 'insured' | 'co_insured' }> =
       confirmed
+        /**
+         * One exception, and it is not a contradiction of the above.
+         *
+         * Once somebody in the household has ANSWERED, the conversation belongs to that
+         * person and the rest go quiet (§7.1). Frank's rule is about opening a conversation
+         * with a household that has not replied — writing to three more addresses after one
+         * of them has already engaged is a different thing, and a worse one.
+         */
         ? [{ email: confirmed, role: (l.confirmedRole === 'co_insured' ? 'co_insured' : 'insured') }]
         : [
-            ...ins.slice(0, 1).map((e) => ({ email: e, role: 'insured' as const })),
-            ...co.slice(0, 1).map((e) => ({ email: e, role: 'co_insured' as const })),
+            ...ins.map((e) => ({ email: e, role: 'insured' as const })),
+            ...co.map((e) => ({ email: e, role: 'co_insured' as const })),
           ];
 
     candidates = candidates.filter((c) => c.email);
@@ -190,13 +242,20 @@ export async function buildSendList(
       continue;
     }
 
-    // 4. Household-level dedup — the whole point. Another lead in this household is
-    //    already on the list, so this one is a repeat even though it is a different
-    //    property record and a different address.
-    if (householdOnList.has(hhKey)) {
-      exclude(l, 'duplicate_household', `same household as ${hh?.leadIds.filter((x) => x !== id).join(', ')}`);
-      continue;
-    }
+    /**
+     * ── The household dedup, now scoped to the PROPERTY ──────────────────────
+     *
+     * This used to drop a lead outright when any other lead in its household was already on
+     * the list. Frank, 28 Sep: "individual and personal emails regardless of same
+     * household" — a homeowner who owns two houses has two renewals, and hearing about only
+     * one of them is not politeness, it is a missed renewal.
+     *
+     * What survives is the rule that actually prevents duplication: the same ADDRESS is
+     * never written to twice (usedAddresses, below), which is the platform's own constraint
+     * as well as good manners. Two different people at one household each get their own
+     * email; one person does not get two.
+     */
+    void householdOnList;
 
     let placed = 0;
     for (const c of candidates) {
@@ -208,6 +267,11 @@ export async function buildSendList(
        */
       const badVerdict = blocked.get(c.email);
       if (badVerdict) { exclude(l, 'failed_verification', `${c.email}: ${badVerdict}`); continue; }
+      /**
+       * Also before the duplicate and cap rules, and for the same reason: an address
+       * awaiting review must not hold a household's slot against one that can be sent.
+       */
+      if (heldForReview.has(c.email)) { exclude(l, 'name_review', `${c.email}: awaiting surname review`); continue; }
       if (usedAddresses.has(c.email)) { exclude(l, 'duplicate_address', c.email); continue; }
       if ((perHousehold.get(hhKey) ?? 0) >= MAX_ADDRESSES_PER_HOUSEHOLD) {
         exclude(l, 'household_cap', `${c.email}: household already has ${MAX_ADDRESSES_PER_HOUSEHOLD}`);
@@ -235,7 +299,7 @@ export async function buildSendList(
   const excluded = {
     no_insured_email: 0, suppressed_household: 0, suppressed_address: 0,
     duplicate_household: 0, duplicate_address: 0, household_cap: 0,
-    failed_verification: 0,
+    failed_verification: 0, name_review: 0,
   } as Record<ExclusionReason, number>;
   for (const e of exclusions) excluded[e.reason]++;
 

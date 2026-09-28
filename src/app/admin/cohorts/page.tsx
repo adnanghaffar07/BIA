@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Container, Box, Typography, Paper, Button, Chip, Table, TableHead, TableRow,
   TableCell, TableBody, CircularProgress, Alert, Stack, TextField, Tabs, Tab,
@@ -74,6 +74,21 @@ export default function CohortsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * The grade currently selected, readable from inside an in-flight request.
+   *
+   * useStickyState restores from sessionStorage in an effect, so a page opened on Grade B
+   * mounts as A, fires a request for A, restores to B and fires a second one. Two are then
+   * in flight, and whichever answers LAST paints the table — which on a slow A and a fast B
+   * leaves the Grade B tab selected above a Grade A table.
+   *
+   * A ref rather than the state value: `grade` inside run() is whatever it was when that
+   * callback was built, which is always the grade that request asked for, so comparing the
+   * two would always match and prove nothing.
+   */
+  const wantedGrade = useRef<'A' | 'B'>(grade);
+  useEffect(() => { wantedGrade.current = grade; }, [grade]);
+
   const run = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -84,6 +99,16 @@ export default function CohortsPage() {
       if (effTo) u.searchParams.set('effTo', effTo);
       const j = await (await fetch(u.toString())).json();
       if (!j.success) throw new Error(j.error || 'Could not build the ledger');
+
+      /**
+       * Drop a response for a grade that is no longer selected.
+       *
+       * The server echoes the grade back precisely so this check is possible. Without it the
+       * last response to land wins regardless of what the tabs say, and the two tables have
+       * entirely different columns — so the mismatch is not a subtle one.
+       */
+      if ((j.grade === 'B' ? 'B' : 'A') !== wantedGrade.current) return;
+
       setRows(j.data ?? []);
       setTargetPct(j.targetPct ?? null);
       /**
@@ -98,7 +123,9 @@ export default function CohortsPage() {
       setError(e instanceof Error ? e.message : 'Could not build the ledger');
       setRows([]);
     } finally {
-      setLoading(false);
+      // Only the request that is still wanted clears the spinner; a dropped one leaving it
+      // up would look like the page had hung.
+      if (grade === wantedGrade.current) setLoading(false);
     }
   }, [grade, effFrom, effTo]);
 

@@ -46,7 +46,7 @@ const lead = (o) => ({
   addressStreet: o.street ?? '1 Test St', addressZip: o.zip ?? '07728',
   owner1FirstName: o.f ?? 'Test', owner1LastName: o.l ?? 'Owner',
   owner2FirstName: o.cf ?? null, owner2LastName: o.cl ?? null,
-  email1: o.e1 ?? null, email2: null, owner2Email: o.coEmail ?? null,
+  email1: o.e1 ?? null, email2: o.e2 ?? null, owner2Email: o.coEmail ?? null,
   phone1: o.p1 ?? null, phone2: null, owner2Phone: o.coPhone ?? null,
   emailsAll: o.emailsAll ?? null, phonesAll: null, skipTraceData: o.trace ?? null,
   confirmedEmail: o.confirmed ?? null, confirmedRole: o.confirmedRole ?? null,
@@ -157,11 +157,38 @@ console.log('\n=== 6. Send-list rules (Sec. 7.1) ===');
     lead({ id: 'L1', street: '1 Send St', zip: '07728', e1: 'ins1@x.com', p1: '7325550001',
       cf: 'Jane', cl: 'Doe', coEmail: 'co1@x.com' }),
   ];
+  /**
+   * ── Frank, 28 Sep 2026, overturned the old rule ─────────────────────────
+   *
+   * These three assertions used to read "E1 mails the insured only", "one household gets
+   * one E1" and "the other is excluded as a household duplicate". All three were correct
+   * until he answered the question directly:
+   *
+   *   "We are to be sending individual and personal emails regardless of same household...
+   *    the whole premise of insured and co-insured outreach is predicated on it being the
+   *    first time someone within that household is seeing our message."
+   *
+   *   "Individual emails sent to each of the insured's verified emails — we are not sure
+   *    which will be primary so we must outreach all."
+   *
+   * What replaces them asserts the rule that still holds, and it is the one that matters:
+   * no ADDRESS is ever written to twice. Two people at one household each get their own
+   * email; one person never gets two.
+   */
   const e1 = await buildSendList(base, 'E1');
-  eq('E1 mails the insured only', e1.recipients.map((r) => r.email), ['ins1@x.com']);
+  eq('the co-insured is mailed from E1, not held back to E2',
+    e1.recipients.map((r) => r.email).sort(), ['co1@x.com', 'ins1@x.com']);
   const e2 = await buildSendList(base, 'E2');
-  eq('E2 adds the co-insured', e2.recipients.map((r) => r.email).sort(), ['co1@x.com', 'ins1@x.com']);
-  ok('E2 stays within two per household', e2.recipients.length <= 2);
+  eq('E2 covers the same people', e2.recipients.map((r) => r.email).sort(), ['co1@x.com', 'ins1@x.com']);
+
+  // Every verified address for a person, not just the first.
+  const manyAddrs = [lead({ id: 'M1', street: '9 Many Rd', zip: '07728',
+    e1: 'a@x.com', e2: 'b@x.com', cf: 'Ann', cl: 'Roe', coEmail: 'c@x.com' })];
+  const many = await buildSendList(manyAddrs, 'E1');
+  ok('every address on the card is used, not only the first',
+    many.recipients.length >= 3, JSON.stringify(many.recipients.map((r) => r.email)));
+  eq('and no address appears twice',
+    many.recipients.length, new Set(many.recipients.map((r) => r.email)).size);
 
   const confirmedLead = [lead({ id: 'L2', street: '2 Send St', zip: '07728', e1: 'ins2@x.com',
     cf: 'Jo', cl: 'Doe', coEmail: 'co2@x.com', confirmed: 'co2@x.com', confirmedRole: 'co_insured' })];
@@ -174,9 +201,15 @@ console.log('\n=== 6. Send-list rules (Sec. 7.1) ===');
     lead({ id: 'D2', street: '3 Dup Rd', zip: '07728', e1: 'her@x.com' }),
   ];
   const d = await buildSendList(sameHouse, 'E1');
-  eq('one household gets one E1', d.recipients.length, 1);
-  eq('the other is excluded as a household duplicate',
-    d.exclusions.filter((x) => x.reason === 'duplicate_household').length, 1);
+  /**
+   * Two people at one address are two people. A homeowner with two renewals hearing about
+   * only one of them is a missed renewal, not politeness.
+   */
+  eq('both people at one household are mailed', d.recipients.length, 2);
+  eq('neither is dropped as a household duplicate',
+    d.exclusions.filter((x) => x.reason === 'duplicate_household').length, 0);
+  eq('and they are different addresses',
+    new Set(d.recipients.map((r) => r.email)).size, 2);
 
   const noEmail = [lead({ id: 'N1', street: '4 None Rd', zip: '07728', p1: '7325550002' })];
   const n = await buildSendList(noEmail, 'E1');
@@ -258,9 +291,63 @@ console.log('\n=== 8. The real send list still reconciles ===');
     `${live.counts.recipients} mailed, ${live.exclusions.length} exclusion rows, ${all.length} considered`);
   ok('nobody is mailed twice at the same address',
     new Set(live.recipients.map((r) => r.email)).size === live.recipients.length);
-  ok('no household appears twice at E1',
-    new Set(live.recipients.map((r) => r.householdKey)).size === live.recipients.length);
+  /**
+   * A household CAN appear more than once now — that is Frank's 28 Sep instruction, and
+   * this assertion used to forbid it. What must still hold is the address rule above: two
+   * people at one household get one email each, and nobody gets two.
+   *
+   * Checked as a ceiling rather than dropped: a household appearing more times than it has
+   * distinct addresses would mean the same person was on the list twice under two keys, and
+   * nothing else would catch that.
+   */
+  const perHousehold = new Map();
+  for (const r of live.recipients) {
+    if (!perHousehold.has(r.householdKey)) perHousehold.set(r.householdKey, new Set());
+    perHousehold.get(r.householdKey).add(r.email);
+  }
+  const overfull = [...perHousehold.entries()].filter(([, s]) => s.size > 6);
+  ok('no household is mailed at more than six addresses', overfull.length === 0,
+    overfull.slice(0, 3).map(([k, s]) => `${k}: ${s.size}`).join(', '));
+  console.log(`  (households mailed at more than one address: ${[...perHousehold.values()].filter((s) => s.size > 1).length})`);
   console.log(`  (live list: ${live.counts.recipients} recipients across ${live.counts.households} households)`);
+
+  /**
+   * ── The surname hold reaches the export, not just the push ───────────────
+   *
+   * Frank §7: "Failures go to a review list, not into a send." A send list IS a send — it
+   * is the file somebody uploads to the platform.
+   *
+   * This was false until 28 Sep 2026. The push had honoured the hold since it was written
+   * and the list had not, so the same cohort meant two different things depending on which
+   * door it left by: 40 held addresses on C1–C3 and 209 on C4–C7 were being exported for
+   * sending that the push refused. Nothing failed, because nothing compared the two.
+   */
+  const { heldAddresses } = await import('@/services/emailNameReview.service');
+  const onHold = await heldAddresses();
+  const leaked = live.recipients.filter((r) => onHold.has(r.email.toLowerCase()));
+  ok('no address awaiting surname review is on the send list', leaked.length === 0,
+    leaked.slice(0, 3).map((r) => r.email).join(', '));
+  console.log(`  (addresses held for review, correctly withheld: ${onHold.size})`);
+
+  /**
+   * And the two doors agree, which is the assertion the above is a special case of.
+   *
+   * Cheap to state and it is the one that would have caught the defect on the day it was
+   * introduced: anything the list offers, the push must also offer.
+   */
+  const { triagePush } = await import('@/services/campaignPush.service');
+  const { listCampaigns } = await import('@/lib/integrations/leadCampaign');
+  const campaigns = await listCampaigns().catch(() => []);
+  if (campaigns.length) {
+    const t = await triagePush(campaigns[0].id,
+      { grade: 'A', effectiveDate: '2026-10-05', effectiveTo: '2026-11-22' }, { recipients: 'both' });
+    const pushed = new Set(t.eligible.map((r) => r.email.toLowerCase()));
+    const onlyList = live.recipients.filter((r) => !pushed.has(r.email.toLowerCase()));
+    ok('the export and the push offer the same addresses', onlyList.length === 0,
+      `${onlyList.length} on the list only, e.g. ${onlyList.slice(0, 3).map((r) => r.email).join(', ')}`);
+  } else {
+    console.log('  (skipped the export-vs-push check: no campaign to triage against)');
+  }
 }
 
 console.log(`\n${pass} passed, ${failures.length} failed`);

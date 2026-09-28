@@ -218,3 +218,33 @@ export function bestInsuredAddress(lead: any, signals: AddressSignals = {}): Ran
 export function bestCoInsuredAddress(lead: any, signals: AddressSignals = {}): RankedAddress | null {
   return bestAddress(coInsuredEmails(lead), lead, lead?.owner2FirstName, lead?.owner2LastName, signals);
 }
+
+/**
+ * EVERY address for a person, best first — the ranked list rather than its head.
+ *
+ * ── Why this exists beside bestInsuredAddress ───────────────────────────────
+ * Frank, 28 Sep 2026: "Individual emails sent to each of the insured's verified emails —
+ * we are not sure which will be primary so we must outreach all."
+ *
+ * The send list was changed to honour that and the push was not, so the two disagreed about
+ * who a cohort contains: the list offered every address and the push offered one. Two paths
+ * describing the same population differently is the defect this project keeps paying for,
+ * and it is worse here than usual — the difference is invisible until somebody compares a
+ * forecast against what actually went out.
+ *
+ * Order is preserved, so if a cap is ever applied again it keeps the best addresses rather
+ * than whichever the trace listed first.
+ *
+ * bestAddress's own refusal still applies to the head of the list: a person whose top
+ * address is a weak name match on a burned domain returns nothing here too, because the
+ * ranking — not the count — is what decides whether we believe an address belongs to them.
+ */
+export function allInsuredAddresses(lead: any, signals: AddressSignals = {}): RankedAddress[] {
+  if (!bestInsuredAddress(lead, signals)) return [];
+  return rankAddresses(insuredEmails(lead), lead, lead?.owner1FirstName, lead?.owner1LastName, signals);
+}
+
+export function allCoInsuredAddresses(lead: any, signals: AddressSignals = {}): RankedAddress[] {
+  if (!bestCoInsuredAddress(lead, signals)) return [];
+  return rankAddresses(coInsuredEmails(lead), lead, lead?.owner2FirstName, lead?.owner2LastName, signals);
+}

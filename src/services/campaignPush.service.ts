@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { EMAIL_RE } from './recipients.service';
-import { bestInsuredAddress, bestCoInsuredAddress, type AddressSignals } from './addressRank.service';
+import { allInsuredAddresses, allCoInsuredAddresses, type AddressSignals } from './addressRank.service';
 import { cohortOf } from './cohort';
 import { pool } from '@/lib/neon';
 import { getLeadsFromDb } from '@/services/storage.service';
@@ -208,7 +208,7 @@ export async function triagePush(
   filters: PushFilters,
   opts: PushOptions = {},
 ): Promise<PushTriage> {
-  const leads = await getLeadsFromDb({ ...filters, limit: 100000, orderBy: 'xdate' });
+  const leads = await getLeadsFromDb({ ...filters, limit: 100000, orderBy: 'xdate', withTraceData: true });
   // One query for the whole triage — a lookup per candidate would be thousands.
   const blockedEmails = await blockedAddresses();
 
@@ -302,8 +302,17 @@ export async function triagePush(
      * address, never two at once", targeting ~1.3 sends per lead per touch. Ranking is in
      * addressRank.service.ts.
      */
-    const insBest = bestInsuredAddress(lead, signals);
-    const coBest = bestCoInsuredAddress(lead, signals);
+    /**
+     * Every address for each person, not just the best one.
+     *
+     * Frank, 28 Sep: "individual emails sent to each of the insured's verified emails — we
+     * are not sure which will be primary so we must outreach all." The send list was changed
+     * for that; this was not, so the two disagreed about who a cohort contains — the list
+     * offering every address and the push offering one, a difference invisible until a
+     * forecast is compared against what actually went out.
+     */
+    const insAll = allInsuredAddresses(lead, signals);
+    const coAll = allCoInsuredAddresses(lead, signals);
     /**
      * Address-scope suppressions applied to the chosen address, not to the lead.
      *
@@ -316,13 +325,25 @@ export async function triagePush(
     /** Held for surname review — not a suppression, and counted apart from one. */
     const onHold = (e: string | undefined) => !!e && held.has(e.toLowerCase().trim());
 
-    const insHeld = !!insBest && usable(insBest.email) && onHold(insBest.email);
-    const coHeld = !!coBest && usable(coBest.email) && onHold(coBest.email);
-    if (insHeld) skipped.nameReview++;
-    if (coHeld) skipped.nameReview++;
-
-    const ins = insBest && usable(insBest.email) && !insHeld ? [insBest.email] : [];
-    const co = coBest && usable(coBest.email) && !coHeld ? [coBest.email] : [];
+    /**
+     * Held and suppressed are decided PER ADDRESS now, not per person.
+     *
+     * With one address each, "the insured is held" and "this address is held" were the same
+     * statement. They are not any more: a card whose first address is in the surname review
+     * may have a second that is not, and dropping the person for the first one would lose
+     * reach the review was never asked about.
+     */
+    const keep = (list: typeof insAll) => {
+      const out: string[] = [];
+      for (const a of list) {
+        if (!usable(a.email)) continue;
+        if (onHold(a.email)) { skipped.nameReview++; continue; }
+        out.push(a.email);
+      }
+      return out;
+    };
+    const ins = keep(insAll);
+    const co = keep(coAll);
 
     byMode.insured += ins.length;
     byMode.coinsured += co.length;
