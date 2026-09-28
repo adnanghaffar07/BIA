@@ -17,6 +17,7 @@ import EventRepeatIcon from '@mui/icons-material/EventRepeat';
 import AssessmentIcon from '@mui/icons-material/Assessment';
 import InsightsIcon from '@mui/icons-material/Insights';
 import PhoneIcon from '@mui/icons-material/Phone';
+import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useAuth } from '@/context/AuthContext';
@@ -71,6 +72,10 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
       // opens to find the next call, not a report they open to read numbers.
       { label: 'Phone',       icon: <PhoneIcon />,           path: '/admin/phone' },
       { label: 'Weekly Pull', icon: <EventRepeatIcon />,     path: '/admin/pull-weekly' },
+      // Its own entry because Zoya opens it, and she does not otherwise come to QC Reports.
+      // Burying a file upload inside a reporting screen is how it goes on being done by
+      // whoever has a terminal.
+      { label: 'Verification', icon: <MarkEmailReadIcon />,   path: '/admin/verification' },
     ] : []),
   ];
 

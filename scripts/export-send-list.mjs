@@ -37,6 +37,7 @@ import './lib/env.mjs';
 import { sql } from '@/lib/neon';
 import { bestInsuredAddress, bestCoInsuredAddress } from '@/services/addressRank.service';
 import { heldAddresses } from '@/services/emailNameReview.service';
+import { blockedAddresses } from '@/services/emailVerification.service';
 import { mergeVarsFor, agencyWebsite } from '@/services/mergeVars.service';
 import { resolveInboxCollisions } from '@/services/inboxCollision.service';
 import { subjectName, CTA_BY_STEP } from '@/services/campaignSegment.service';
@@ -49,6 +50,14 @@ const outArg = process.argv.find((a) => a.startsWith('--out='));
 const OUT = outArg ? outArg.slice('--out='.length) : null;
 
 const held = await heldAddresses();
+/**
+ * Addresses the verifier found a reason not to mail — invalid, abuse, spamtrap, do_not_mail.
+ *
+ * Applied HERE as well as on the send list, because this file is what actually gets uploaded
+ * to the sending platform. A row excluded from the list but present in the CSV is a row that
+ * gets mailed, and the list would go on reporting it as excluded.
+ */
+const blocked = await blockedAddresses();
 // The same value the push reads, so an uploaded contact and a pushed one cannot disagree
 // about whether the booking link exists.
 const site = await agencyWebsite();
@@ -101,6 +110,8 @@ const COLUMNS = [
 
 const rows = [];
 let heldOut = 0;
+/** Kept, not counted, so the run report can name them — a count alone is unworkable. */
+const failedVerification = [];
 
 /**
  * Every value comes from mergeVarsFor — the same function the push hands to the platform.
@@ -124,6 +135,8 @@ for (const l of leads) {
     const email = String(picked?.email ?? '').trim().toLowerCase();
     if (!email) continue;
     if (held.has(email)) { heldOut++; continue; }
+    const badVerdict = blocked.get(email);
+    if (badVerdict) { failedVerification.push({ email, status: badVerdict, prop: l.propertyId }); continue; }
 
     const v = mergeVarsFor(l, role, site);
     if (!v.firstName) continue;
@@ -185,6 +198,12 @@ console.error(`${FROM} to ${TO}`);
 console.error(`  ${leads.length} accounts on the send list`);
 console.error(`  ${keep.length} contacts exported`);
 console.error(`  ${heldOut} held by the surname review and NOT exported`);
+if (failedVerification.length) {
+  const by = new Map();
+  for (const f of failedVerification) by.set(f.status, (by.get(f.status) ?? 0) + 1);
+  console.error(`  ${failedVerification.length} refused by the email verifier and NOT exported:`);
+  for (const [k, v] of [...by].sort((a, b) => b[1] - a[1])) console.error(`     ${k}: ${v}`);
+}
 if (collisions) {
   console.error(`  ${inboxHeld.length} held because ${collisions} inbox(es) are shared by more than one contact:`);
   for (const h of inboxHeld) {

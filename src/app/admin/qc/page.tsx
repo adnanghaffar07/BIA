@@ -33,6 +33,7 @@ import PhoneIcon from '@mui/icons-material/PhoneInTalk';
 import DownloadIcon from '@mui/icons-material/Download';
 import Link from 'next/link';
 import { useStickyState } from '@/hooks/useStickyState';
+import { cohortCode } from '@/services/cohort';
 
 /** One renewal week in the Cohort Ledger — mirrors CohortLedgerRow on the server. */
 type LedgerRow = {
@@ -74,10 +75,15 @@ type LedgerRow = {
  * numbering is his, not ours, so inventing a C8 would be asserting something he has not
  * said.
  */
-const COHORT_CODES: Record<string, string> = {
-  '2026-10-05': 'C1', '2026-10-12': 'C2', '2026-10-19': 'C3', '2026-10-26': 'C4',
-  '2026-11-02': 'C5', '2026-11-09': 'C6', '2026-11-16': 'C7',
-};
+/**
+ * Computed, not listed.
+ *
+ * This was seven hand-written dates, with a comment arguing that inventing a C8 would
+ * assert a number Frank had not said. That was the wrong call: C8 is not an invention, it
+ * is the eighth Monday after C1, and the week of 23 Nov 2026 sat on this screen showing a
+ * dash while holding 702 leads and 165 Grade A. The ledger's job is to say what is there.
+ */
+const COHORT_CODES = (cohort: string): string | null => cohortCode(cohort);
 
 type ReportType = 'recapture_log' | 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log';
 
@@ -711,9 +717,9 @@ type LedgerColumn = {
 const LEDGER_COLUMNS: LedgerColumn[] = [
   {
     header: 'Cohort',
-    value: (d) => COHORT_CODES[d.cohort] ?? '',
+    value: (d) => COHORT_CODES(d.cohort) ?? '',
     cell: (d) => {
-      const code = COHORT_CODES[d.cohort];
+      const code = COHORT_CODES(d.cohort);
       return code
         ? <Chip size="small" label={code} sx={{ height: 19, fontSize: 11, fontWeight: 700, bgcolor: '#e8eefc', color: '#1a3d7c' }} />
         : <span style={{ color: '#c2c7d0' }}>—</span>;

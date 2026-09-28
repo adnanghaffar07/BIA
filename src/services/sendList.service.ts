@@ -1,6 +1,7 @@
 import { sql } from '@/lib/neon';
 import { insuredEmails, coInsuredEmails, coInsuredName } from './recipients.service';
 import { groupHouseholds, householdScopeKey, type Household } from './household.service';
+import { blockedAddresses } from './emailVerification.service';
 import { loadActiveSuppressions, type SuppressionHit } from './suppression.service';
 
 /**
@@ -48,7 +49,8 @@ export type ExclusionReason =
   | 'suppressed_address'      // this mailbox is dead or opted out
   | 'duplicate_household'     // another lead in the same household is already being mailed
   | 'duplicate_address'       // this exact address is already on the list
-  | 'household_cap';          // already at two addresses for this household
+  | 'household_cap'           // already at two addresses for this household
+  | 'failed_verification';    // the verifier says this mailbox is dead or hostile
 
 export type Exclusion = {
   leadId: string;
@@ -110,6 +112,15 @@ export async function buildSendList(
 ): Promise<SendList> {
   const { byLeadId } = groupHouseholds(leads);
   const sup = await loadActiveSuppressions();
+  /**
+   * Addresses the verifier found a reason not to mail.
+   *
+   * Separate from suppression, and it has to stay separate. A suppression is a person's own
+   * decision and is permanent; this is a technical verdict on a mailbox that a re-check can
+   * overturn. Folding them together would let a re-verification quietly release somebody who
+   * had asked us to stop.
+   */
+  const blocked = await blockedAddresses();
 
   const recipients: Recipient[] = [];
   const exclusions: Exclusion[] = [];
@@ -191,6 +202,12 @@ export async function buildSendList(
     for (const c of candidates) {
       const addrHit = sup.byEmail.get(c.email);
       if (addrHit) { exclude(l, 'suppressed_address', `${c.email}: ${addrHit.reason}`); continue; }
+      /**
+       * Checked BEFORE the duplicate and cap rules, so a dead address cannot occupy a
+       * household's one slot and push a live one out.
+       */
+      const badVerdict = blocked.get(c.email);
+      if (badVerdict) { exclude(l, 'failed_verification', `${c.email}: ${badVerdict}`); continue; }
       if (usedAddresses.has(c.email)) { exclude(l, 'duplicate_address', c.email); continue; }
       if ((perHousehold.get(hhKey) ?? 0) >= MAX_ADDRESSES_PER_HOUSEHOLD) {
         exclude(l, 'household_cap', `${c.email}: household already has ${MAX_ADDRESSES_PER_HOUSEHOLD}`);
@@ -218,6 +235,7 @@ export async function buildSendList(
   const excluded = {
     no_insured_email: 0, suppressed_household: 0, suppressed_address: 0,
     duplicate_household: 0, duplicate_address: 0, household_cap: 0,
+    failed_verification: 0,
   } as Record<ExclusionReason, number>;
   for (const e of exclusions) excluded[e.reason]++;
 

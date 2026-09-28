@@ -1,5 +1,6 @@
 import { sql } from '@/lib/neon';
 import { insuredEmails, assertRecipientCols } from './recipients.service';
+import { deliverableAddresses } from './emailVerification.service';
 import { cohortLabel, cohortOf } from './cohort';
 import { computeMetrics } from './protectiveMetrics.service';
 import { RENEWAL_PULL_LEAD_DAYS } from './pipeline.service';
@@ -263,6 +264,33 @@ export async function getOutreachDashboard(params: {
   const withEmail = workedRows.filter((l) => insuredEmails(l).length > 0).length;
 
   /**
+   * ── Verified valid ────────────────────────────────────────────────────────
+   *
+   * An account counts as verified when ANY of its insured addresses passed — the same rule
+   * the cohort ledger applies, deliberately word for word. The campaign sends to one
+   * address, and one confirmed address reaches the person; requiring all of them would mark
+   * an account unreachable because a stale second address failed.
+   *
+   * Two screens counting "verified" differently is how the ledger and this dashboard end up
+   * quoting different numbers to Frank in the same meeting.
+   */
+  const deliverable = await deliverableAddresses();
+  const verified = workedRows.filter((l) =>
+    insuredEmails(l).some((e) => deliverable.has(String(e).trim().toLowerCase()))).length;
+
+  /**
+   * Whether the stage has been MEASURED at all, which is not the same as whether it is zero.
+   *
+   * Nothing had been verified when this was built, so the rung was hardcoded to 0 and
+   * "not started" with a note saying no verifier had been chosen. ZeroBounce has since been
+   * chosen and 378 verdicts imported — and the stage went on reporting itself unmeasured,
+   * because the note was true when it was written and nothing re-read it.
+   *
+   * Derived from whether any verdict exists at all, so it answers itself from now on.
+   */
+  const verifierUsed = deliverable.size > 0;
+
+  /**
    * Everything below here comes from OutreachEvent, which is the record of what was
    * actually sent — never from a flag on the Lead. A per-lead flag says "this lead is in
    * a campaign"; the event rows say who was written to, when, and what came back, which
@@ -337,11 +365,21 @@ export async function getOutreachDashboard(params: {
       note: 'Measured on the named insured, because E1 mails the insured only.',
     },
     {
-      // The verifier has not been chosen (register A25), so this rung cannot be measured
-      // yet. Reported as not started rather than as 0%.
-      key: 'verified', label: 'Verified valid', count: 0, of: 'with_email',
-      rate: null, target: 85, floor: 77, started: false,
-      note: 'No email verifier chosen yet (register A25) — this stage is unmeasured, not zero.',
+      key: 'verified', label: 'Verified valid', count: verified, of: 'with_email',
+      rate: verifierUsed ? pct(verified, withEmail) : null,
+      target: 85, floor: 77,
+      started: verifierUsed,
+      /**
+       * Unverified is NOT the same as failed, and the note has to say so. Most of the gap
+       * is addresses nobody has submitted yet — 616 across insured #2, #3 and co-insured
+       * were never sent to the verifier — not addresses that came back bad.
+       */
+      note: verifierUsed
+        ? 'An account counts once any of its insured addresses passed ZeroBounce — the same '
+          + 'rule the cohort ledger uses. The gap to "cards with an insured email" is mostly '
+          + 'addresses not yet submitted to the verifier, not addresses that failed.'
+        : 'No verification results imported yet — this stage is unmeasured, not zero. '
+          + 'Import a result file under Verification.',
     },
     {
       key: 'loaded', label: 'Loaded to campaign', count: loaded, of: 'with_email',

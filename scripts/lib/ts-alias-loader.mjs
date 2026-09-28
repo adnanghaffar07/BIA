@@ -26,6 +26,15 @@ function firstExisting(base) {
 }
 
 export async function resolve(specifier, context, next) {
+  /**
+   * Next's subpath exports, which Node will not resolve outside a Next build.
+   *
+   * A route handler imports 'next/server' for NextRequest/NextResponse, and without this a
+   * script cannot import a route at all — so route handlers were the one layer with no way
+   * to test them from here, and the only alternative was to trust that the thin bit on top
+   * of a tested service was right.
+   */
+  if (specifier === 'next/server') return next('next/server.js', context);
   if (specifier.startsWith('@/')) {
     const hit = firstExisting(SRC + specifier.slice(2));
     if (hit) return next(hit, context);

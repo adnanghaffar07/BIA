@@ -14,6 +14,7 @@ import { addLeadsToCampaign, findLeadsByEmail, type LeadInput } from '@/lib/inte
 import { type Segment } from './campaignSegment.service';
 import { mergeVarsFor, customOnly, agencyWebsite } from './mergeVars.service';
 import { resolveInboxCollisions } from './inboxCollision.service';
+import { blockedAddresses } from './emailVerification.service';
 
 /**
  * Push CRM leads into a campaign.
@@ -91,6 +92,14 @@ export type PushTriage = {
     holdout: number;
     alreadyInCampaign: number;
     duplicateAddress: number;
+    /**
+     * Refused because the verifier says the mailbox is dead or hostile.
+     *
+     * Its own number, not folded into 'suppressed': a suppression is the homeowner's
+     * decision and a failed verification is a fact about a mailbox, and the two lead
+     * somewhere different — one is final, the other is worth re-checking after a trace.
+     */
+    failedVerification: number;
     /**
      * Addresses held by the surname review (Frank, second email §7).
      *
@@ -200,6 +209,8 @@ export async function triagePush(
   opts: PushOptions = {},
 ): Promise<PushTriage> {
   const leads = await getLeadsFromDb({ ...filters, limit: 100000, orderBy: 'xdate' });
+  // One query for the whole triage — a lookup per candidate would be thousands.
+  const blockedEmails = await blockedAddresses();
 
   // Which ADDRESSES are already in THIS campaign. Pushing the same person twice is how
   // somebody receives the sequence from the start a second time.
@@ -264,6 +275,7 @@ export async function triagePush(
 
   const skipped = {
     noEmail: 0, suppressed: 0, holdout: 0, alreadyInCampaign: 0, duplicateAddress: 0,
+    failedVerification: 0,
     nameReview: 0,
   };
   const eligible: Recipient[] = [];
@@ -354,6 +366,9 @@ export async function triagePush(
       // role-only key would let the first one mask the rest and report them as "already
       // in campaign".
       if (alreadyEmails.has(c.email)) { skipped.alreadyInCampaign++; continue; }
+      // The verifier's verdict, applied here as well as on the list — the push is the last
+      // gate before a homeowner is written to, and it must not rely on the list having run.
+      if (blockedEmails.has(c.email)) { skipped.failedVerification++; continue; }
       eligible.push(c);
     }
     // "No email" means no address FOR THE SELECTED PEOPLE — a card with only a

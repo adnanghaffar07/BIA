@@ -78,3 +78,46 @@ export function cohortLabel(cohort: string | null | undefined): string {
     ? `${month(s)} ${day(s)} – ${day(e)}, ${e.getUTCFullYear()}`
     : `${month(s)} ${day(s)} – ${month(e)} ${day(e)}, ${e.getUTCFullYear()}`;
 }
+
+/**
+ * The Monday of C1. Everything numbered here counts weeks from it.
+ *
+ * Frank writes and speaks in C1…C7, and those seven weeks were a hand-written map in two
+ * separate files. A map stops at its last entry: the week of 23 Nov holds 702 leads and 165
+ * Grade A, and rendered as "—" on the ledger because nobody had added an eighth line.
+ */
+export const COHORT_ONE_MONDAY = '2026-10-05';
+
+/**
+ * Which numbered cohort a renewal week is, or 0 if it is before C1.
+ *
+ * ── Why this is arithmetic and not a list ───────────────────────────────────
+ * A cohort is the Monday of a renewal week, so the numbering is division: C1 is 05 Oct
+ * 2026 and each later Monday is one higher. Keeping it as a list meant the code and the
+ * data could disagree, and they did — silently, on a week with 165 Grade A leads in it.
+ *
+ * ── Why weeks before C1 return 0 rather than a negative ─────────────────────
+ * 4,117 leads sit in 19 weeks between March and September 2026. "C-3" would be a label
+ * nobody uses for a week nobody is mailing; 0 means "not one of the numbered waves", which
+ * is what those weeks actually are.
+ */
+export function cohortNumber(cohort: string | null | undefined): number {
+  if (!cohort || !ISO_DATE.test(String(cohort).slice(0, 10))) return 0;
+  const start = Date.UTC(2026, 9, 5); // 2026-10-05, month is 0-based
+  const d = new Date(`${String(cohort).slice(0, 10)}T00:00:00Z`).getTime();
+  if (!Number.isFinite(d)) return 0;
+  const weeks = Math.round((d - start) / (7 * 86_400_000));
+  return weeks >= 0 ? weeks + 1 : 0;
+}
+
+/**
+ * 'C1', 'C8', … or null for a week before C1.
+ *
+ * Null rather than a placeholder so every caller keeps choosing its own fallback — the
+ * ledger draws a dash, the merge variables fall back to the raw date, and neither has to
+ * strip a string the other invented.
+ */
+export function cohortCode(cohort: string | null | undefined): string | null {
+  const n = cohortNumber(cohort);
+  return n > 0 ? `C${n}` : null;
+}

@@ -145,23 +145,77 @@ function SubHead({ children }: { children: React.ReactNode }) {
 
 // Compact labelled <Select> for the editable Home-Features / confirm-on-call forms.
 // `options` are [value, label] tuples; an "Unknown" (empty) choice is always first.
-function FeatureSelect({ label, value, onChange, options, unknownLabel = 'Unknown' }: {
+function FeatureSelect({ label, value, onChange, options, unknownLabel = 'Unknown', showEmpty = false }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   options: Array<[string, string]>;
   unknownLabel?: string;
+  /**
+   * Show the empty choice in the CLOSED field instead of leaving it blank.
+   *
+   * Off by default, because on the other fifteen selects here an unset value is unremarkable
+   * and a blank box reads fine. It is on for the verification dropdowns, where "nobody has
+   * checked this" is itself the answer: those feed the cohort's verified column, and a field
+   * that looks empty reads the same as one that failed to load. Somebody deciding whether
+   * 616 addresses still need checking should not have to click a dropdown to find out.
+   */
+  showEmpty?: boolean;
 }) {
   return (
     <FormControl size="small" fullWidth>
-      <InputLabel>{label}</InputLabel>
-      <Select value={value ?? ''} label={label} onChange={(e) => onChange(e.target.value)}>
+      {/* shrink is forced with showEmpty, or the label sits on top of the empty-state text. */}
+      <InputLabel shrink={showEmpty ? true : undefined}>{label}</InputLabel>
+      <Select
+        value={value ?? ''}
+        label={label}
+        displayEmpty={showEmpty}
+        notched={showEmpty ? true : undefined}
+        onChange={(e) => onChange(e.target.value)}
+      >
         <MenuItem value=""><em>{unknownLabel}</em></MenuItem>
         {options.map(([v, l]) => <MenuItem key={v} value={v}>{l}</MenuItem>)}
       </Select>
     </FormControl>
   );
 }
+
+/**
+ * ZeroBounce's own vocabulary, offered to a person in their words.
+ *
+ * Kept as the vendor's values rather than a friendly enum, because the same column holds
+ * imported verdicts and hand-set ones and the ledger reads both. A second vocabulary would
+ * mean a translation somewhere, and a translation is a place the two can disagree.
+ *
+ * Only "valid" is deliverable — see DELIVERABLE_STATUSES in emailVerification.service. A
+ * catch-all domain accepts everything and tells you nothing, which is why it does not count.
+ */
+/**
+ * Every verdict ZeroBounce can return, for DISPLAY.
+ *
+ * The importer writes all of these, so the dropdown has to be able to render any of them —
+ * a lead the verifier called catch-all must not show as blank just because a person could
+ * not have chosen it.
+ */
+const VERIFY_LABELS: Record<string, string> = {
+  valid: 'Verified — deliverable',
+  invalid: 'Invalid — does not exist',
+  'catch-all': 'Catch-all — cannot tell',
+  unknown: 'Unknown — checker could not say',
+  abuse: 'Abuse — known complainer',
+  spamtrap: 'Spam trap — never mail',
+  do_not_mail: 'Do not mail',
+};
+
+/**
+ * What a PERSON may choose: the two a human can actually know.
+ *
+ * The rest are things only a verifier can determine — whether a domain accepts everything,
+ * whether an address is a trap — and a producer picking one of those is guessing into a
+ * column the cohort reports. They still arrive from the import and still display; they are
+ * simply not on the menu.
+ */
+const VERIFY_CHOICES = ['valid', 'invalid'];
 
 // Travelers Q#7 restricted dog breeds — confirmed by a BIA employee on first contact.
 const RESTRICTED_DOG_BREEDS = [
@@ -372,6 +426,68 @@ export default function LeadDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead, loading]);
   const dirty = pristine !== null && formSnapshot !== pristine;
+
+  /**
+   * The verification verdict on each person's address.
+   *
+   * Loaded from its own endpoint rather than carried on the lead, because a verdict belongs
+   * to an ADDRESS and a lead holds several — the insured's may pass while the co-insured's
+   * fails, and a re-trace can replace either.
+   */
+  const [verify, setVerify] = useState<{
+    insured: { email: string | null; status: string | null; source: string | null; verifiedAt: string | null };
+    coInsured: { email: string | null; status: string | null; source: string | null; verifiedAt: string | null };
+  } | null>(null);
+  const [verifyBusy, setVerifyBusy] = useState<'insured' | 'coInsured' | null>(null);
+  const [verifyErr, setVerifyErr] = useState<string | null>(null);
+
+  const loadVerify = useCallback(async () => {
+    if (!id) return;
+    try {
+      const j = await (await fetch(`/api/leads/${id}/verify-email`)).json();
+      if (j.success) setVerify({ insured: j.insured, coInsured: j.coInsured });
+    } catch { /* a verdict that fails to load must not take the worksheet down */ }
+  }, [id]);
+
+  /**
+   * Load on mount and whenever the card changes.
+   *
+   * The fetch is wrapped rather than called straight, for two reasons. The lint rule is
+   * right that setState directly inside an effect invites cascading renders; and `alive`
+   * stops a slow response for the PREVIOUS lead painting its verdict onto this one — the
+   * worksheet is stepped through lead by lead, so that race is the normal case, not an
+   * edge one, and a wrong verdict here is a number the cohort then reports.
+   */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!id) return;
+      try {
+        const j = await (await fetch(`/api/leads/${id}/verify-email`)).json();
+        if (alive && j.success) setVerify({ insured: j.insured, coInsured: j.coInsured });
+      } catch { /* a verdict that fails to load must not take the worksheet down */ }
+    })();
+    return () => { alive = false; };
+  }, [id]);
+
+  const setVerification = async (role: 'insured' | 'coInsured', status: string) => {
+    setVerifyBusy(role);
+    setVerifyErr(null);
+    try {
+      const res = await fetch(`/api/leads/${id}/verify-email`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role, status }),
+      });
+      const j = await res.json();
+      if (!j.success) throw new Error(j.error || 'Could not save that');
+      await loadVerify();
+    } catch (e) {
+      setVerifyErr(e instanceof Error ? e.message : 'Could not save that');
+    } finally {
+      setVerifyBusy(null);
+    }
+  };
 
   const save = async (andNext = false) => {
     // Grade-override gate (Frank Phase 5b): changing the grade requires a comment.
@@ -1418,6 +1534,80 @@ export default function LeadDetailPage() {
             <Box sx={{ mb: 1 }}>
               <FeatureSelect label="Insurance History" value={extra.insuranceHistory ?? ''} onChange={(v) => setEx('insuranceHistory', v)}
                 options={[['currently_insured', 'Currently insured (assumed)'], ['lapsed', 'Lapsed'], ['new', 'New / first-time']]} />
+            </Box>
+
+            {/*
+              ── Verified emails ──────────────────────────────────────────────
+              Frank, 25 Sep: "the non verified results need to speak directly back to the
+              cards." The cohort ledger counts an account as verified when one of its
+              insured addresses is deliverable, so this is the screen where that number is
+              made — and it saves on change rather than with the worksheet, because a
+              verdict is a fact about an address, not a draft of this form.
+            */}
+            <Box sx={{ mt: 2, p: 1.5, border: '1px solid #e3e6ea', borderRadius: 1, bgcolor: '#fbfcfd' }}>
+              <Typography variant="caption" sx={{ fontWeight: 700, color: '#3d4658', display: 'block', mb: 1 }}>
+                VERIFIED EMAILS
+              </Typography>
+
+              {(['insured', 'coInsured'] as const).map((role) => {
+                const v = verify?.[role];
+                const label = role === 'insured' ? 'Insured email' : 'Co-insured email';
+                /**
+                 * The two a person may set, plus whatever the verifier already said if it is
+                 * outside that pair.
+                 *
+                 * Without the second half, a lead ZeroBounce called "catch-all" would open
+                 * this dropdown on a value that is not in the list — MUI renders that as an
+                 * empty box, so a checked address would read as unchecked and somebody would
+                 * re-check 616 of them.
+                 */
+                const opts: Array<[string, string]> = VERIFY_CHOICES.map((k) => [k, VERIFY_LABELS[k]]);
+                if (v?.status && !VERIFY_CHOICES.includes(v.status)) {
+                  opts.push([v.status, `${VERIFY_LABELS[v.status] ?? v.status} — from the verifier`]);
+                }
+                return (
+                  <Box key={role} sx={{ mb: role === 'insured' ? 1.5 : 0 }}>
+                    <FeatureSelect
+                      label={label}
+                      value={v?.status ?? ''}
+                      onChange={(val) => setVerification(role, val)}
+                      options={opts}
+                      unknownLabel="Not checked"
+                      showEmpty
+                    />
+                    <Typography variant="caption" sx={{ display: 'block', mt: 0.4, color: '#6b7280' }}>
+                      {verifyBusy === role
+                        ? 'saving…'
+                        : v?.email
+                          ? <>
+                              {v.email}
+                              {/*
+                                Where the verdict came from, always. A producer's mark and a
+                                ZeroBounce result are the same two columns and mean different
+                                things, and this is the number the cohort reports.
+                              */}
+                              {v.status && (
+                                <Box component="span" sx={{ ml: 0.75, color: v.source?.startsWith('producer') ? '#b26a00' : '#1b6b2f', fontWeight: 600 }}>
+                                  · {v.source?.startsWith('producer') ? 'set by hand' : 'ZeroBounce'}
+                                  {v.verifiedAt ? ` ${v.verifiedAt}` : ''}
+                                </Box>
+                              )}
+                            </>
+                          : <em>no {role === 'insured' ? 'insured' : 'co-insured'} address on this card</em>}
+                    </Typography>
+                  </Box>
+                );
+              })}
+
+              {verifyErr && (
+                <Typography variant="caption" sx={{ display: 'block', mt: 0.75, color: '#b3261e' }}>
+                  {verifyErr}
+                </Typography>
+              )}
+              <Typography variant="caption" sx={{ display: 'block', mt: 1, color: '#8a8f98' }}>
+                Counts toward the cohort&apos;s verified column. Only &quot;Verified — deliverable&quot; counts.
+                A later ZeroBounce import replaces anything set here.
+              </Typography>
             </Box>
           </Grid>
 

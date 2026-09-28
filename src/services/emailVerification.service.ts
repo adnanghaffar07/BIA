@@ -43,6 +43,46 @@ export function isDeliverable(status: string | null | undefined): boolean {
   return DELIVERABLE_STATUSES.has(String(status ?? '').trim().toLowerCase());
 }
 
+/**
+ * Verdicts that MUST NOT be mailed.
+ *
+ * Deliberately narrower than "not deliverable". Deliverable answers "may we count this as
+ * reached"; this answers "would sending do harm", and the two are not complements:
+ *
+ *   invalid      the mailbox does not exist. Every send is a hard bounce, and hard bounces
+ *                are what providers score a sending domain on.
+ *   abuse        this recipient has reported mail as spam before. They are likely to again.
+ *   spamtrap     an address that exists to catch senders who do not clean their lists.
+ *                One send can blacklist a domain.
+ *   do_not_mail  role accounts, disposables, toxic domains.
+ *
+ * catch-all and unknown are NOT here. They mean the verifier could not tell, which is not
+ * evidence against the address — blocking them would drop reach on no finding. They simply
+ * do not count as verified.
+ *
+ * An address with NO verdict is not blocked either. 616 addresses have never been submitted
+ * to the verifier, and "not looked at" must never read as "bad".
+ */
+export const BLOCKING_STATUSES = new Set(['invalid', 'abuse', 'spamtrap', 'do_not_mail']);
+
+export function isBlocked(status: string | null | undefined): boolean {
+  return BLOCKING_STATUSES.has(String(status ?? '').trim().toLowerCase());
+}
+
+/**
+ * Every address the verifier found a reason not to mail, as a lookup.
+ *
+ * One query, shared by the send list, the push and the export, so those three cannot
+ * disagree about who is excluded — the failure that had two tabs of this CRM reporting 95
+ * and 93 mailable for the same week.
+ */
+export async function blockedAddresses(): Promise<Map<string, string>> {
+  const rows = await sql`
+    SELECT "email","status" FROM "EmailVerification"
+     WHERE lower("status") = ANY(${[...BLOCKING_STATUSES]})` as Array<Record<string, unknown>>;
+  return new Map(rows.map((r) => [norm(r.email), String(r.status)]));
+}
+
 export type VerificationRow = {
   email: string;
   leadId: string | null;
@@ -116,11 +156,27 @@ export async function deliverableAddresses(): Promise<Set<string>> {
 }
 
 /** Every address checked, deliverable or not — so "unchecked" can be told from "failed". */
-export async function verifiedAddresses(): Promise<Map<string, { status: string; deliverable: boolean }>> {
+export async function verifiedAddresses(): Promise<Map<string, {
+  status: string; deliverable: boolean; source: string; verifiedAt: string | null;
+}>> {
+  /**
+   * `source` travels with the verdict.
+   *
+   * A verdict a producer typed and one ZeroBounce returned are the same two columns and
+   * mean very different things — the cohort ledger counts both as verified. Any screen
+   * showing a verdict has to be able to say which it is, so the lookup carries it rather
+   * than every caller joining for it.
+   */
   const rows = await sql`
-    SELECT "email","status","deliverable" FROM "EmailVerification"` as Array<Record<string, any>>;
+    SELECT "email","status","deliverable","source","verifiedAt" FROM "EmailVerification"` as Array<Record<string, any>>;
   return new Map(rows.map((r) => [norm(r.email), {
-    status: String(r.status), deliverable: Boolean(r.deliverable),
+    status: String(r.status),
+    deliverable: Boolean(r.deliverable),
+    source: String(r.source ?? 'zerobounce'),
+    // timestamp without time zone — read the local parts, never toISOString().
+    verifiedAt: r.verifiedAt instanceof Date
+      ? `${r.verifiedAt.getFullYear()}-${String(r.verifiedAt.getMonth() + 1).padStart(2, '0')}-${String(r.verifiedAt.getDate()).padStart(2, '0')}`
+      : null,
   }]));
 }
 

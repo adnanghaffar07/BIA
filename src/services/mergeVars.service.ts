@@ -1,5 +1,6 @@
 import { sql } from '@/lib/neon';
-import { subjectFor, stepsFor, versionLabel, CTA_BY_STEP, GRADE_B_CTA, COHORT_LABEL, SEGMENT_LABEL, type Segment } from './campaignSegment.service';
+import { subjectFor, stepsFor, versionLabel, CTA_BY_STEP, GRADE_B_CTA, SEGMENT_LABEL, type Segment } from './campaignSegment.service';
+import { cohortCode } from './cohort';
 
 /**
  * The merge variables one person receives, built in ONE place.
@@ -211,7 +212,7 @@ export function mergeVarsFor(
 
     // ── What a report groups by ──
     segment: SEGMENT_LABEL[segment] ?? String(segment),
-    cohort: COHORT_LABEL[cohortDate] ?? cohortDate,
+    cohort: cohortCode(cohortDate) ?? cohortDate,
     subject_variant: variant,
     cta_arm: arm,
     version_label: versionLabel({ segment, cohort: cohortDate, step: 1, subjectVariant: variant, ctaArm: arm }),

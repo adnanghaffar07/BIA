@@ -5,6 +5,7 @@ import { deliverableAddresses } from './emailVerification.service';
 import { COHORT_LABEL } from './campaignSegment.service';
 import { CALL_STATUS_LABEL, isReachedStatus, type CallStatus } from '@/lib/callOutcomes';
 import { getQcReport } from './reports.service';
+import { cohortCode } from './cohort';
 
 /**
  * The phone outreach dashboard (Frank, 25 Sep 2026).
@@ -147,7 +148,7 @@ export async function getPhoneDashboard(f: PhoneFilters = {}): Promise<PhoneDash
       owner: [l.owner1FirstName, l.owner1LastName].filter(Boolean).join(' ') || '—',
       address: [l.addressStreet, l.addressCity].filter(Boolean).join(', '),
       cohort,
-      cohortLabel: COHORT_LABEL[cohort] ?? cohort,
+      cohortLabel: cohortCode(cohort) ?? cohort,
       renewal: String(l.effectiveDate ?? '').slice(0, 10),
       premium: l.travelersPremium ?? l.plymouthPremium ?? null,
       verified: isVerified,
@@ -203,7 +204,7 @@ export async function getPhoneDashboard(f: PhoneFilters = {}): Promise<PhoneDash
     ],
     byCohort: [...cohorts].sort().map(([cohort, v]) => ({
       cohort,
-      label: COHORT_LABEL[cohort] ?? cohort,
+      label: cohortCode(cohort) ?? cohort,
       rated: v.rated,
       verified: v.verified,
       nonVerified: v.rated - v.verified,

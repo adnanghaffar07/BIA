@@ -2,6 +2,7 @@ import { sql } from '@/lib/neon';
 import { insuredEmails, coInsuredEmails, assertRecipientCols } from './recipients.service';
 import { bestInsuredAddress, bestCoInsuredAddress } from './addressRank.service';
 import { heldAddresses } from './emailNameReview.service';
+import { cohortCode, cohortNumber } from './cohort';
 
 /**
  * Which campaign an account belongs to, and which version of it each person receives.
@@ -42,6 +43,15 @@ export const SEGMENT_LABEL: Record<Segment, string> = {
   grade_b: 'Grade B',
 };
 
+/**
+ * Kept only for the seven weeks Frank named, and no longer the source of truth.
+ *
+ * The numbering is now computed from the date — see cohortCode() in cohort.ts. This map
+ * stopped at C7, so the week of 23 Nov (702 leads, 165 Grade A) had no code at all and the
+ * ledger drew a dash against it. Anything reading a cohort code should call cohortCode().
+ *
+ * @deprecated Use cohortCode() / cohortNumber() from './cohort'.
+ */
 export const COHORT_LABEL: Record<string, string> = {
   '2026-10-05': 'C1',
   '2026-10-12': 'C2',
@@ -104,7 +114,7 @@ export function subjectFor(input: {
   }
 
   /** C1…C7 as a number, so the groupings below read the way §5 is written. */
-  const c = Number((COHORT_LABEL[input.cohort] ?? '').replace('C', '')) || 0;
+  const c = cohortNumber(input.cohort);
   const rated = input.segment === 'rated';
 
   if (input.step === 1) {
@@ -182,7 +192,7 @@ export function subjectName(input: {
  * notice it there would reasonably assume it was meant to go out.
  */
 export function stepsFor(cohort: string): number[] {
-  const c = Number((COHORT_LABEL[cohort] ?? '').replace('C', '')) || 0;
+  const c = cohortNumber(cohort);
   return c >= 4 ? [1, 2, 3] : [1, 2];
 }
 
@@ -241,7 +251,7 @@ export function versionLabel(input: {
 }): string {
   const cohort = input.segment === 'grade_b'
     ? GRADE_B_COHORT_LABEL
-    : (COHORT_LABEL[input.cohort] ?? input.cohort);
+    : (cohortCode(input.cohort) ?? input.cohort);
   const subject = subjectName({
     segment: input.segment,
     cohort: input.cohort,
