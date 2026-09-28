@@ -23,9 +23,15 @@ export async function GET(request: NextRequest) {
     const effTo = q.get('effTo') || undefined;
     const stage = q.get('stage') as RecoveryStage | null;
 
-    const counts = await stageCounts(effFrom, effTo);
+    /**
+     * Which grade's pipeline. Anything but 'B' means 'A', so a malformed value returns the
+     * population this endpoint has always returned rather than an empty screen.
+     */
+    const grade = q.get('grade') === 'B' ? 'B' : 'A';
+
+    const counts = await stageCounts(effFrom, effTo, grade);
     const rows = stage && STAGES.includes(stage)
-      ? await leadsAtStage(stage, effFrom, effTo)
+      ? await leadsAtStage(stage, effFrom, effTo, grade)
       : [];
     /**
      * The run history travels with the counts (Frank, fix 20).
@@ -38,7 +44,10 @@ export async function GET(request: NextRequest) {
     const runs = await getProcessRuns({ from: effFrom, to: effTo, limit: 50 });
     const stalled = await stalledRuns();
     return NextResponse.json({
-      success: true, counts, stage, count: rows.length, data: rows, runs, stalled,
+      // `grade` is echoed back so the screen can prove which pipeline it is drawing. Two
+      // populations with identical stage names and a toggle between them is exactly the
+      // shape where a stale response gets read as the other one.
+      success: true, grade, counts, stage, count: rows.length, data: rows, runs, stalled,
     });
   } catch (error) {
     console.error('GET /api/admin/recovery-pipeline error:', error);

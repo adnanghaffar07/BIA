@@ -55,6 +55,9 @@ export async function GET(request: NextRequest) {
       // Grade-B roof report: the age band of the HOUSE, not of the roof.
       ageMin: p.get('ageMin') ? Number(p.get('ageMin')) : undefined,
       ageMax: p.get('ageMax') ? Number(p.get('ageMax')) : undefined,
+      // Anything but 'B' means 'A', so a malformed value can never widen a file — it can
+      // only return the population that was already the default.
+      grade: p.get('grade') === 'B' ? 'B' : 'A',
     });
     return NextResponse.json({ success: true, count: rows.length, data: rows });
   } catch (error) {

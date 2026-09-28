@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLeadsFromDb, getLeadByPropertyId } from '@/services/storage.service';
+import { sql } from '@/lib/neon';
 import { getSessionUser, actorLabel } from '@/lib/auth';
 import { traceAndApply, skipTraceBlocker, effectiveGrade } from '@/services/skipTraceApply.service';
 import { isRunFatal, VendorError } from '@/services/vendorErrors';
-import { insuredEmails } from '@/services/recipients.service';
+import { insuredEmails, insuredPhones } from '@/services/recipients.service';
+import { advanceAfterTrace, type BlastResult } from '@/services/recoveryPipeline.service';
 import { ownerEntityOf, type EntityLead } from '@/lib/ownerEntity';
 
 /**
@@ -37,8 +39,21 @@ import { ownerEntityOf, type EntityLead } from '@/lib/ownerEntity';
  * ceiling, not a charge. Actual spend comes back per chunk.
  */
 
-/** Blast is Grade A only — Frank's request, and the guard against a mis-click over the book. */
-const BLAST_GRADES = ['A'];
+/**
+ * The blast runs one grade at a time, and never a mix.
+ *
+ * It was Grade A only — Frank's request, and a guard against a mis-click over the whole
+ * book. Grade B is now allowed because he asked for it on 28 Sep ("Email outreach may be
+ * more important on these accounts than Grade As since we don't have a band price"), but
+ * the two remain SEPARATE runs rather than one widened one.
+ *
+ * They are not the same decision. A Grade A trace chases an address for an account that is
+ * already priced with the carrier work done — the value of the address is known. A Grade B
+ * trace is speculative: 3,482 leads, no band price, and at 15 credits a hit that is a
+ * five-figure bet. Merging them would let one click spend the second budget while somebody
+ * believed they were approving the first.
+ */
+const BLAST_GRADES = ['A', 'B'];
 // Serverless budget: a Tracerfy lookup plus the courtesy gap runs ~600ms+, so 25
 // leads exceeds every Vercel function limit. Five keeps a chunk near 4s. A timeout
 // here is worse than elsewhere — credits are spent but the caller never learns which
@@ -63,6 +78,19 @@ function parseFilters(req: NextRequest) {
   const str = (k: string) => { const v = q.get(k); return v && v.trim() ? v.trim() : undefined; };
   const engineRaw = str('engine');
   return {
+    /**
+     * Run the QUEUE rather than a filter set.
+     *
+     * The blast normally rebuilds the Leads page's filters so its population is exactly
+     * what the user is looking at. That cannot express the Grade-B roof pull — its
+     * population is "Grade B, roof year unknown, house 21-76 years old", and home age is
+     * not a Leads filter — so those leads are queued explicitly instead.
+     *
+     * In queue mode the filters are ignored entirely. Half-applying them would produce a
+     * population that is neither the queue nor the filters, and the only evidence would be
+     * the credit bill.
+     */
+    queue: str('queue') === 'B' ? 'B' as const : str('queue') === 'A' ? 'A' as const : undefined,
     grade: str('grade'),
     status: str('status'),
     carrier: str('carrier'),
@@ -91,6 +119,13 @@ function parseFilters(req: NextRequest) {
 
 /** Refuse anything outside the feature's contract, with a reason worth showing. */
 function validate(f: ReturnType<typeof parseFilters>): string | null {
+  /**
+   * A queue is already an explicit list of leads somebody chose, so it needs neither a date
+   * range nor a grade filter — it carries its own. Requiring them would mean re-describing
+   * the selection a second time, and the two descriptions could disagree.
+   */
+  if (f.queue) return null;
+
   if (!f.effectiveDate || !f.effectiveTo) {
     return 'Set both a from and a to effective date before running a blast.';
   }
@@ -98,7 +133,7 @@ function validate(f: ReturnType<typeof parseFilters>): string | null {
     return 'The from date is after the to date.';
   }
   if (!f.grade || !BLAST_GRADES.includes(f.grade)) {
-    return 'The blast runs on Grade A leads only. Set the Grade filter to A.';
+    return 'The blast runs one grade at a time. Set the Grade filter to A or B.';
   }
   return null;
 }
@@ -121,14 +156,43 @@ type Triage = {
 
 /** Split the filtered population into what we would trace and what we would skip. */
 async function triage(f: ReturnType<typeof parseFilters>): Promise<Triage> {
-  // No practical cap: the blast must see the whole matching set, not a page of it.
-  const candidates = await getLeadsFromDb({ ...f, limit: 100000, orderBy: 'xdate' });
+  /**
+   * Queue mode reads the leads somebody put in the queue; filter mode rebuilds the Leads
+   * page's query. No practical cap either way: the blast must see the whole matching set,
+   * not a page of it.
+   *
+   * blastQueueGrade is matched, NOT the lead's current grade. A lead re-graded after being
+   * queued stays in the run it was chosen for — otherwise a Grade B pull would quietly
+   * shrink between the estimate and the run, and nothing on screen would say why.
+   */
+  const candidates = f.queue
+    ? (await sql`
+        SELECT * FROM "Lead"
+         WHERE "blastQueuedAt" IS NOT NULL
+           AND "blastQueueGrade" = ${f.queue}
+           AND "blastSkipTracedAt" IS NULL
+         ORDER BY "blastQueuedAt"` as Record<string, unknown>[])
+    : await getLeadsFromDb({ ...f, limit: 100000, orderBy: 'xdate' });
   const eligible: any[] = [];
   const entityOwned: EntityLead[] = [];
   let alreadyTraced = 0, missingName = 0, wrongGrade = 0, alreadyReachable = 0;
 
   for (const lead of candidates) {
-    if (!BLAST_GRADES.includes(effectiveGrade(lead))) { wrongGrade++; continue; }
+    /**
+     * Against the grade THIS run asked for, not against the set of grades the blast is
+     * allowed to handle.
+     *
+     * Testing membership of BLAST_GRADES was correct while that array held one value. The
+     * moment Grade B was added it silently became "A or B is fine either way", so a Grade A
+     * lead matching the other filters would have been traced and billed inside a run
+     * somebody started for Grade B — and the run summary would have called it eligible.
+     */
+    /**
+     * In queue mode the grade was decided when the lead was queued and is already in the
+     * WHERE clause above, so re-checking it here against a filter that was never set would
+     * reject every row.
+     */
+    if (!f.queue && effectiveGrade(lead) !== f.grade) { wrongGrade++; continue; }
     if (lead.deepSkipTracedAt) { alreadyTraced++; continue; }
 
     /**
@@ -210,6 +274,21 @@ export async function GET(req: NextRequest) {
   }
 }
 
+/**
+ * A zeroed BlastResult for advanceAfterTrace to increment and this route to throw away.
+ *
+ * Typed rather than cast: a cast would keep compiling if BlastResult gained a field the
+ * shared function then read as undefined, and the first sign would be a counter that is
+ * silently wrong on the pipeline screen.
+ */
+function pipelineScratch(): BlastResult {
+  return {
+    heldFromFrozenCohort: 0, vendor: 'tracerfy', dryRun: false, pool: 0, attempted: 0,
+    matched: 0, recovered: 0, phoneOnly: 0, movedOn: 0, regraded: 0,
+    skippedAlreadyTraced: 0, entityOwned: 0, errors: [],
+  };
+}
+
 /** Trace one bounded chunk. The client calls this until `done`. */
 export async function POST(req: NextRequest) {
   try {
@@ -255,6 +334,52 @@ export async function POST(req: NextRequest) {
         const out = await traceAndApply(lead, createdBy, { runId });
         if (out.matched) hit++; else miss++;
         creditsSpent += out.credits;
+
+        /**
+         * ── Move the lead along the recovery pipeline ────────────────────────
+         *
+         * traceAndApply writes the contact data; it does not know the pipeline exists. So a
+         * lead traced from here kept whatever stage it had, and the pipeline panel reported
+         * "Not traced yet" for a lead this route had just charged Tracerfy for — with a
+         * queue card directly above it saying "1 already traced".
+         *
+         * advanceAfterTrace is the SAME function the pipeline's own runner uses, so a
+         * recovery found by a blast is recorded exactly as one found by the pipeline:
+         * un-isolated, re-graded by the rules, recapture logged, activity written. Copying
+         * that logic here instead would be a second definition of "recovered", and the two
+         * would drift.
+         *
+         * Only for leads already in the pipeline. A blast over leads that were never
+         * isolated has no stage to advance, and inventing one would enrol the whole book
+         * into a panel that is meant to show work somebody chose to start.
+         */
+        if (lead.recoveryStage) {
+          const refreshed = await getLeadByPropertyId(lead.propertyId);
+          if (refreshed) {
+            await advanceAfterTrace({
+              before: lead,
+              after: refreshed,
+              // traceAndApply has already written. An empty delta means the transition adds
+              // only the stage and recovery fields on top of what is already stored.
+              update: {},
+              found: {
+                // Derived from the lead as it now is, because traceAndApply reports booleans
+                // rather than the addresses themselves. Used for the activity note and the
+                // recapture record, never for the decision — that reads the lead.
+                emails: insuredEmails(refreshed),
+                phones: insuredPhones(refreshed),
+                matched: out.matched,
+              },
+              vendor: 'tracerfy',
+              createdBy,
+              // A real BlastResult, discarded afterwards. advanceAfterTrace increments these
+              // counters for a PIPELINE run; this is a blast and reports its own totals
+              // below, so the object exists only to satisfy the shared function.
+              out: pipelineScratch(),
+              now: new Date(),
+            });
+          }
+        }
         if (out.recoveredPhone) recoveredPhone++;
         if (out.recoveredEmail) recoveredEmail++;
         if (out.coInsured) coInsuredFound++;

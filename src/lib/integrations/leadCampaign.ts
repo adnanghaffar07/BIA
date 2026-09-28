@@ -672,6 +672,53 @@ export async function deleteLead(leadId: string): Promise<void> {
 }
 
 /**
+ * Update a contact's merge variables in place.
+ *
+ * ── Why this is needed ──────────────────────────────────────────────────────
+ * custom_variables are otherwise written ONLY at create, so every value a contact holds is
+ * a snapshot from upload time. band_low and band_high are empty on all 186 C1–C3 contacts
+ * right now, waiting on Frank. Without this, supplying them later would mean deleting and
+ * re-adding every contact — which restarts their sequence from step 1.
+ *
+ * ── Measured, not assumed (probe, 28 Sep 2026) ──────────────────────────────
+ * The vendor's PATCH is documented nowhere and our own notes record that it silently drops
+ * keys it does not recognise, so each of these was checked by writing and READING BACK:
+ *
+ *   • an existing variable is updated                          — yes
+ *   • a variable absent at create can be introduced            — yes
+ *   • a PARTIAL patch MERGES; untouched keys survive           — yes
+ *   • a top-level key the API does not know still returns 200  — yes
+ *
+ * That last one is why this reads the contact back and compares rather than trusting the
+ * status. A 200 from this endpoint means the request was accepted, not that anything
+ * changed, and a re-sync built on the status alone would report success forever while every
+ * email went out with a blank where the price should be.
+ *
+ * The merge behaviour is what makes a targeted fix safe: sending only { band_low, band_high }
+ * cannot wipe the renewal date or the resolved copy sitting beside it.
+ */
+export async function updateLeadVariables(
+  leadId: string,
+  vars: Record<string, string | number | null>,
+): Promise<{ ok: boolean; mismatched: string[] }> {
+  await apiFetch(`/leads/${encodeURIComponent(leadId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ custom_variables: vars }),
+  });
+
+  // Read back. The write's own response is not evidence — see above.
+  const res = await apiFetch(`/leads/${encodeURIComponent(leadId)}`);
+  const after = (await res.json() as { custom_variables?: Record<string, unknown>; payload?: Record<string, unknown> });
+  const stored = after.custom_variables ?? after.payload ?? {};
+
+  const mismatched = Object.entries(vars)
+    .filter(([k, v]) => String(stored[k] ?? '') !== String(v ?? ''))
+    .map(([k]) => k);
+
+  return { ok: mismatched.length === 0, mismatched };
+}
+
+/**
  * How many leads each campaign actually holds.
  *
  * Needed because /campaigns/analytics only contains campaigns that have SEND

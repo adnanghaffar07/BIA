@@ -1,4 +1,5 @@
 import { sql } from '@/lib/neon';
+import { STATUS_FOR_OUTCOME, type CallStatus, type CallOutcome } from '@/lib/callOutcomes';
 import { mergeVarsFor } from './mergeVars.service';
 import { eligibilityReasonLabel } from '@/types/carrier';
 import { compareOwnerNames } from './ownerNameMatch.service';
@@ -100,7 +101,7 @@ export interface QcRow {
    * does to it. Derived, never stored: the card derives the same values on read, and a
    * cached copy would be the first thing to go stale.
    */
-  callStatus?: 'not_attempted' | 'attempting' | 'contacted' | 'unreachable';
+  callStatus?: CallStatus;
   callAttempts?: number;
   /** Distinct DAYS dialled — half of Frank's Sec. 10.5 stop rule, and not the same as attempts. */
   callDays?: number;
@@ -172,6 +173,15 @@ export interface QcReportParams {
    */
   ageMin?: number;
   ageMax?: number;
+  /**
+   * Which grade the email lists are for.
+   *
+   * 'A' is the wave-one go-live. 'B' is what Frank asked for on 28 Sep: "Email outreach may
+   * be more important on these accounts than Grade As since we don't have a band price."
+   * They are separate populations sent different copy — a Grade B has no band price and one
+   * CTA arm, not two — so this picks one, never both at once.
+   */
+  grade?: 'A' | 'B';
 }
 
 const nm = (r: any) => `${String(r.owner1FirstName ?? '').replace('null', '').trim()} ${String(r.owner1LastName ?? '').trim()}`.trim();
@@ -441,15 +451,41 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
      * older than 20, and 75 or newer. The report's own subtitle states them, so nobody has
      * to infer from the rows which band they are looking at.
      */
-    const ageMin = Number.isFinite(params.ageMin) ? Number(params.ageMin) : 20;
-    const ageMax = Number.isFinite(params.ageMax) ? Number(params.ageMax) : 75;
+    /**
+     * ── The band is 21 to 76 inclusive, and ageMin is EXCLUSIVE ───────────────
+     *
+     * Frank, 28 Sep: "the logic we discussed today was homes 21yrs-76 years old, right now
+     * it's just showing 20-75 — 20 yrs old is within carrier appetite, older than 20 falls
+     * outside."
+     *
+     * The lower bound was already right: the comparison below is `> ageMin`, so 20 selects
+     * homes of 21 and up, which is exactly "older than 20". What was wrong is that every
+     * label printed the PARAMETER (20) instead of the band it produces (21), so the screen
+     * said 20-75 while the query returned 21-75 — and the only way to notice was to check
+     * a row's age by hand.
+     *
+     * The upper bound was genuinely short by one: 75 where Frank wants 76.
+     */
+    /**
+     * ── Both ends INCLUSIVE, because that is what the boxes say ──────────────
+     *
+     * The lower bound used to be exclusive: `age > ageMin`. It matched Frank's wording
+     * ("older than 20 falls outside") but it meant the "from" box did not mean what it said,
+     * and the first person to type Frank's own number into it — 21 — got homes of 22 and up.
+     * The screen read "homes 22-76" and the run was quietly a year short at the bottom.
+     *
+     * A comment explaining a trap is not as good as not having one. 21 now means 21, and
+     * the default is 21 rather than a 20 that has to be converted in somebody's head.
+     */
+    const ageMin = Number.isFinite(params.ageMin) ? Number(params.ageMin) : 21;
+    const ageMax = Number.isFinite(params.ageMax) ? Number(params.ageMax) : 76;
     rows = await sql`
       SELECT * FROM "Lead"
       WHERE "grade" = 'B' AND "manualGrade" IS NULL AND "roofYear" IS NULL
         AND ("propertyType" IS NULL OR "propertyType" <> 'CONDO')
         AND ("landUse" IS NULL OR "landUse" NOT ILIKE '%condo%')
         AND "yearBuilt" IS NOT NULL
-        AND (EXTRACT(YEAR FROM NOW())::int - "yearBuilt") >  ${ageMin}
+        AND (EXTRACT(YEAR FROM NOW())::int - "yearBuilt") >= ${ageMin}
         AND (EXTRACT(YEAR FROM NOW())::int - "yearBuilt") <= ${ageMax}
       ORDER BY "yearBuilt" ASC`;
     const year = new Date().getFullYear();
@@ -492,11 +528,20 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
       WITH attempts AS (
         SELECT "leadId",
                COUNT(*)::int                                            AS tries,
-               COUNT(DISTINCT "attemptedAt"::date)::int                 AS days,
+               -- EASTERN days, not UTC ones. attemptedAt holds UTC, so ::date puts a
+               -- call placed at 11pm in New Jersey on the following day — splitting one
+               -- evening across two, which is what the 3+ day unreachable rule counts.
+               COUNT(DISTINCT ("attemptedAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')::date)::int AS days,
                MAX("attemptedAt")                                       AS last_at,
                BOOL_OR("outcome" IN ('callback_scheduled','quote_requested',
                                      'not_interested','do_not_call'))   AS reached,
                (ARRAY_AGG("outcome" ORDER BY "attemptedAt" DESC))[1]    AS last_outcome,
+               -- The latest outcome that REACHED somebody, which is what the status follows
+               -- (Frank, 25 Sep). The plain latest above can be a no-answer placed after the
+               -- conversation that decided everything.
+               (ARRAY_AGG("outcome" ORDER BY "attemptedAt" DESC)
+                  FILTER (WHERE "outcome" IN ('callback_scheduled','quote_requested',
+                                              'not_interested','do_not_call')))[1] AS last_reached,
                (ARRAY_AGG("calledBy" ORDER BY "attemptedAt" DESC))[1]   AS last_by
           FROM "CallAttempt"
          GROUP BY "leadId"
@@ -565,9 +610,16 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
          */
         const tries = Number(r.call_tries ?? 0);
         const days = Number(r.call_days ?? 0);
-        const callStatus = r.call_reached ? 'contacted'
-          : (tries >= 4 && days >= 3) ? 'unreachable'
-            : tries ? 'attempting' : 'not_attempted';
+        /**
+         * The status follows the latest REACHING outcome — the same mapping the call panel
+         * uses, imported rather than restated. Two derivations of one rule is how this
+         * report and the card come to disagree about the same lead.
+         */
+        const callStatus: CallStatus = (r.last_reached
+          ? STATUS_FOR_OUTCOME[r.last_reached as CallOutcome]
+          : undefined)
+          ?? ((tries >= 4 && days >= 3) ? 'unreachable'
+            : tries ? 'attempting' : 'not_attempted');
 
         /**
          * Terminal states first. A lead that sold and was also once quoted is SOLD — the
@@ -652,7 +704,24 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     // blastSkipTracedAt is the whole definition — it is written only by the blast
     // (migration 016), so the card button can never appear here. deepSkipTracedAt
     // cannot answer this: both routes set it.
-    rows = await sql`SELECT * FROM "Lead" WHERE "blastSkipTracedAt" IS NOT NULL ORDER BY "blastSkipTracedAt" DESC`;
+    /**
+     * ── Waiting as well as done ───────────────────────────────────────────
+     *
+     * This selected only blastSkipTracedAt, so the report answered "what has the blast
+     * traced". That was the whole feature until leads could be QUEUED for a blast from the
+     * QC screen — and a queued lead has no trace stamp, so it appeared nowhere. Somebody
+     * moving 2,681 leads into the blast would press the button, open this report, and see
+     * exactly what was there before.
+     *
+     * A queue nobody can look at is indistinguishable from a button that did nothing.
+     *
+     * Waiting rows sort FIRST. They are the ones with a decision still attached — whether
+     * to spend the credits — where a traced row is history.
+     */
+    rows = await sql`
+      SELECT * FROM "Lead"
+       WHERE "blastSkipTracedAt" IS NOT NULL OR "blastQueuedAt" IS NOT NULL
+       ORDER BY ("blastSkipTracedAt" IS NOT NULL), "blastQueuedAt" DESC, "blastSkipTracedAt" DESC`;
     return rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => {
@@ -667,15 +736,36 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
         const context = matched
           ? `Matched — ${got || 'no contact returned'}`
           : 'No match';
-        const row = rowOf(r, context, r.blastSkipTracedBy ?? null, iso(r.blastSkipTracedAt));
+        /**
+         * A queued lead has not been traced, so "No match" would be a lie — it says we
+         * looked and found nothing. It is waiting to be looked at.
+         */
+        const waiting = r.blastSkipTracedAt == null && r.blastQueuedAt != null;
+        const row = waiting
+          ? rowOf(r, `Waiting in the Grade ${r.blastQueueGrade ?? '?'} queue — not traced yet`,
+              r.blastQueuedBy ?? null, iso(r.blastQueuedAt))
+          : rowOf(r, context, r.blastSkipTracedBy ?? null, iso(r.blastSkipTracedAt));
         return {
           ...row,
           // Short, stable label so rows from one run read as one run in the table.
-          reason: r.blastRunId ? `Run ${String(r.blastRunId).slice(0, 8)}` : null,
+          reason: waiting
+            ? (r.blastQueueReason ?? 'Queued')
+            : (r.blastRunId ? `Run ${String(r.blastRunId).slice(0, 8)}` : null),
           runId: r.blastRunId ?? null,
           hasPhone,
           hasEmail,
-          matched,
+          // A waiting row has not been charged and has not matched. Forcing it false keeps
+          // it out of the hit counts, which are a record of money spent.
+          matched: waiting ? false : matched,
+          /**
+           * Which blast this lead belongs to, and whether it has run.
+           *
+           * queueGrade is read from blastQueueGrade, NOT from the lead's grade. It is the
+           * queue the lead was put in; a re-grade afterwards must not move it between two
+           * runs with different economics.
+           */
+          queueGrade: (r.blastQueueGrade ?? null) as 'A' | 'B' | null,
+          queueState: waiting ? 'waiting' : (r.blastQueuedAt ? 'traced' : 'traced_unqueued'),
         };
       });
   }
@@ -734,10 +824,18 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     return rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       /**
-       * Grade A only. These lists go to a sending tool, and the go-live is Grade A: a
-       * B or C address in the file is one nobody decided to mail.
+       * One grade per file, and never a mix.
+       *
+       * These lists go straight to a sending tool, so the grade is not a column somebody
+       * filters later — it decides which COPY the row receives. A Grade A carries a band
+       * price and two CTA arms; a Grade B has no band price at all and a single arm
+       * (§3, "R4 · Single arm, wave two"). Putting both in one file means one of the two
+       * populations gets an email written for the other, and the file would look fine.
+       *
+       * Defaults to A, so a saved link or bookmark from before this option existed keeps
+       * returning exactly what it returned before.
        */
-      .filter((r: any) => String(r.manualGrade || r.grade || '') === 'A')
+      .filter((r: any) => String(r.manualGrade || r.grade || '') === (params.grade ?? 'A'))
       .map((r: any) => {
         const insured = insuredEmails(r);
         const co = coInsuredEmails(r);

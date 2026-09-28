@@ -11,6 +11,7 @@
 import './lib/env.mjs';
 import { sql } from '@/lib/neon';
 import { callState, logAttempt, numbersOnCard } from '@/services/callLog.service';
+import { isReachedStatus } from '@/lib/callOutcomes';
 
 let pass = 0; const fail = [];
 const ok = (n, c, d = '') => { if (c) pass++; else { fail.push(n); console.log(`  FAIL  ${n} ${d}`); } };
@@ -100,9 +101,40 @@ try {
   ok('stamped for cheap reporting', l5.callUnreachableAt != null);
 
   console.log('--- 6. reaching someone outranks the stop rule ---');
+  /**
+   * The status now names WHAT they said, not merely that they were reached (Frank, 25 Sep
+   * 2026 — "'Contacted' is too broad"). A quote request reads as 'quoting'; the point being
+   * tested is unchanged, which is that reaching somebody retires the unreachable count.
+   */
   await logAttempt({ lead: seed, numberDialled: nums[0].number, outcome: 'quote_requested', by: 'test' });
   st = await callState(await fresh());
-  eq('contacted beats unreachable', st.status, 'contacted');
+  eq('a quote request reads as quoting', st.status, 'quoting');
+  ok('and it counts as having reached them', isReachedStatus(st.status));
+  ok('so the lead is no longer unreachable', st.status !== 'unreachable');
+
+  console.log('--- 6b. the status follows the outcome, one for one ---');
+  /**
+   * Frank's four rules, each checked against the outcome that should produce it. The
+   * mapping is the requirement; a test that only checked "reached" would pass while every
+   * one of them pointed at the wrong pile of work.
+   */
+  for (const [outcome, want] of [
+    ['callback_scheduled', 'callback_due'],
+    ['quote_requested', 'quoting'],
+    ['not_interested', 'not_interested'],
+    ['do_not_call', 'do_not_call'],
+  ]) {
+    await clean();
+    await logAttempt({
+      lead: seed, numberDialled: nums[0].number, outcome, by: 'test',
+      ...(outcome === 'callback_scheduled'
+        ? { callbackAt: new Date(Date.now() + 86400_000).toISOString().slice(0, 16) }
+        : {}),
+    });
+    st = await callState(await fresh());
+    eq(`${outcome} -> ${want}`, st.status, want);
+  }
+  await clean();
 
   console.log('--- 7. a bad number leaves rotation ---');
   await clean();

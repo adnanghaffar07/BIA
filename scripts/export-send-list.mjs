@@ -11,11 +11,12 @@
  * their own subject line and CTA. An account with both contributes two rows carrying
  * different variants, which is the whole point of balancing per person.
  *
- * -- What is deliberately NOT in this file -----------------------------------
- * There is no band_low / band_high column.
+ * -- band_low / band_high ship EMPTY -----------------------------------------
+ * The two columns are present so Zoya can build the import mapping once (28 Sep) and not
+ * rebuild it the day a real range exists. They carry no value today.
  *
- * The CRM has lowPremium/highPremium populated on every rated account and they look like
- * the band the copy asks for. They are not: they are derived from expectedPremium, which a
+ * The CRM does have lowPremium/highPremium on every rated account and they look like the
+ * band the copy asks for. They are not: they are derived from expectedPremium, which a
  * machine produced. On 531 of the 540 rated accounts the producer's own rating falls BELOW
  * that band -- median a factor of 3.17, worst case a home a producer rated at $251 against a
  * band reading $6,891-$10,253.
@@ -23,10 +24,9 @@
  * Frank, second email §5: "accounts are being marked rated that nobody rated -- and they
  * would receive a band price that doesn't exist."
  *
- * Shipping the column empty would be no safer than shipping it wrong: an empty column in a
- * file headed band_low is an invitation to fill it from the nearest plausible field. So the
- * producer's actual number travels instead, under its own name, and the band waits for
- * Frank to say where a RANGE is supposed to come from.
+ * So the producer's actual number travels alongside, under its own name, and the band waits
+ * for Frank to say where a RANGE is supposed to come from. Until he does, a campaign step
+ * that merges band_low renders nothing rather than a number nobody quoted.
  *
  * -- Held addresses are excluded ---------------------------------------------
  * An address failing the surname check is not in this file at all (§7 of the second email:
@@ -37,7 +37,8 @@ import './lib/env.mjs';
 import { sql } from '@/lib/neon';
 import { bestInsuredAddress, bestCoInsuredAddress } from '@/services/addressRank.service';
 import { heldAddresses } from '@/services/emailNameReview.service';
-import { mergeVarsFor } from '@/services/mergeVars.service';
+import { mergeVarsFor, agencyWebsite } from '@/services/mergeVars.service';
+import { resolveInboxCollisions } from '@/services/inboxCollision.service';
 import { subjectName, CTA_BY_STEP } from '@/services/campaignSegment.service';
 import fs from 'node:fs';
 
@@ -48,6 +49,9 @@ const outArg = process.argv.find((a) => a.startsWith('--out='));
 const OUT = outArg ? outArg.slice('--out='.length) : null;
 
 const held = await heldAddresses();
+// The same value the push reads, so an uploaded contact and a pushed one cannot disagree
+// about whether the booking link exists.
+const site = await agencyWebsite();
 const leads = await sql`
   SELECT * FROM "Lead"
    WHERE "sendListBuiltAt" IS NOT NULL AND "cohort" BETWEEN ${FROM} AND ${TO}
@@ -57,12 +61,17 @@ const leads = await sql`
 const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
 const COLUMNS = [
-  // The header row becomes the variable name on the platform, so these are spelled exactly
-  // as the template must reference them: camelCase, the way Instantly names its own.
-  'email', 'firstName', 'lastName', 'recipientRole',
-  'segment', 'cohort', 'subjectVariant', 'ctaArm',
-  'streetAddress', 'streetName', 'town', 'state', 'zip',
-  'renewalDate', 'month',
+  // The header row is what the platform offers on the import screen, and for a column
+  // mapped as a Custom Variable it becomes the variable name the template uses. So these
+  // match Frank's copy exactly (Zoya, 28 Sep) — nothing has to be rewritten at either end.
+  //
+  // email, firstName and lastName are mapped to the platform's OWN types on import, so
+  // their headers only have to be recognisable to a person; the variables they produce are
+  // {{firstName}} and {{lastName}} whatever this says.
+  'email', 'firstName', 'lastName', 'recipient_role',
+  'segment', 'cohort', 'subject_variant', 'cta_arm',
+  'street_address', 'street_name', 'town', 'state', 'zip',
+  'renewal_date', 'month', 'meeting_link',
   /**
    * The actual subject line and CTA wording for each step, fully resolved.
    *
@@ -80,12 +89,14 @@ const COLUMNS = [
    * Blank at step 3 for C1–C3: the §2 calendar gives those weeks two emails, and copy sitting
    * in the platform for a send that is not scheduled is copy somebody will eventually send.
    */
-  'subject1', 'subject2', 'subject3',
-  'cta1', 'cta2', 'cta3',
-  'subjectName1', 'ctaName1', 'versionLabel1',
+  'subject_1', 'subject_2', 'subject_3',
+  'cta_1', 'cta_2', 'cta_3',
+  'subject_name_1', 'cta_name_1', 'version_label_1',
+  // Empty, and empty on purpose -- see the top of the file. Mapped now, filled later.
+  'band_low', 'band_high',
   // The producer's own figure, under its own name. NOT a band and not a range.
-  'producerPremium', 'premiumSource',
-  'leadId', 'propertyId',
+  'producer_premium', 'premium_source',
+  'lead_id', 'property_id',
 ];
 
 const rows = [];
@@ -114,39 +125,121 @@ for (const l of leads) {
     if (!email) continue;
     if (held.has(email)) { heldOut++; continue; }
 
-    const v = mergeVarsFor(l, role);
+    const v = mergeVarsFor(l, role, site);
     if (!v.firstName) continue;
 
     rows.push([
       email, v.firstName, v.lastName, role,
-      v.segment, v.cohort, v.subjectVariant, v.ctaArm,
-      v.streetAddress, v.streetName, v.town, l.addressState ?? '', l.addressZip ?? '',
-      v.renewalDate, v.month,
-      v.subject1, v.subject2, v.subject3,
-      v.cta1, v.cta2, v.cta3,
-      subjectName({ segment: l.campaignSegment, cohort: String(l.cohort), step: 1, variant: v.subjectVariant }),
-      CTA_BY_STEP[1][Number(v.ctaArm)].name,
-      v.versionLabel,
+      v.segment, v.cohort, v.subject_variant, v.cta_arm,
+      v.street_address, v.street_name, v.town, l.addressState ?? '', l.addressZip ?? '',
+      v.renewal_date, v.month, v.meeting_link,
+      v.subject_1, v.subject_2, v.subject_3,
+      v.cta_1, v.cta_2, v.cta_3,
+      subjectName({ segment: l.campaignSegment, cohort: String(l.cohort), step: 1, variant: v.subject_variant }),
+      CTA_BY_STEP[1][Number(v.cta_arm)].name,
+      v.version_label,
+      /**
+       * band_low and band_high ship as EMPTY columns, present so the mapping can be built
+       * (Zoya, 28 Sep) and filled the moment a real range exists.
+       *
+       * The CRM does hold a low/high pair. It is derived from a machine estimate and sits a
+       * median 3.2x above what the producer actually rated — on 531 of 540 rated accounts
+       * the producer's own figure falls below it. Putting that in front of a homeowner is
+       * exactly what Frank warned about, so the column is here and the value is not.
+       */
+      '', '',
       premium, premium === '' ? '' : (l.ratedSource ?? 'unrecorded'),
       l.id, l.propertyId ?? '',
     ]);
   }
 }
 
-const csv = [COLUMNS.map(esc).join(','), ...rows.map((r) => r.map(esc).join(','))].join('\r\n');
+/**
+ * ── One inbox, one contact ──────────────────────────────────────────────────
+ *
+ * The platform keys a contact by EMAIL ADDRESS and every custom variable hangs off that
+ * row. Two of our rows sharing an address are therefore not two contacts: the upload keeps
+ * one, and which one is whichever the file happened to list last.
+ *
+ * That is how ramupedada@gmail.com would have been told about 3304 Expedition St while
+ * holding the renewal date of 3303 — a perfectly delivered email describing the wrong
+ * house. See inboxCollision.service for the rule; the loser is held for its own cohort
+ * rather than dropped.
+ */
+const iEmail = COLUMNS.indexOf('email');
+const iRenewal = COLUMNS.indexOf('renewal_date');
+const iRole = COLUMNS.indexOf('recipient_role');
+const iProp = COLUMNS.indexOf('property_id');
+const iCohort = COLUMNS.indexOf('cohort');
+const { keep, held: inboxHeld, collisions, needsDecision } = resolveInboxCollisions(rows, (r) => ({
+  email: String(r[iEmail] ?? ''),
+  renewalDate: String(r[iRenewal] ?? ''),
+  role: String(r[iRole] ?? ''),
+  propertyId: String(r[iProp] ?? ''),
+  cohort: String(r[iCohort] ?? ''),
+}));
+
+const csv = [COLUMNS.map(esc).join(','), ...keep.map((r) => r.map(esc).join(','))].join('\r\n');
 
 console.error(`${FROM} to ${TO}`);
 console.error(`  ${leads.length} accounts on the send list`);
-console.error(`  ${rows.length} contacts exported`);
+console.error(`  ${keep.length} contacts exported`);
 console.error(`  ${heldOut} held by the surname review and NOT exported`);
+if (collisions) {
+  console.error(`  ${inboxHeld.length} held because ${collisions} inbox(es) are shared by more than one contact:`);
+  for (const h of inboxHeld) {
+    console.error(`     ! ${h.row[iEmail]} — ${h.row[8]} (renews ${h.row[iRenewal]})`);
+    console.error(`       ${h.reason}`);
+  }
+}
 const bySeg = new Map();
-for (const r of rows) bySeg.set(r[4], (bySeg.get(r[4]) ?? 0) + 1);
+for (const r of keep) bySeg.set(r[4], (bySeg.get(r[4]) ?? 0) + 1);
 for (const [k, v] of [...bySeg].sort()) console.error(`     ${k}: ${v}`);
 const byC = new Map();
-for (const r of rows) byC.set(r[5], (byC.get(r[5]) ?? 0) + 1);
+for (const r of keep) byC.set(r[5], (byC.get(r[5]) ?? 0) + 1);
 console.error('  by cohort: ' + [...byC].sort().map(([k, v]) => `${k} ${v}`).join(' · '));
-console.error('\n  NOTE: no band_low / band_high column. The CRM band is machine-derived and');
-console.error('  contradicts the producer rating on 98% of accounts — see the header of this file.');
+const withMeet = keep.filter((r) => r[15]).length;
+console.error(`\n  band_low / band_high: columns present, EMPTY on all ${keep.length} rows.`);
+console.error('  The CRM band is machine-derived and contradicts the producer rating on 98% of');
+console.error('  accounts, so the value waits for Frank — see the header of this file.');
+console.error(`  meeting_link: filled on ${withMeet} of ${keep.length} rows (needs agencyWebsite in AppConfig).`);
 
-if (OUT) { fs.writeFileSync(OUT, csv, 'utf8'); console.error(`\nwritten to ${OUT}`); }
-else console.log(csv);
+/**
+ * Last, and loud, because it is the only line here that asks somebody for a decision
+ * rather than telling them what happened.
+ */
+if (needsDecision.length) {
+  console.error(`\n  !! ${needsDecision.length} propert${needsDecision.length === 1 ? 'y is' : 'ies are'} NOT mailed at all by this file.`);
+  console.error('  Each shares an inbox with a different property, and the platform keeps ONE');
+  console.error('  contact per address per upload — so whatever their cohort, this file does not');
+  console.error('  reach them. A later cohort only helps if that wave is uploaded as its own');
+  console.error('  campaign, which C4-C7 currently is not.');
+  console.error('  Options: split the waves, use a different address for one house, or accept it.');
+  console.error('  Frank picks — not the sort order.');
+  for (const h of needsDecision) {
+    console.error(`     ${h.row[iEmail]} — ${h.row[8]}, ${h.row[10]} (prop ${h.row[iProp]})`);
+  }
+}
+
+if (OUT) {
+  fs.writeFileSync(OUT, csv, 'utf8');
+  console.error(`\nwritten to ${OUT}`);
+
+  /**
+   * The held rows go to their own file rather than nowhere.
+   *
+   * A contact that is on the send list and not in the upload is exactly the kind of thing
+   * that gets noticed a quarter later, by which point nobody can say whether it was a rule
+   * or a bug. This file is the answer to "where did they go", and it carries the reason on
+   * every row.
+   */
+  if (inboxHeld.length) {
+    const heldPath = OUT.replace(/\.csv$/i, '') + '.held-shared-inbox.csv';
+    const heldCsv = [
+      [...COLUMNS, 'held_because', 'mailed_instead'].map(esc).join(','),
+      ...inboxHeld.map((h) => [...h.row, h.reason, h.keptInstead[iProp]].map(esc).join(',')),
+    ].join('\r\n');
+    fs.writeFileSync(heldPath, heldCsv, 'utf8');
+    console.error(`${inboxHeld.length} held row(s) written to ${heldPath}`);
+  }
+} else console.log(csv);

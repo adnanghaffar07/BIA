@@ -84,6 +84,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       // and with whatever the Add button actually pushes.
       byMode: t.byMode,
       leadsByMode: t.leadsByMode,
+      // Who is NOT being mailed because another property already owns their inbox. The
+      // count in `skipped.duplicateAddress` cannot say which house, and for the entries
+      // marked unrecoverable there is no later cohort to catch them — so the dialog has
+      // to be able to show them rather than report a number.
+      heldSharedInbox: t.heldSharedInbox,
       recipients: parseOptions(request).recipients,
       sample: t.eligible.slice(0, 5).map((r) => ({
         email: r.email,

@@ -7,6 +7,9 @@ import {
   TableRow, TableCell, TableBody, Tooltip, Paper,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import {
+  signatureText, textToSignatureHtml, isPlainTextSafe,
+} from '@/services/mailboxSignature.service';
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
 import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -34,6 +37,8 @@ type Detail = {
   warmupOn: boolean; warmupScore: number | null; warmupStartedAt: string | null;
   dailyLimit: number | null; sendingGap: number | null; slowRamp: boolean;
   inboxPlacementTestLimit: number | null; replyTo: string;
+  /** The HTML the platform stores. §5 puts the postal address and opt-out line in here. */
+  signature: string;
   trackingDomain: string; trackingDomainStatus: string | null; trackingDomainActive: boolean;
   warmup: {
     increment: string | number; limit: number | null; replyRate: number | null;
@@ -211,6 +216,7 @@ export default function MailboxDetailDrawer({
           dailyLimit: form.dailyLimit, sendingGap: form.sendingGap,
           slowRamp: form.slowRamp, inboxPlacementTestLimit: form.inboxPlacementTestLimit,
           replyTo: form.replyTo,
+          signature: form.signature,
           warmup: form.warmup,
         }),
       });
@@ -330,6 +336,93 @@ export default function MailboxDetailDrawer({
                 <TextField label="First name" size="small" fullWidth value={form.firstName} onChange={(e) => set('firstName', e.target.value)} />
                 <TextField label="Last name" size="small" fullWidth value={form.lastName} onChange={(e) => set('lastName', e.target.value)} />
               </Stack>
+            </Paper>
+
+            {/*
+              ── Signature ──────────────────────────────────────────────────
+
+              §5: "Postal address in the signature, opt-out line in the signature." Both
+              live here and nowhere else, so a mailbox with an empty signature sends a
+              non-compliant email — and 26 of 28 were empty when this was added.
+
+              Edited as raw HTML on purpose. The platform stores HTML, a rich editor would
+              rewrite it on every save, and what a rewrite silently reflows is the address
+              block and the opt-out line. Plain text in, plain text out, nothing in between.
+
+              The two checks run as you type rather than on save, because the point is to
+              notice the omission while you are looking at it.
+            */}
+            <Paper variant="outlined" sx={{ p: 2 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.5 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Signature</Typography>
+                {(() => {
+                  // One decoder, shared with the service. A second copy here would drift
+                  // from it, and then the chips on screen would disagree with the check
+                  // that runs before a send — the chips would be the ones people believe.
+                  const text = signatureText(form.signature);
+                  const postal = /\d+\s+[A-Za-z][A-Za-z.\-' ]{2,}\s*(st|street|rd|road|ave|avenue|dr|drive|ln|lane|blvd|ct|court|way|pl|place|suite|ste|#)\b/i.test(text)
+                    || /\b[A-Z]{2}\s+\d{5}(-\d{4})?\b/.test(text);
+                  const optOut = /reply\s+"?stop"?/i.test(text) || /off my list/i.test(text);
+                  const chip = (label: string, good: boolean) => (
+                    <Chip key={label} size="small" label={label}
+                      sx={{
+                        height: 20, fontSize: 11, fontWeight: 700,
+                        bgcolor: good ? '#e7f5ec' : '#fdecea',
+                        color: good ? '#166534' : '#b3261e',
+                      }} />
+                  );
+                  if (!text) return chip('empty — this mailbox would send without one', false);
+                  return [
+                    chip(postal ? 'postal address' : 'no postal address', postal),
+                    chip(optOut ? 'opt-out line' : 'no opt-out line', optOut),
+                  ];
+                })()}
+              </Stack>
+              {(() => {
+                /**
+                 * Plain text in, HTML out.
+                 *
+                 * The platform stores HTML, but nobody should have to type &middot; and
+                 * <br> to write an address block. The text shown here is the HTML decoded;
+                 * what is saved is that text re-encoded. The two conversions are exact
+                 * inverses and the round trip is stable, so editing cannot slowly rewrite a
+                 * signature nobody re-reads.
+                 *
+                 * A signature carrying anything richer than line breaks — a link, bold, an
+                 * image — is edited as HTML instead, because converting it to text would
+                 * discard the rest. The most likely casualty is an anchor around the
+                 * booking URL, which §4 calls the single biggest deliverability decision in
+                 * the signature.
+                 */
+                const raw = form.signature ?? '';
+                const plainSafe = isPlainTextSafe(raw);
+                if (!plainSafe) {
+                  return (
+                    <>
+                      <Alert severity="info" sx={{ mb: 1, py: 0.25 }}>
+                        This signature contains formatting or a link, so it is edited as HTML
+                        — converting it to plain text would drop them.
+                      </Alert>
+                      <TextField
+                        multiline minRows={8} fullWidth size="small"
+                        value={raw}
+                        onChange={(e) => set('signature', e.target.value)}
+                        slotProps={{ htmlInput: { style: { fontFamily: 'monospace', fontSize: 12.5, lineHeight: 1.5 } } }}
+                      />
+                    </>
+                  );
+                }
+                return (
+                  <TextField
+                    multiline minRows={8} fullWidth size="small"
+                    value={signatureText(raw)}
+                    onChange={(e) => set('signature', textToSignatureHtml(e.target.value))}
+                    placeholder={'Frank Tragni\nLicensed Insurance Producer · Burlington Insurance Agency\nNJ Producer License #1234567\n\nDirect: (555) 123-4567 — I answer my own phone\nWeb: burlingtoninsurance.com\nSchedule 15 minutes: burlingtoninsurance.com/meet\n\nBurlington Insurance Agency\n12 Main Street, Freehold NJ 07728\nIndependent agency, licensed and serving New Jersey\n\nPrefer I didn’t write again? Reply "stop" and you’re off my list for good.'}
+                    slotProps={{ htmlInput: { style: { fontSize: 13, lineHeight: 1.6 } } }}
+                    helperText="Write it as it should read. Line breaks are kept; the platform's HTML is generated on save. The postal address and the opt-out line are required on every send and exist only here."
+                  />
+                );
+              })()}
             </Paper>
 
             <Paper variant="outlined" sx={{ p: 2 }}>

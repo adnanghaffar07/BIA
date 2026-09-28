@@ -33,6 +33,25 @@ export type CallOutcomeSpec = {
   suppresses?: 'not_interested' | 'dnc';
   /** Needs a date, so the reminder has something to fire at. */
   needsCallbackAt?: boolean;
+  /**
+   * Stop the email sequence for this household.
+   *
+   * Frank: "Quote requested → quoting, and the email sequence pauses." Somebody who has
+   * asked for a quote on the phone should not keep receiving the cold sequence that asked
+   * them to — it reads as nobody at the agency talking to anybody else.
+   *
+   * The platform has no pause for one lead (see householdStop.service), so the recipient is
+   * removed from the campaign. The CRM keeps the history either way.
+   */
+  pausesEmail?: boolean;
+  /**
+   * The suppression ends, rather than standing forever.
+   *
+   * "Not interested" is about THIS renewal. Without this flag it landed in exactly the same
+   * permanent state as a do-not-call, quietly retiring a customer who said no to one year's
+   * quote.
+   */
+  recontactBeforeNextRenewal?: boolean;
   tone: 'good' | 'neutral' | 'bad';
 };
 
@@ -70,14 +89,15 @@ export const CALL_OUTCOMES: CallOutcomeSpec[] = [
   {
     key: 'quote_requested',
     label: 'Reached — quote requested',
-    follows: 'Handed to the quoting workflow.',
-    reached: true, invalidatesNumber: false, tone: 'good',
+    follows: 'Handed to quoting. The email sequence stops — they are talking to us now.',
+    reached: true, invalidatesNumber: false, pausesEmail: true, tone: 'good',
   },
   {
     key: 'not_interested',
     label: 'Reached — not interested',
-    follows: 'Household suppressed, reason recorded.',
-    reached: true, invalidatesNumber: false, suppresses: 'not_interested', tone: 'bad',
+    follows: 'Household left alone this cycle, and approached again 60 days before the next renewal.',
+    reached: true, invalidatesNumber: false, suppresses: 'not_interested',
+    recontactBeforeNextRenewal: true, tone: 'bad',
   },
   {
     key: 'do_not_call',
@@ -91,15 +111,73 @@ export const CALL_OUTCOME_LABEL: Record<CallOutcome, string> = Object.fromEntrie
   CALL_OUTCOMES.map((o) => [o.key, o.label]),
 ) as Record<CallOutcome, string>;
 
-/** Derived from the attempts, never typed. */
-export type CallStatus = 'not_attempted' | 'attempting' | 'contacted' | 'unreachable';
+/**
+ * Derived from the attempts, never typed.
+ *
+ * ── Why "contacted" was split ───────────────────────────────────────────────
+ * Frank, 25 Sep 2026: "'Contacted' is too broad. The status should follow the outcome."
+ *
+ * One word covered four situations that need four different things to happen next: a
+ * callback in the diary, a quote being worked, a customer who said no this year, and a
+ * customer who said never. Reading the queue told you somebody had been spoken to and
+ * nothing about what was owed to them — so the follow-up lived in whoever remembered the
+ * call, which is the infrastructure gap Frank names in the same message.
+ */
+export type CallStatus =
+  | 'not_attempted'
+  | 'attempting'
+  | 'callback_due'
+  | 'quoting'
+  | 'not_interested'
+  | 'do_not_call'
+  | 'unreachable';
 
 export const CALL_STATUS_LABEL: Record<CallStatus, string> = {
   not_attempted: 'Not attempted',
   attempting: 'Attempting',
-  contacted: 'Contacted',
+  callback_due: 'Callback due',
+  quoting: 'Quoting',
+  not_interested: 'Not interested',
+  do_not_call: 'Do not call',
   unreachable: 'Unreachable',
 };
+
+/**
+ * The status each reaching outcome produces.
+ *
+ * Kept beside the outcomes rather than derived by a chain of ifs in the service: the
+ * mapping IS the rule Frank wrote down, and a rule expressed as control flow is a rule
+ * nobody can check against the message that asked for it.
+ */
+/**
+ * The statuses that mean a person was actually spoken to.
+ *
+ * Splitting "contacted" into four left every place that counted contacts asking a question
+ * the type no longer answered. Funnels still need "how many did we reach" — that is a real
+ * number and it is the sum of the four, not one of them.
+ */
+export const REACHED_STATUSES: readonly CallStatus[] = [
+  'callback_due', 'quoting', 'not_interested', 'do_not_call',
+];
+
+export const isReachedStatus = (s: CallStatus | null | undefined): boolean =>
+  !!s && (REACHED_STATUSES as readonly string[]).includes(s);
+
+export const STATUS_FOR_OUTCOME: Partial<Record<CallOutcome, CallStatus>> = {
+  callback_scheduled: 'callback_due',
+  quote_requested: 'quoting',
+  not_interested: 'not_interested',
+  do_not_call: 'do_not_call',
+};
+
+/**
+ * How long a "not interested" stands.
+ *
+ * Frank: "Not interested → re-contact 60 days before next renewal." Sixty days before the
+ * renewal after the one we were calling about — so the household is left alone for this
+ * cycle and approached again in good time for the next.
+ */
+export const NOT_INTERESTED_RECONTACT_DAYS_BEFORE_RENEWAL = 60;
 
 /**
  * The stop rule, verbatim from Sec. 10.5:

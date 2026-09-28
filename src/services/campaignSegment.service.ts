@@ -551,17 +551,53 @@ export async function buildSendList(params: {
       out.bySegment[seg]++;
       const ins = slots.find((s) => s.id === String(l.id) && s.role === 'insured');
       const co = slots.find((s) => s.id === String(l.id) && s.role === 'coInsured');
+      /**
+       * ── The segment is DERIVED; the deal is not. They are written differently ──
+       *
+       * campaignSegment answers "has a producer rated this account", and that answer
+       * changes: a producer enters a premium on Tuesday for a card segmented on Monday.
+       * COALESCE wrote it once and never looked again, so the Monday answer stood forever.
+       *
+       * 9 C4-C7 accounts were stored 'unrated' at 12:31 on 25 Sep and rated by a producer
+       * at 15:39, 15:46, 16:50 and 18:16 the same afternoon. A further 74 were never
+       * segmented at all. Together that is 83 accounts holding a band price nobody would
+       * ever send them, and it is most of the 401-vs-276 gap Frank asked about.
+       *
+       * So the segment is recomputed from segmentOf() on every build.
+       *
+       * The subject variant and CTA arm keep their COALESCE, and that is deliberate rather
+       * than an oversight. They are a BALANCED DEAL, not a derived fact: re-dealing an arm
+       * someone has already been assigned changes what a live contact receives, silently
+       * unbalances a cohort that has already been counted, and leaves the platform holding
+       * a version_label that no longer describes the email. Once dealt, they are history.
+       *
+       * ── Both freeze the moment anything has actually SENT ──────────────────
+       *
+       * After a send, the segment decides what the NEXT step says. Flipping an account from
+       * unrated to rated between email 1 and email 2 would send a band price to somebody who
+       * was told last week we had not priced them — and no report afterwards could say which
+       * copy any given person received. Fix 19 forbids exactly that.
+       *
+       * The guard is on sentAt, not on the existence of an OutreachEvent row. A registered
+       * row means a contact was prepared; only sentAt means a homeowner was written to.
+       */
       await sql`
-        UPDATE "Lead"
-           SET "campaignSegment"   = COALESCE("campaignSegment", ${seg}),
-               "campaignSegmentAt" = COALESCE("campaignSegmentAt", NOW()),
-               "insuredSubjectVariant"   = COALESCE("insuredSubjectVariant", ${ins ? subject.get(ins)! : null}),
-               "insuredCtaArm"           = COALESCE("insuredCtaArm", ${ins ? Number(arm.get(ins)) : null}),
-               "coInsuredSubjectVariant" = COALESCE("coInsuredSubjectVariant", ${co ? subject.get(co)! : null}),
-               "coInsuredCtaArm"         = COALESCE("coInsuredCtaArm", ${co ? Number(arm.get(co)) : null}),
-               "sendListBuiltAt"   = COALESCE("sendListBuiltAt", NOW()),
+        UPDATE "Lead" l
+           SET "campaignSegment"   = CASE WHEN mailed.yes THEN l."campaignSegment" ELSE ${seg} END,
+               "campaignSegmentAt" = CASE WHEN mailed.yes THEN l."campaignSegmentAt" ELSE NOW() END,
+               "insuredSubjectVariant"   = COALESCE(l."insuredSubjectVariant", ${ins ? subject.get(ins)! : null}),
+               "insuredCtaArm"           = COALESCE(l."insuredCtaArm", ${ins ? Number(arm.get(ins)) : null}),
+               "coInsuredSubjectVariant" = COALESCE(l."coInsuredSubjectVariant", ${co ? subject.get(co)! : null}),
+               "coInsuredCtaArm"         = COALESCE(l."coInsuredCtaArm", ${co ? Number(arm.get(co)) : null}),
+               "sendListBuiltAt"   = COALESCE(l."sendListBuiltAt", NOW()),
                "updatedAt"         = NOW()
-         WHERE "id" = ${String(l.id)}`;
+          FROM (
+            SELECT EXISTS (
+              SELECT 1 FROM "OutreachEvent" oe
+               WHERE oe."leadId" = ${String(l.id)} AND oe."sentAt" IS NOT NULL
+            ) AS yes
+          ) AS mailed
+         WHERE l."id" = ${String(l.id)}`;
     }
   }
 

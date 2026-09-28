@@ -20,8 +20,18 @@ import { requireCampaignAccess, vendorError } from '@/lib/integrations/campaignA
  * misspelled field is indistinguishable from a successful save. Every key written here
  * was confirmed by sending it and reading it back. Two traps found that way:
  *   • "Mark important" is warmup.advanced.important_rate — mark_important is swallowed.
- *   • signature, tags and the warmup filter tag are NOT exposed at all; they exist in
- *     the vendor's own UI but no API key reaches them, so this route cannot offer them.
+ *   • tags and the warmup filter tag are NOT exposed at all; they exist in the vendor's
+ *     own UI but no API key reaches them, so this route cannot offer them.
+ *
+ * `signature` was on that second list and was wrong. It IS exposed, on the account object,
+ * and PATCH writes it — proved by reading one, appending to it, reading the change back and
+ * restoring the original byte-for-byte on a live mailbox. The earlier check looked and did
+ * not find it, and because a PATCH of an unknown key returns 200 there was nothing to
+ * contradict the conclusion.
+ *
+ * That mistake had a cost. 26 of 28 mailboxes sat with no signature at all, and the postal
+ * address and opt-out line §5 requires on every send exist nowhere else — so every one of
+ * them would have sent non-compliant mail with nothing in the CRM able to say so.
  */
 
 export const maxDuration = 10;
@@ -69,6 +79,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         email: account.email,
         firstName: account.first_name ?? '',
         lastName: account.last_name ?? '',
+        /**
+         * The HTML the platform stores, verbatim.
+         *
+         * Handed to the drawer as-is rather than converted to text and back. A round trip
+         * through a text conversion decides the formatting on the reader's behalf, and the
+         * postal address and opt-out line are exactly the parts a lossy conversion drops.
+         */
+        signature: ((account as Record<string, unknown>).signature as string | null) ?? '',
         status: account.status ?? null,
         statusLabel: account.setup_pending ? 'Setting up'
           : account.status === 1 ? 'Active'
@@ -111,8 +129,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         status: c.status,
         statusLabel: CAMPAIGN_STATUS[c.status] ?? 'Unknown',
       })),
-      /** Controls the vendor's UI has but its API does not expose — the drawer says so. */
-      unsupported: ['signature', 'tags', 'warmupFilterTag'],
+      /**
+       * Controls the vendor's UI has but its API does not expose — the drawer says so.
+       *
+       *  was on this list and should not have been. The API does expose it, on
+       * the account object, and PATCH writes it: read, appended to, read back changed, and
+       * restored byte-for-byte on a live mailbox. It was listed as unsupported because the
+       * earlier check looked for it and did not find it — and the cost of that mistake was
+       * 26 of 28 mailboxes sitting with no signature, which means no postal address and no
+       * opt-out line on anything they send. Both are required by §5.
+       */
+      unsupported: ['tags', 'warmupFilterTag'],
     });
   } catch (err) {
     return vendorError(err, 'Could not load that mailbox');
@@ -129,6 +156,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     const patch: Record<string, unknown> = {};
     if (typeof body.firstName === 'string') patch.first_name = body.firstName;
+    /**
+     * The signature, sent as the HTML the editor produced.
+     *
+     * An empty string is allowed through deliberately, unlike replyTo below: clearing a
+     * signature is a thing somebody may genuinely mean, and silently keeping the old one
+     * would leave a mailbox signed by whoever used to own it.
+     */
+    if (typeof body.signature === 'string') patch.signature = body.signature;
     if (typeof body.lastName === 'string') patch.last_name = body.lastName;
     if (num(body.dailyLimit) !== undefined) patch.daily_limit = num(body.dailyLimit);
     if (num(body.sendingGap) !== undefined) patch.sending_gap = num(body.sendingGap);

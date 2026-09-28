@@ -16,6 +16,7 @@ import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import EventRepeatIcon from '@mui/icons-material/EventRepeat';
 import AssessmentIcon from '@mui/icons-material/Assessment';
 import InsightsIcon from '@mui/icons-material/Insights';
+import PhoneIcon from '@mui/icons-material/Phone';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useAuth } from '@/context/AuthContext';
@@ -66,6 +67,9 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
       { label: 'Campaigns',   icon: <CampaignIcon />,        path: '/lead-campaigns' },
       { label: 'QC Reports',  icon: <AssessmentIcon />,      path: '/admin/qc' },
       { label: 'Outreach',    icon: <InsightsIcon />,        path: '/admin/outreach' },
+      // Its own entry rather than a tab inside Outreach: this one is a work queue somebody
+      // opens to find the next call, not a report they open to read numbers.
+      { label: 'Phone',       icon: <PhoneIcon />,           path: '/admin/phone' },
       { label: 'Weekly Pull', icon: <EventRepeatIcon />,     path: '/admin/pull-weekly' },
     ] : []),
   ];

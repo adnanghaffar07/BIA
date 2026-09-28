@@ -67,8 +67,17 @@ const RANGE_COLS = `"id","propertyId","status","grade","manualGrade","effectiveD
   "isolatedFromStatus","recoveryStage","recoveredBy","recoveredEmail","recoveredPhone",
   "recoveryTracerfyAt","recoveryBatchDataAt","recoveredAt"`;
 
-/** Every lead in the pipeline for a date range. */
-async function pipelineLeads(effFrom?: string, effTo?: string): Promise<any[]> {
+/**
+ * Every lead in the pipeline for a date range, for ONE grade.
+ *
+ * Grade B joined this pipeline on 28 Sep. The stages, the vendor order and the definition
+ * of recovered are identical — Frank asked for Grade B to be recorded the same way — but
+ * the two are never counted together. A single "34 recovered" spanning both would hide
+ * which population the work actually landed in, and they are worked for different reasons:
+ * a Grade A recovery unblocks an account already priced and ready to send, a Grade B
+ * recovery unblocks one with no band price at all.
+ */
+async function pipelineLeads(effFrom?: string, effTo?: string, grade: 'A' | 'B' = 'A'): Promise<any[]> {
   const from = effFrom || null;
   const to = effTo || null;
   const rows = await sql`
@@ -81,14 +90,15 @@ async function pipelineLeads(effFrom?: string, effTo?: string): Promise<any[]> {
            "recoveryTracerfyAt","recoveryBatchDataAt","recoveredAt"
       FROM "Lead"
      WHERE "recoveryStage" IS NOT NULL
+       AND COALESCE("manualGrade", "grade") = ${grade}
        AND (${from}::text IS NULL OR "effectiveDate" >= ${from})
        AND (${to}::text   IS NULL OR "effectiveDate" <= ${to})
      ORDER BY "effectiveDate", "owner1LastName"`;
   return rows as any[];
 }
 
-export async function stageCounts(effFrom?: string, effTo?: string): Promise<StageCounts> {
-  const rows = await pipelineLeads(effFrom, effTo);
+export async function stageCounts(effFrom?: string, effTo?: string, grade: 'A' | 'B' = 'A'): Promise<StageCounts> {
+  const rows = await pipelineLeads(effFrom, effTo, grade);
   const at = (s: RecoveryStage) => rows.filter((r) => r.recoveryStage === s);
   const rec = at('recovered');
 
@@ -103,7 +113,7 @@ export async function stageCounts(effFrom?: string, effTo?: string): Promise<Sta
            "email1","email2","owner2Email","phone1","phone2","owner2Phone",
            "emailsAll","skipTraceData"
       FROM "Lead"
-     WHERE COALESCE("manualGrade", "grade") = 'A'
+     WHERE COALESCE("manualGrade", "grade") = ${grade}
        AND "isolatedAt" IS NULL
        AND "recoveryStage" IS NULL
        AND (${effFrom ?? null}::text IS NULL OR "effectiveDate" >= ${effFrom ?? null})
@@ -148,9 +158,9 @@ export type PipelineRow = {
 };
 
 export async function leadsAtStage(
-  stage: RecoveryStage, effFrom?: string, effTo?: string,
+  stage: RecoveryStage, effFrom?: string, effTo?: string, grade: 'A' | 'B' = 'A',
 ): Promise<PipelineRow[]> {
-  const rows = await pipelineLeads(effFrom, effTo);
+  const rows = await pipelineLeads(effFrom, effTo, grade);
   /**
    * These columns come back in two shapes: effectiveDate is TEXT ('2026-10-05') while the
    * trace timestamps are real Dates. Slicing String(date) yields 'Tue Aug 25' — wrong, and
@@ -305,8 +315,56 @@ async function applyAndAdvance(
   }
   Object.assign(update, stamp);
 
+  // The transition — stage, recovery stamps, regrade, recapture, activity — is shared with
+  // the skip-trace blast so both paths record a recovery the same way.
+  await advanceAfterTrace({
+    before: lead,
+    after: { ...lead, ...update },
+    update,
+    found: { emails: found.emails, phones: found.phones, matched: found.matched },
+    vendor,
+    createdBy,
+    out,
+    now,
+  });
+}
+
+/**
+ * ── Where a lead goes after a trace, decided and written in ONE place ───────
+ *
+ * This used to live inside applyAndAdvance, which only the pipeline's own runner calls.
+ * The skip-trace blast traces leads through a different path (traceAndApply) and therefore
+ * never advanced anything — so a lead the blast had traced, charged for and stamped
+ * blastSkipTracedAt still sat at stage 'isolated', and the pipeline panel reported it as
+ * "Not traced yet" two inches below a queue card saying "1 already traced".
+ *
+ * Two places deciding the same fact and disagreeing is the defect this project keeps
+ * paying for. There is now one.
+ *
+ * ── The arguments, and why before and after are both required ───────────────
+ * `before` is the lead as it was when the vendor was called; `after` is the lead as it will
+ * be once `update` is written. The pipeline has not written yet, so it passes its pending
+ * delta as `update` and a merged object as `after`. The blast has already written through
+ * traceAndApply, so it passes the re-read lead as `after` and an empty `update`.
+ *
+ * Both are needed because "gained a phone" is a comparison, not a state: a lead that
+ * already had a phone has not recovered one, and reading only `after` would count every
+ * lead that has ever had a number.
+ */
+export async function advanceAfterTrace(opts: {
+  before: any;
+  after: any;
+  /** Pending changes to write with the transition. Empty when the caller already wrote. */
+  update: Record<string, any>;
+  found: { emails: string[]; phones: string[]; matched: boolean };
+  vendor: 'tracerfy' | 'batchdata';
+  createdBy: string | null;
+  out: BlastResult;
+  now: Date;
+}): Promise<void> {
+  const { before: lead, after: incomingAfter, update, found, vendor, createdBy, out, now } = opts;
   // Decide on the lead AS IT WILL BE, not as it was.
-  const after = { ...lead, ...update };
+  const after = incomingAfter;
   // The co-insured's address belongs in the co-insured's field, not only in a list.
   Object.assign(update, coInsuredContactPatch(after, coInsuredEmails(after), coInsuredPhones(after)));
   const gotEmail = insuredEmails(after).length > 0;

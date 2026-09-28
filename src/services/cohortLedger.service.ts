@@ -1,4 +1,5 @@
 import { sql } from '@/lib/neon';
+import { deliverableAddresses } from './emailVerification.service';
 import { cohortLabel, cohortEnd, cohortOf } from './cohort';
 import { LOST_TARGET_PCT } from '@/lib/targets';
 import { insuredEmails, assertRecipientCols } from './recipients.service';
@@ -106,6 +107,24 @@ export type CohortLedgerRow = {
    * forecast.
    */
   mailable: number;
+  /**
+   * Of the mailable, how many have an insured address a verifier confirmed exists
+   * (Frank, 25 Sep 2026 — "right next to mailable").
+   *
+   * Mailable means the CRM holds an address. Verified means somebody checked the mailbox is
+   * real. On C1–C3 those were 132 and 106 — the 26 in between look reachable in every report
+   * we have and are not. Quoting mailable as though it were reach is the same mistake this
+   * ledger already records one row up, for aNow against mailable.
+   */
+  verified: number;
+  /**
+   * Mailable, but the address failed verification or has not been checked. The call-first
+   * list.
+   *
+   * Not the same as "no email": these accounts hold an address that cannot be relied on,
+   * which is a different problem from having none, and is worked differently.
+   */
+  unverified: number;
   /** aAtPull - stillA. */
   lost: number;
   /** lost / aAtPull, as a percentage. Frank's target is <= 5. */
@@ -300,6 +319,9 @@ export async function getCohortLedger(
   assertRecipientCols((reachRows as any[])[0], 'cohort ledger (mailable)');
 
   const mailableByCohort = new Map<string, number>();
+  const verifiedByCohort = new Map<string, number>();
+  /** Loaded once. A lookup per lead across thousands of leads is a query per lead. */
+  const deliverable = await deliverableAddresses();
 
   /**
    * contactability inside Grade A, per cohort (Sec. 4.1, task 27).
@@ -338,6 +360,16 @@ export async function getCohortLedger(
     }
     if (insuredEmails(r).length === 0) continue;
     mailableByCohort.set(r.cohort, (mailableByCohort.get(r.cohort) ?? 0) + 1);
+    /**
+     * An account counts as verified when ANY of its insured addresses passed.
+     *
+     * The campaign sends to one address, and one confirmed address is enough to reach the
+     * person. Requiring all of them would mark an account unreachable because a stale
+     * second address failed, which is the opposite of what the number is for.
+     */
+    if (insuredEmails(r).some((e) => deliverable.has(String(e).trim().toLowerCase()))) {
+      verifiedByCohort.set(r.cohort, (verifiedByCohort.get(r.cohort) ?? 0) + 1);
+    }
   }
 
   const clusters = await sql`
@@ -379,6 +411,8 @@ export async function getCohortLedger(
       gainedOther: Number(r.gained_other),
       aNow: Number(r.a_now),
       mailable: mailableByCohort.get(r.cohort) ?? 0,
+      verified: verifiedByCohort.get(r.cohort) ?? 0,
+      unverified: (mailableByCohort.get(r.cohort) ?? 0) - (verifiedByCohort.get(r.cohort) ?? 0),
       emailAndPhone: contactByCohort.get(r.cohort)?.emailAndPhone ?? 0,
       emailOnly: contactByCohort.get(r.cohort)?.emailOnly ?? 0,
       phoneOnly: contactByCohort.get(r.cohort)?.phoneOnly ?? 0,

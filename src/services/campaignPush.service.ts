@@ -12,7 +12,8 @@ import { householdScopeKey } from './household.service';
 // loaded by plain Node ESM — which is how every script in scripts/ loads it.
 import { addLeadsToCampaign, findLeadsByEmail, type LeadInput } from '@/lib/integrations/leadCampaign';
 import { type Segment } from './campaignSegment.service';
-import { mergeVarsFor } from './mergeVars.service';
+import { mergeVarsFor, customOnly, agencyWebsite } from './mergeVars.service';
+import { resolveInboxCollisions } from './inboxCollision.service';
 
 /**
  * Push CRM leads into a campaign.
@@ -68,6 +69,22 @@ export type Recipient = {
 export type PushTriage = {
   matching: number;
   eligible: Recipient[];
+  /**
+   * Recipients dropped because another property already owns their inbox.
+   *
+   * Carried out of triage rather than left as a count, because the count alone is useless:
+   * "1 duplicate address" tells nobody which house is not being mailed. Every entry here
+   * where the property differs from the one that kept the inbox is a house this push does
+   * not write to — `laterCohort` says a future wave COULD reach it, but only if that wave
+   * is pushed as its own campaign, which C4–C7 currently is not.
+   */
+  heldSharedInbox: Array<{
+    email: string;
+    propertyId: string;
+    cohort: string;
+    reason: string;
+    laterCohort: boolean;
+  }>;
   skipped: {
     noEmail: number;
     suppressed: number;
@@ -251,8 +268,9 @@ export async function triagePush(
   };
   const eligible: Recipient[] = [];
   // One address gets one send, even when two leads share it (a couple owning two
-  // properties, or a landlord). The second occurrence is reported, not mailed.
-  const seenAddresses = new Set<string>();
+  // properties, or a landlord). That is resolved AFTER this loop by
+  // resolveInboxCollisions, so the choice is made by a stated rule rather than by
+  // whichever row Postgres happened to return first.
 
   // Counted for all three modes in this one pass, so the dialog's chips agree with each
   // other and with whatever is actually pushed.
@@ -336,8 +354,6 @@ export async function triagePush(
       // role-only key would let the first one mask the rest and report them as "already
       // in campaign".
       if (alreadyEmails.has(c.email)) { skipped.alreadyInCampaign++; continue; }
-      if (seenAddresses.has(c.email)) { skipped.duplicateAddress++; continue; }
-      seenAddresses.add(c.email);
       eligible.push(c);
     }
     // "No email" means no address FOR THE SELECTED PEOPLE — a card with only a
@@ -345,7 +361,46 @@ export async function triagePush(
     if (!gotOne) skipped.noEmail++;
   }
 
-  return { matching: leads.length, eligible, skipped, byMode, leadsByMode };
+  /**
+   * ── One inbox, one contact ────────────────────────────────────────────────
+   *
+   * The platform keys a contact by EMAIL ADDRESS, so two recipients sharing an address are
+   * one contact there, carrying one set of custom variables. Three addresses on the current
+   * send list are shared between different properties — a homeowner with two houses, and
+   * two neighbours on one inbox.
+   *
+   * This used to be a `seenAddresses` set inside the loop above: first one wins, where
+   * "first" meant the order the rows came back from Postgres. That is safe — no wrong data
+   * is sent — but it silently picked which of a man's two houses he would ever hear about,
+   * it picked differently whenever the query plan changed, and it reported the loser as a
+   * bare count with no way to find out who it was.
+   *
+   * The rule now lives in one place and the export uses the same one, so a hand-uploaded
+   * CSV and an API push cannot disagree about which house owns the inbox.
+   */
+  const resolved = resolveInboxCollisions(eligible, (c) => ({
+    email: c.email,
+    renewalDate: String(c.lead.effectiveDate ?? '').slice(0, 10),
+    role: c.personRole === 'insured' ? 'insured' : 'coInsured',
+    propertyId: String(c.lead.propertyId ?? ''),
+    cohort: String(c.lead.cohort ?? ''),
+  }));
+  skipped.duplicateAddress = resolved.held.length;
+
+  return {
+    matching: leads.length,
+    eligible: resolved.keep,
+    heldSharedInbox: resolved.held.map((h) => ({
+      email: h.row.email,
+      propertyId: String(h.row.lead.propertyId ?? ''),
+      cohort: String(h.row.lead.cohort ?? ''),
+      reason: h.reason,
+      laterCohort: h.laterCohort,
+    })),
+    skipped,
+    byMode,
+    leadsByMode,
+  };
 }
 
 export type PushResult = {
@@ -402,6 +457,12 @@ export async function pushChunk(
     };
   }
 
+  /**
+   * Read once for the whole batch, not per contact — 186 identical queries would be 186
+   * chances for half a push to carry a booking link and half to carry none.
+   */
+  const site = await agencyWebsite();
+
   const payload: LeadInput[] = toSend.map((r) => ({
     email: r.email,
     first_name: r.personRole === 'insured' ? (r.lead.owner1FirstName ?? undefined) : (r.lead.owner2FirstName ?? undefined),
@@ -418,7 +479,12 @@ export async function pushChunk(
      * Both paths now build their variables here, so the two cannot describe the same person
      * differently.
      */
-    custom_variables: mergeVarsFor(r.lead, r.personRole === 'insured' ? 'insured' : 'coInsured'),
+    /**
+     * customOnly, because first_name and last_name are already set above through the API's
+     * own fields. Sending them again here would hand the platform two variables called
+     * firstName — its built-in and one of ours — and nothing would report the collision.
+     */
+    custom_variables: customOnly(mergeVarsFor(r.lead, r.personRole === 'insured' ? 'insured' : 'coInsured', site)),
   }));
 
   const added = await addLeadsToCampaign(campaignId, payload);

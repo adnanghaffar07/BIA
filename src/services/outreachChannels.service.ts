@@ -1,5 +1,6 @@
 import { sql } from '@/lib/neon';
 import { computeMetrics } from './protectiveMetrics.service';
+import { isReachedStatus } from '@/lib/callOutcomes';
 import { getQcReport } from './reports.service';
 
 /**
@@ -344,7 +345,9 @@ export async function getOutreachChannels(params: {
   const callRows = await getQcReport('call_outcome', { effFrom, effTo });
   const assigned = callRows.length;
   const attempted = callRows.filter((r) => r.callStatus !== 'not_attempted').length;
-  const contacted = callRows.filter((r) => r.callStatus === 'contacted').length;
+  // "Reached" is now the sum of the four statuses that replaced it — a callback due, a
+  // quote being worked, a no this year, and a never. The funnel still wants the total.
+  const contacted = callRows.filter((r) => isReachedStatus(r.callStatus)).length;
   const unreachable = callRows.filter((r) => r.callStatus === 'unreachable').length;
   const phoneQuoted = callRows.filter((r) => r.quoteStage === 'quoted' || r.quoteStage === 'sold').length;
   const phoneBound = callRows.filter((r) => r.quoteStage === 'sold').length;

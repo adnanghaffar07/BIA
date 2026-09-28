@@ -71,6 +71,15 @@ export type SuppressInput = {
   source?: string;
   createdBy?: string | null;
   note?: string | null;
+  /**
+   * When this suppression stops applying. Omit for a permanent one.
+   *
+   * "Do not call" is a standing instruction and never lapses. "Not interested" is about one
+   * renewal — Frank wants that household approached again 60 days before the next. Without
+   * an end date both landed in the same permanent state, quietly retiring a customer who
+   * had only declined one year's quote.
+   */
+  reviewAt?: string | Date | null;
 };
 
 /**
@@ -134,10 +143,12 @@ export async function suppress(input: SuppressInput): Promise<{ scope: Suppressi
 
   await sql`
     INSERT INTO "Suppression"
-      ("id", "scope", "email", "householdKey", "leadId", "reason", "source", "createdBy", "note")
+      ("id", "scope", "email", "householdKey", "leadId", "reason", "source", "createdBy",
+       "note", "reviewAt")
     VALUES
       (${globalThis.crypto.randomUUID()}, ${scope}, ${email}, ${householdKey}, ${leadId},
-       ${reason}, ${input.source ?? 'crm'}, ${input.createdBy ?? null}, ${input.note ?? null})`;
+       ${reason}, ${input.source ?? 'crm'}, ${input.createdBy ?? null}, ${input.note ?? null},
+       ${input.reviewAt == null ? null : new Date(input.reviewAt).toISOString()}::timestamptz)`;
 
   return { scope, created: true };
 }

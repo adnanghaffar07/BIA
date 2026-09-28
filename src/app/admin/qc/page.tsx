@@ -49,6 +49,12 @@ type LedgerRow = {
   noInsuredContact: number;
   directMailOnly: number;
   stillA: number; gainedOther: number; aNow: number; mailable: number;
+  /**
+   * Of the mailable, how many have an insured address a verifier confirmed (Frank, 25 Sep).
+   * `unverified` is the rest — an address that failed or was never checked, which is the
+   * call-first list and is not the same as having no address at all.
+   */
+  verified: number; unverified: number;
   lost: number; lostPct: number | null;
   /** Of the downgrades, the ones that were never contactable on any channel. */
   downgradedUncontactable: number;
@@ -83,7 +89,7 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
   { key: 'referral', label: 'Referrals / Eligibility', icon: <FactCheckIcon />, blurb: 'Leads a carrier flagged Referral (or Non-eligible), with the reason entered.' },
   { key: 'grade_overrides', label: 'Grade Changes', icon: <SwapVertIcon />, blurb: 'Grade changes from both sides — a producer overriding with a reason, and the rules re-grading a lead. The system tab also flags leads whose stored grade no longer agrees with the rules.' },
   { key: 'keyword', label: 'Keyword Search', icon: <SearchIcon />, blurb: 'Search producer + variance notes and eligibility reasons for a keyword to spot trends.' },
-  { key: 'roof_b', label: 'Grade-B: Roof Only', icon: <RoofingIcon />, blurb: 'Grade-B leads whose only knock is an unconfirmed roof. Set the home-age band — the roof year is unknown on every one of these, so age of the house is what separates them. Frank\'s criterion is 20 to 75 years.' },
+  { key: 'roof_b', label: 'Grade-B: Roof Only', icon: <RoofingIcon />, blurb: 'Grade-B leads whose only knock is an unconfirmed roof. Set the home-age band — the roof year is unknown on every one of these, so age of the house is what separates them. Frank\'s criterion is homes 21 to 76 years old. Both boxes are inclusive.' },
   { key: 'type_mismatch', label: 'Type Mismatch', icon: <ReportProblemIcon />, blurb: 'Leads a producer flagged where the REAPI property type looks wrong (e.g. condo that’s really a home).' },
   { key: 'owner_verify', label: 'WIP Verify Fails', icon: <PersonSearchIcon />, blurb: 'Leads that failed tax-roll verification — not found on the roll, or the insured name disagrees with it. Review before outreach.' },
   { key: 'contact_coverage', label: 'Contact Coverage', icon: <ContactPhoneIcon />, blurb: 'Rated accounts by property type (Condo/SFH) and contact status (phone-only / email-only / both / neither) + DOB. The no-email rows drive the downgrade decision.' },
@@ -196,18 +202,18 @@ type QcColumn = {
  * producerPremium sits beside them so the difference is visible rather than assumed.
  */
 const CAMPAIGN_VAR_COLUMNS: QcColumn[] = [
-  'firstName', 'lastName', 'streetAddress', 'streetName', 'town',
-  'renewalDate', 'month',
-  'subject1', 'subject2', 'subject3',
-  'cta1', 'cta2', 'cta3',
-  'segment', 'cohort', 'subjectVariant', 'ctaArm', 'versionLabel',
+  'firstName', 'lastName', 'street_address', 'street_name', 'town',
+  'renewal_date', 'month', 'meeting_link',
+  'subject_1', 'subject_2', 'subject_3',
+  'cta_1', 'cta_2', 'cta_3',
+  'segment', 'cohort', 'subject_variant', 'cta_arm', 'version_label',
 ].map((k) => ({
   header: k,
   value: (r: QcRow) => String(r.campaignVars?.[k] ?? ''),
 })).concat([
-  { header: 'bandLow', value: () => '' },
-  { header: 'bandHigh', value: () => '' },
-  { header: 'producerPremium', value: (r: QcRow) => String(r.campaignVars?.producerPremium ?? '') },
+  { header: 'band_low', value: () => '' },
+  { header: 'band_high', value: () => '' },
+  { header: 'producer_premium', value: (r: QcRow) => String(r.campaignVars?.producer_premium ?? '') },
 ]);
 
 function columnsFor(report: ReportType): QcColumn[] {
@@ -385,10 +391,15 @@ function columnsFor(report: ReportType): QcColumn[] {
                   header: 'Call status',
                   value: (r) => (r.callStatus ?? '').replace('_', ' '),
                   cell: (r) => {
-                    const c = r.callStatus === 'contacted' ? { bg: '#e7f5ec', fg: '#166534' }
-                      : r.callStatus === 'unreachable' ? { bg: '#fdecea', fg: '#b3261e' }
-                        : r.callStatus === 'attempting' ? { bg: '#fff8e8', fg: '#8a5a00' }
-                          : { bg: '#eef1f5', fg: '#5a6675' };
+                    // The four that replaced 'contacted' are not all green. A quote being
+                    // worked and a do-not-call were the same word and belong at opposite
+                    // ends of the queue.
+                    const c = r.callStatus === 'quoting' ? { bg: '#e7f5ec', fg: '#166534' }
+                      : r.callStatus === 'callback_due' ? { bg: '#e8f0fe', fg: '#1565c0' }
+                        : r.callStatus === 'do_not_call' || r.callStatus === 'unreachable'
+                          ? { bg: '#fdecea', fg: '#b3261e' }
+                          : r.callStatus === 'attempting' ? { bg: '#fff8e8', fg: '#8a5a00' }
+                            : { bg: '#eef1f5', fg: '#5a6675' };
                     return (
                       <Chip size="small" label={(r.callStatus ?? '').replace('_', ' ')}
                         sx={{ height: 19, fontSize: 11, fontWeight: 700, bgcolor: c.bg, color: c.fg }} />
@@ -787,6 +798,77 @@ const LEDGER_COLUMNS: LedgerColumn[] = [
     },
   },
   {
+    /**
+     * Verified — the column Frank asked for "right next to mailable" (25 Sep 2026).
+     *
+     * Mailable means the CRM holds an address for the insured. Verified means a third party
+     * confirmed the mailbox exists. On C1–C3 those numbers were 132 and 106: twenty-six
+     * accounts look reachable in every other report on this page and are not. Sending to
+     * them is how a new domain earns a bounce rate before it has any reputation to spend.
+     *
+     * Blank rather than zero before a verification run: nothing checked is not the same as
+     * nothing passed, and a column of zeroes would read as a cohort that had lost its
+     * entire list to a verifier that has not run.
+     */
+    header: 'Verified',
+    value: (d) => (d.verified + d.unverified > 0 ? String(d.verified) : ''),
+    numeric: true,
+    cell: (d) => {
+      const checked = d.verified + d.unverified;
+      if (!checked) {
+        return (
+          <Tooltip arrow title="No verification run has covered this week yet.">
+            <span style={{ cursor: 'help', color: '#9aa4b2' }}>—</span>
+          </Tooltip>
+        );
+      }
+      const share = d.mailable ? d.verified / d.mailable : 1;
+      return (
+        <Tooltip arrow title={
+          `${d.verified} of ${d.mailable} mailable accounts have an insured address a verifier confirmed. `
+          + `The other ${d.unverified} hold an address that failed or has not been checked — those are the `
+          + 'accounts to call rather than mail.'
+        }>
+          <span style={{ cursor: 'help' }}>
+            {d.verified.toLocaleString()}
+            {d.mailable > 0 && d.verified < d.mailable && (
+              <Typography component="span" variant="caption" sx={{ color: '#8a5a00', ml: 0.75, fontWeight: 400 }}>
+                {`· ${Math.round(share * 100)}%`}
+              </Typography>
+            )}
+          </span>
+        </Tooltip>
+      );
+    },
+  },
+  {
+    /**
+     * The call-first list, as a number. Frank: "Non-verified = 72 ... We call these first
+     * and as soon as ready."
+     *
+     * Held apart from "no email at all", which is a different population worked the same
+     * way but for a different reason — one has nothing, the other has something that does
+     * not work.
+     */
+    header: 'To call',
+    value: (d) => (d.verified + d.unverified > 0 ? String(d.unverified) : ''),
+    numeric: true,
+    cell: (d) => {
+      const checked = d.verified + d.unverified;
+      if (!checked) return <span style={{ color: '#9aa4b2' }}>—</span>;
+      return (
+        <Tooltip arrow title={
+          `${d.unverified} mailable account(s) whose insured address failed verification or has `
+          + 'not been checked. Reachable by phone, not by email.'
+        }>
+          <span style={{ cursor: 'help', color: d.unverified ? '#8a5a00' : undefined, fontWeight: d.unverified ? 700 : 400 }}>
+            {d.unverified.toLocaleString()}
+          </span>
+        </Tooltip>
+      );
+    },
+  },
+  {
     header: 'Mailable %',
     // Written out because a reader of the file cannot divide two columns in their head,
     // and this is the ratio the cohort is judged on.
@@ -939,8 +1021,105 @@ export default function QcReportsPage() {
    * Defaults to his stated band rather than to the old behaviour. The old filter had no
    * upper bound and returned 941 houses built between 1850 and 1950.
    */
-  const [ageMin, setAgeMin] = useStickyState('qc:ageMin', '20');
-  const [ageMax, setAgeMax] = useStickyState('qc:ageMax', '75');
+  /**
+   * 'qc:ageMin2' — a NEW key on purpose.
+   *
+   * These are sticky, so an old value of 20 would survive in the browser of everyone who
+   * has used this screen. That 20 meant "21 and up" under the old exclusive comparison and
+   * means "20 and up" under the new inclusive one, so the same stored value would silently
+   * widen the band by a year for exactly the people who use the report most.
+   */
+  const [ageMin, setAgeMin] = useStickyState('qc:ageMin2', '21');
+  /**
+   * Which grade the email lists cover.
+   *
+   * NOT sticky. Every other control here is a filter you refine; this one decides which
+   * population leaves the building in a file that goes to a sending tool. Remembering it
+   * across sessions is how somebody exports Grade Bs believing they exported Grade As —
+   * the file looks identical and the copy is written for the other population.
+   */
+  const [listGrade, setListGrade] = useState<'A' | 'B'>('A');
+  const [queueing, setQueueing] = useState(false);
+  const [queues, setQueues] = useState<Array<{ grade: 'A' | 'B'; waiting: number; traced: number; queuedBy: string[]; oldest: string | null }>>([]);
+
+  /**
+   * What each blast queue is holding.
+   *
+   * Loaded separately from the report rows because it must be right even when the report
+   * is empty: "0 records" and "no queue" look identical on screen, and one of them means
+   * the button did nothing.
+   */
+  /**
+   * Which grade's recovery pipeline is on screen.
+   *
+   * Sticky within the session only, via the same sessionStorage the stage uses: coming back
+   * to a screen you left on Grade B should not silently show Grade A, but it must not
+   * persist across days either — the default view of this screen is the go-live population.
+   */
+  const [pipeGrade, setPipeGrade] = useState<'A' | 'B'>('A');
+  const [queueRun, setQueueRun] = useState<{ grade: 'A' | 'B'; done: number; total: number; hits: number; credits: number; busy: boolean; error: string | null } | null>(null);
+
+  const loadQueues = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/blast-queue');
+      const json = await res.json();
+      if (json.success) setQueues(json.queues ?? []);
+    } catch { /* a queue header that fails to load must not take the report down */ }
+  }, []);
+  const [queueMsg, setQueueMsg] = useState<string | null>(null);
+
+  /**
+   * Put the rows currently on screen into a skip-trace blast queue.
+   *
+   * Sends the property ids RATHER than the filters that produced them. The blast otherwise
+   * re-derives its population from Leads-page filters, and this report's population —
+   * Grade B, roof year unknown, house 21-76 years old — is not expressible there. Sending
+   * filters would run the blast over 3,482 leads when 2,681 were on screen, and the first
+   * sign of it would be the credit bill.
+   *
+   * The grade travels with the request because A and B are separate queues with different
+   * economics: a Grade A trace chases an address for an account already priced and ready to
+   * send; a Grade B trace is speculative, which is exactly why Frank wants them apart.
+   */
+  const queueForBlast = async (grade: 'A' | 'B') => {
+    const ids = shownRows.map((r: QcRow) => String(r.propertyId ?? '')).filter(Boolean);
+    if (!ids.length) return;
+    setQueueing(true);
+    setQueueMsg(null);
+    try {
+      const res = await fetch('/api/admin/blast-queue', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          propertyIds: ids,
+          grade,
+          reason: report === 'roof_b'
+            ? `Grade-B roof pull · homes ${ageMin}-${ageMax} · ${effFrom || 'any'} to ${effTo || 'any'}`
+            : `${report} · ${effFrom || 'any'} to ${effTo || 'any'}`,
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || 'Could not queue those leads');
+      /**
+       * Every number is reported, including the ones that mean "nothing happened". A bare
+       * "queued 0" after selecting 2,681 leads reads as a failure; "all 2,681 were already
+       * queued" is the same fact and answers the question the person is about to ask.
+       */
+      const bits = [`${json.queued} queued into the Grade ${grade} blast`];
+      if (json.isolated) bits.push(`${json.isolated} isolated`);
+      if (json.alreadyQueued) bits.push(`${json.alreadyQueued} already queued`);
+      if (json.alreadyTraced) bits.push(`${json.alreadyTraced} already traced — not re-queued, they would re-spend credits`);
+      if (json.alreadyIsolated) bits.push(`${json.alreadyIsolated} were already isolated, reason kept`);
+      setQueueMsg(bits.join(' · '));
+      void loadQueues();
+    } catch (e) {
+      setQueueMsg(e instanceof Error ? e.message : 'Could not queue those leads');
+    } finally {
+      setQueueing(false);
+    }
+  };
+  // 76, per Frank on 28 Sep. Paired with ageMin's EXCLUSIVE 20, the band is 21-76.
+  const [ageMax, setAgeMax] = useStickyState('qc:ageMax2', '76');
   const [effFrom, setEffFrom] = useStickyState('qc:effFrom', '');
   const [effTo, setEffTo] = useStickyState('qc:effTo', '');
   // Contact-coverage drill-down: click a summary chip to filter the rows to that slice.
@@ -1032,11 +1211,14 @@ export default function QcReportsPage() {
       url.searchParams.set('report', report);
       if (report === 'referral') { url.searchParams.set('carrier', carrier); url.searchParams.set('value', value); url.searchParams.set('setBy', setBy); }
       if (report === 'keyword') url.searchParams.set('q', q.trim());
+      if (report === 'emails_insured' || report === 'emails_all') {
+        url.searchParams.set('grade', listGrade);
+      }
       if (report === 'roof_b') {
         if (ageMin.trim()) url.searchParams.set('ageMin', ageMin.trim());
         if (ageMax.trim()) url.searchParams.set('ageMax', ageMax.trim());
         // Recorded as sent, so the summary describes the rows rather than the boxes.
-        setRanAge({ min: Number(ageMin) || 20, max: Number(ageMax) || 75 });
+        setRanAge({ min: Number(ageMin) || 21, max: Number(ageMax) || 76 });
       }
       if (effFrom) url.searchParams.set('effFrom', effFrom);
       if (effTo) url.searchParams.set('effTo', effTo);
@@ -1049,7 +1231,10 @@ export default function QcReportsPage() {
       // The pipeline is part of this report, so it loads when the report does — with
       // whatever range the operator actually chose, and on the stage they were last
       // reading rather than always the first one.
-      if (report === 'blast_skiptrace') void loadPipelineRef.current?.(stageRef.current);
+      if (report === 'blast_skiptrace') {
+        void loadPipelineRef.current?.(stageRef.current);
+        void loadQueues();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Report failed');
       setRows([]);
@@ -1057,13 +1242,31 @@ export default function QcReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [report, carrier, value, setBy, q, effFrom, effTo]);
+    /**
+     * listGrade, ageMin and ageMax belong here for the same reason the rest do: run()
+     * reads them when it builds the URL.
+     *
+     * Leaving listGrade out was a real bug, not a lint nit. The callback would have been
+     * memoised with whatever grade was selected when it was created, so switching to
+     * Grade B and pressing Run would have re-fetched Grade A and drawn it under a
+     * Grade B toggle — a file of the wrong population, labelled as the right one, with
+     * nothing on screen disagreeing.
+     */
+  }, [report, carrier, value, setBy, q, effFrom, effTo, listGrade, ageMin, ageMax, loadQueues]);
 
   /**
    * run() is defined above loadPipeline and needs to call it. A ref avoids reordering two
    * callbacks that each depend on the other's inputs.
    */
   const loadPipelineRef = useRef<((stage: PipelineStage) => Promise<void>) | null>(null);
+  /**
+   * Read inside loadPipeline instead of the state value.
+   *
+   * loadPipeline is memoised on [effFrom, effTo]; adding pipeGrade would rebuild it on every
+   * switch and re-fire the effect that calls it, racing two requests for the two grades. The
+   * ref is always current without changing the callback's identity.
+   */
+  const pipeGradeRef = useRef<'A' | 'B'>('A');
 
   /**
    * The stage on screen, held in a ref as well as in state because run() needs to read it
@@ -1119,8 +1322,17 @@ export default function QcReportsPage() {
       if (effFrom) u.searchParams.set('effFrom', effFrom);
       if (effTo) u.searchParams.set('effTo', effTo);
       u.searchParams.set('stage', stage);
+      u.searchParams.set('grade', pipeGradeRef.current);
       const j = await (await fetch(u.toString())).json();
       if (!j.success) throw new Error(j.error || 'Could not read the pipeline');
+      /**
+       * Drop a response for a grade that is no longer selected.
+       *
+       * Both pipelines have identical stage names, so a slow Grade A response landing after
+       * a switch to Grade B would repaint B's panel with A's numbers and nothing would look
+       * wrong. The server echoes the grade back precisely so this check is possible.
+       */
+      if (j.grade && j.grade !== pipeGradeRef.current) return;
       setPipeline((p) => ({
         ...p, stage, rows: j.data || [], counts: j.counts, busy: false,
         runs: j.runs || [], stalled: j.stalled || [],
@@ -1389,6 +1601,58 @@ export default function QcReportsPage() {
     a.download = `BIA_QC_${what}${filtered}_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
+  };
+
+  /**
+   * Trace a queue, one bounded chunk at a time.
+   *
+   * Chunked because the route is: one Tracerfy call per lead plus a courtesy gap runs past
+   * every serverless limit in a single request, and a timeout there spends credits nobody
+   * can account for. Each chunk commits, so a closed laptop resumes rather than re-charges.
+   *
+   * The estimate is fetched first and shown before anything is spent. A blast that starts
+   * on click is a blast somebody runs by accident.
+   */
+  const runQueue = async (grade: 'A' | 'B') => {
+    setQueueRun({ grade, done: 0, total: 0, hits: 0, credits: 0, busy: true, error: null });
+    try {
+      const est = await fetch(`/api/admin/skiptrace-blast?queue=${grade}`).then((r) => r.json());
+      if (!est.success) throw new Error(est.error || 'Could not estimate the run');
+      const total: number = est.eligible ?? 0;
+      setQueueRun((s) => (s ? { ...s, total } : s));
+      if (!total) { setQueueRun((s) => (s ? { ...s, busy: false } : s)); void loadQueues(); return; }
+
+      let done = 0, hits = 0, credits = 0;
+      // Bounded: the queue shrinks as leads gain a trace stamp, so this terminates even if
+      // a chunk returns nothing. Without the ceiling a vendor returning zero forever would
+      // spin here.
+      for (let guard = 0; guard < 2000 && done < total; guard++) {
+        const res = await fetch(`/api/admin/skiptrace-blast?queue=${grade}&chunk=5`, { method: 'POST' });
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error || 'The run stopped');
+        /**
+         * The blast returns { processed, hit, miss, creditsSpent } — not traced/hits/credits.
+         *
+         * Reading the wrong names failed silently, because `?? 0` turns an absent field into
+         * a plausible number: the first real run reported "traced 1 · 0 matched · 0 credits"
+         * while Tracerfy had matched the lead and charged for it. A run summary that
+         * understates spend is worse than no summary.
+         */
+        const n = json.processed ?? 0;
+        if (!n) break;
+        done += n;
+        hits += json.hit ?? 0;
+        credits += json.creditsSpent ?? 0;
+        setQueueRun((s) => (s ? { ...s, done, hits, credits } : s));
+      }
+      setQueueRun((s) => (s ? { ...s, busy: false } : s));
+      void loadQueues();
+      // Refresh the report so the traced rows move from waiting to their result.
+      void run();
+    } catch (e) {
+      setQueueRun((s) => (s ? { ...s, busy: false, error: e instanceof Error ? e.message : 'The run stopped' } : s));
+      void loadQueues();
+    }
   };
 
   const active = REPORTS.find((r) => r.key === report)!;
@@ -1759,6 +2023,36 @@ const MAX_RENDERED = 300;
               sx={{ minWidth: 320 }}
             />
           )}
+          {(report === 'emails_insured' || report === 'emails_all') && (
+            <>
+              {/*
+                ── Which grade this file is for ──────────────────────────────
+                A toggle rather than a "grade" column, because these two lists are exported
+                and handed to a sending tool. Grade A carries a band price and two CTA arms;
+                Grade B has no band price at all and a single arm. A file holding both means
+                one of the two populations receives copy written for the other, and nothing
+                about the file would look wrong.
+
+                Frank, 28 Sep: "Email outreach may be more important on these accounts than
+                Grade As since we don't have a band price."
+              */}
+              <ToggleButtonGroup
+                size="small"
+                exclusive
+                value={listGrade}
+                onChange={(_, v) => { if (v) setListGrade(v); }}
+                sx={{ '& .MuiToggleButton-root': { px: 1.75, textTransform: 'none', fontWeight: 600 } }}
+              >
+                <ToggleButton value="A">Grade A</ToggleButton>
+                <ToggleButton value="B">Grade B</ToggleButton>
+              </ToggleButtonGroup>
+              <Typography variant="caption" sx={{ color: '#5a6675', alignSelf: 'center', maxWidth: 300 }}>
+                {listGrade === 'A'
+                  ? 'Wave one — rated accounts with a band price.'
+                  : 'Wave two — no band price, single CTA arm. Run the skip trace blast on these first so there are addresses to export.'}
+              </Typography>
+            </>
+          )}
           {report === 'roof_b' && (
             <>
               {/*
@@ -1800,7 +2094,7 @@ const MAX_RENDERED = 300;
                   <Typography variant="caption" sx={{ color: ok ? '#5a6675' : '#b3261e', alignSelf: 'center', maxWidth: 220 }}>
                     {ok
                       ? `= built ${thisYear - hi} to ${thisYear - lo}`
-                      : 'That is an age in years, not a build year — Frank\'s band is 20 to 75.'}
+                      : 'That is an age in years, not a build year — Frank\'s band is homes 21 to 76 years old.'}
                   </Typography>
                 );
               })()}
@@ -1815,6 +2109,22 @@ const MAX_RENDERED = 300;
             shownRows left Export CSV permanently greyed out on the one report anybody
             actually needed to send anywhere.
           */}
+          {/*
+            Offered on the Grade-B roof report, which is the pull Frank asked for. It queues
+            what is ON SCREEN, so the filter boxes above are the selection — there is no
+            second place to choose a population and therefore no way for the two to disagree.
+          */}
+          {report === 'roof_b' && (
+            <Button
+              variant="contained" size="small" color="warning"
+              startIcon={queueing ? <CircularProgress size={14} color="inherit" /> : <BoltIcon />}
+              onClick={() => queueForBlast('B')}
+              disabled={queueing || !shownRows.length}
+              sx={{ mr: 1 }}
+            >
+              {queueing ? 'Queuing…' : `Move ${shownRows.length} to Grade B skip-trace blast`}
+            </Button>
+          )}
           <Button
             variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={exportCsv}
             disabled={
@@ -2286,10 +2596,20 @@ const MAX_RENDERED = 300;
          * first, then the eight outcomes, then the quote stages. A producer reading this
          * board and then opening a lead should meet the same words in the same sequence.
          */
+        /**
+         * The four that replaced "Reached" (Frank, 25 Sep 2026).
+         *
+         * One chip for "Reached" could not answer the question anyone actually has of this
+         * filter — which of these need a callback made, which are being quoted, and which
+         * asked us to stop. Those are four different piles of work and they were one.
+         */
         const CALL_STATUS: Array<[string, string]> = [
           ['not_attempted', 'Not attempted'],
           ['attempting', 'Attempting'],
-          ['contacted', 'Reached'],
+          ['callback_due', 'Callback due'],
+          ['quoting', 'Quoting'],
+          ['not_interested', 'Not interested'],
+          ['do_not_call', 'Do not call'],
           ['unreachable', 'Unreachable'],
         ];
         const CALL_OUTCOME: Array<[string, string]> = [
@@ -2552,6 +2872,99 @@ const MAX_RENDERED = 300;
         people need to count, not just an outcome. Each stage is read from the lead's own
         recorded stage, so the tab totals and the QC filters cannot disagree.
       */}
+      {/*
+        ── The queues, before anything else on this screen ────────────────────
+        Grade A and Grade B are separate runs with separate economics: an A trace chases an
+        address for an account already priced and ready to send; a B trace is speculative,
+        which is exactly why Frank asked for them apart. Showing them as one number would
+        undo that at the only point somebody looks.
+      */}
+      {report === 'blast_skiptrace' && queues.length > 0 && (
+        <Paper variant="outlined" sx={{ p: 2, mb: 2, borderColor: '#e0b84c', bgcolor: '#fffdf5' }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+            Waiting in the skip-trace queue
+          </Typography>
+          <Stack direction="row" spacing={2} useFlexGap sx={{ flexWrap: 'wrap' }}>
+            {queues.map((q) => (
+              <Box
+                key={q.grade}
+                sx={{
+                  px: 2, py: 1.25, borderRadius: 1, minWidth: 230,
+                  border: '1px solid',
+                  // Grade B is coloured apart deliberately. It is the speculative spend,
+                  // and the one somebody could start believing it was the other.
+                  borderColor: q.grade === 'B' ? '#b26a00' : '#2c6ecb',
+                  bgcolor: q.grade === 'B' ? '#fff4e5' : '#eef4ff',
+                }}
+              >
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 0.5 }}>
+                  <Chip
+                    size="small"
+                    label={`Grade ${q.grade}`}
+                    sx={{
+                      height: 20, fontSize: 11, fontWeight: 700,
+                      bgcolor: q.grade === 'B' ? '#b26a00' : '#2c6ecb',
+                      color: '#fff',
+                    }}
+                  />
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    {q.waiting.toLocaleString()} waiting
+                  </Typography>
+                  {q.traced > 0 && (
+                    <Typography variant="caption" sx={{ color: '#5a6675' }}>
+                      · {q.traced.toLocaleString()} already traced
+                    </Typography>
+                  )}
+                </Stack>
+                <Typography variant="caption" sx={{ display: 'block', color: '#5a6675' }}>
+                  {q.grade === 'B'
+                    ? 'No band price — speculative spend. Run separately from Grade A.'
+                    : 'Priced accounts waiting on an address.'}
+                </Typography>
+                <Typography variant="caption" sx={{ display: 'block', color: '#8a8f98' }}>
+                  queued by {q.queuedBy.join(', ') || '—'}{q.oldest ? ` · oldest ${q.oldest}` : ''}
+                </Typography>
+
+                {/*
+                  Per queue, not one button for both. Running A and B together is the exact
+                  thing keeping them separate is for — the spend decision is different.
+                */}
+                <Button
+                  size="small"
+                  variant="contained"
+                  color={q.grade === 'B' ? 'warning' : 'primary'}
+                  startIcon={queueRun?.busy && queueRun.grade === q.grade
+                    ? <CircularProgress size={13} color="inherit" />
+                    : <BoltIcon />}
+                  onClick={() => runQueue(q.grade)}
+                  disabled={!q.waiting || (queueRun?.busy ?? false)}
+                  sx={{ mt: 1 }}
+                >
+                  {queueRun?.busy && queueRun.grade === q.grade
+                    ? `Tracing ${queueRun.done}/${queueRun.total || q.waiting}…`
+                    : `Trace ${q.waiting.toLocaleString()} — costs credits`}
+                </Button>
+
+                {queueRun && queueRun.grade === q.grade && !queueRun.busy && (
+                  <Typography
+                    variant="caption"
+                    sx={{ display: 'block', mt: 0.75, color: queueRun.error ? '#b3261e' : '#1b6b2f', fontWeight: 600 }}
+                  >
+                    {queueRun.error
+                      ? queueRun.error
+                      : `traced ${queueRun.done} · ${queueRun.hits} matched · ${queueRun.credits} credits`}
+                  </Typography>
+                )}
+              </Box>
+            ))}
+          </Stack>
+          <Typography variant="caption" sx={{ display: 'block', color: '#5a6675', mt: 1.25 }}>
+            Queued leads are isolated — they stay out of send lists until a trace returns an
+            address. Their status is unchanged.
+          </Typography>
+        </Paper>
+      )}
+
       {report === 'blast_skiptrace' && (
         <Paper ref={pipelineRef} variant="outlined" sx={{ p: 2, mb: 2 }}>
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.5, flexWrap: 'wrap' }} useFlexGap>
@@ -2566,6 +2979,36 @@ const MAX_RENDERED = 300;
                 — {effFrom || effTo ? `${effFrom || 'start'} to ${effTo || 'today'}` : 'all dates'}
               </Box>
             </Typography>
+
+            {/*
+              Grade A and Grade B run through identical stages and are never counted
+              together. Merging them would hide which population the work landed in, and
+              they are worked for different reasons — an A recovery unblocks an account
+              already priced, a B recovery unblocks one with no band price at all.
+            */}
+            <ToggleButtonGroup
+              size="small"
+              exclusive
+              value={pipeGrade}
+              onChange={(_, v) => {
+                if (!v || v === pipeGrade) return;
+                setPipeGrade(v);
+                pipeGradeRef.current = v;
+                try { sessionStorage.setItem('qc:pipeGrade', v); } catch { /* blocked storage is not worth failing over */ }
+                void loadPipeline(pipeline.stage);
+              }}
+              sx={{
+                mr: 1,
+                '& .MuiToggleButton-root': { px: 1.5, py: 0.25, textTransform: 'none', fontWeight: 700, fontSize: 12 },
+                '& .Mui-selected': {
+                  bgcolor: pipeGrade === 'B' ? '#b26a00 !important' : '#2c6ecb !important',
+                  color: '#fff !important',
+                },
+              }}
+            >
+              <ToggleButton value="A">Grade A</ToggleButton>
+              <ToggleButton value="B">Grade B</ToggleButton>
+            </ToggleButtonGroup>
             {PIPELINE_STAGES.map((st) => {
               const n = pipeline.counts?.[st.key] ?? 0;
               const active = pipeline.stage === st.key;
@@ -2907,6 +3350,21 @@ const MAX_RENDERED = 300;
         was invisible — which is how an export of one row came as a surprise. The number
         here is always the number Export CSV will write.
       */}
+      {/*
+        Kept until the next run rather than auto-dismissed. Queuing 2,681 leads and isolating
+        them is not a toast — somebody needs to be able to read the breakdown, and check it
+        against the blast screen, without having had to catch it.
+      */}
+      {queueMsg && (
+        <Alert
+          severity={/^0 queued/.test(queueMsg) ? 'info' : 'success'}
+          onClose={() => setQueueMsg(null)}
+          sx={{ mb: 1.5 }}
+        >
+          {queueMsg}
+        </Alert>
+      )}
+
       <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
         {loading ? <CircularProgress size={18} /> : (() => {
           const n = report === 'cohort_ledger' ? ledger.length
@@ -2933,6 +3391,11 @@ const MAX_RENDERED = 300;
               {report === 'roof_b' && ranAge && (
                 <>
                   <span style={{ color: '#8a5a00' }}>
+                    {/*
+                      Straight from the boxes now that both bounds are inclusive. This
+                      briefly printed min + 1 to compensate for an exclusive lower bound,
+                      which was correct and still confusing: typing 21 showed 22.
+                    */}
                     {' '}· homes {ranAge.min}–{ranAge.max} years old
                   </span>
                   {(String(ranAge.min) !== ageMin.trim() || String(ranAge.max) !== ageMax.trim()) && (

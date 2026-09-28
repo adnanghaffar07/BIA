@@ -32,19 +32,54 @@ const WRITE = process.argv.includes('--write');
 const FROM = '2026-10-05';
 const TO = '2026-11-16';
 
-/** ── The guard, checked before anything else ────────────────────────────── */
+/**
+ * ── Two guards, for two different kinds of damage ──────────────────────────
+ *
+ * This used to refuse whenever ANY OutreachEvent row existed, while computing
+ * `actually_sent` and then not using it. The message said the population "has already been
+ * mailed against" — which was false: 564 rows existed and none of them had ever sent.
+ *
+ * That matters because the stated reason was the wrong one, and a wrong reason invites
+ * somebody to relax the check. The real risks are separate:
+ *
+ *   1. Something has SENT. Fix 19: a cohort's population must not change after it has been
+ *      counted and mailed against, or no figure afterwards can be explained.
+ *
+ *   2. Contacts are LIVE ON THE PLATFORM holding a dealt subject variant and CTA arm. This
+ *      script clears and re-deals those, so re-cutting would leave 378 uploaded contacts
+ *      carrying a version_label that no longer describes the email they would receive — and
+ *      it would silently rebalance cohorts that have already been counted.
+ *
+ * The second is the one that applies today, and the first check would never have caught it.
+ */
 const [sent] = await sql`
   SELECT COUNT(*)::int AS n,
-         COUNT(*) FILTER (WHERE "sentAt" IS NOT NULL)::int AS actually_sent
+         COUNT(*) FILTER (WHERE "sentAt" IS NOT NULL)::int AS actually_sent,
+         COUNT(*) FILTER (WHERE "vendorLeadId" IS NOT NULL)::int AS on_platform
     FROM "OutreachEvent"`;
-if (Number(sent.n) > 0) {
-  console.error(`REFUSING: ${sent.n} outreach event(s) exist, ${sent.actually_sent} with a send time.`);
+
+if (Number(sent.actually_sent) > 0) {
+  console.error(`REFUSING: ${sent.actually_sent} outreach event(s) have actually sent.`);
   console.error('The send list freezes when it is built and must not change after a send —');
   console.error('that is the whole of fix 19. Re-cutting now would rewrite a population that');
   console.error('has already been mailed against, and no figure afterwards could be explained.');
   process.exit(1);
 }
-console.log('nothing has sent — safe to re-cut\n');
+
+if (Number(sent.on_platform) > 0) {
+  console.error(`REFUSING: ${sent.on_platform} contact(s) are live on the sending platform.`);
+  console.error('Nothing has sent, so fix 19 is satisfied — but this script CLEARS the subject');
+  console.error('variant and CTA arm and deals them again. Those contacts already hold the old');
+  console.error('deal as merge variables, so re-dealing would leave each of them carrying a');
+  console.error('version_label that describes an email they will not receive.');
+  console.error('');
+  console.error('To pick up newly rated or newly reachable accounts WITHOUT re-dealing, run a');
+  console.error('plain build instead — buildSendList only fills assignments that are NULL:');
+  console.error('  node --import ./scripts/lib/register-ts.mjs scripts/build-send-list.mjs --write');
+  process.exit(1);
+}
+
+console.log(`nothing has sent and nothing is on the platform (${sent.n} rows registered) — safe to re-cut\n`);
 
 console.log('=== before ===');
 const before = await sendPreflight({ effFrom: FROM, effTo: TO });
