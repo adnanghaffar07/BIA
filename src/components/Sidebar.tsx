@@ -15,6 +15,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import EventRepeatIcon from '@mui/icons-material/EventRepeat';
 import AssessmentIcon from '@mui/icons-material/Assessment';
+import SwapVertIcon from '@mui/icons-material/SwapVert';
 import InsightsIcon from '@mui/icons-material/Insights';
 import PhoneIcon from '@mui/icons-material/Phone';
 import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
@@ -66,6 +67,9 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
     // Admin + super-admin: data operations
     ...(user?.role === 'superadmin' || user?.role === 'admin' ? [
       { label: 'Campaigns',   icon: <CampaignIcon />,        path: '/lead-campaigns' },
+      // Its own entry, above QC. QC is where somebody goes when they suspect a problem;
+      // the ledger is the standing measure of the pipeline and the first thing Frank reads.
+      { label: 'Cohorts',     icon: <SwapVertIcon />,        path: '/admin/cohorts' },
       { label: 'QC Reports',  icon: <AssessmentIcon />,      path: '/admin/qc' },
       { label: 'Outreach',    icon: <InsightsIcon />,        path: '/admin/outreach' },
       // Its own entry rather than a tab inside Outreach: this one is a work queue somebody
