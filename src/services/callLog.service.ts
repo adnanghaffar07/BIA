@@ -4,6 +4,7 @@ import { easternDay, utcStoredToDate, easternInputToUtc } from '@/lib/wallClock'
 import { insuredPhones, coInsuredPhones } from './recipients.service';
 import { suppress, suppressionFor } from './suppression.service';
 import { addActivity } from './storage.service';
+import { closeRemindersForCall } from './callReminder.service';
 import {
   CALL_OUTCOMES, UNREACHABLE_RULE, STATUS_FOR_OUTCOME,
   NOT_INTERESTED_RECONTACT_DAYS_BEFORE_RENEWAL,
@@ -571,6 +572,19 @@ export async function logAttempt(input: {
     VALUES (${globalThis.crypto.randomUUID()}, ${leadId}, 'call',
             ${`${spec.label} — ${number}${input.notes ? ` · ${input.notes}` : ''}`},
             ${input.by ?? 'crm'}, NOW())`;
+
+  /**
+   * An outcome was logged, so any reminder to ring this lead back has been answered.
+   *
+   * Closed HERE rather than by a button on the reminder, because a button that says
+   * "called" without a call behind it is a second version of events. Derived from the
+   * attempt, the reminder log and the call history cannot disagree.
+   *
+   * Never blocks the call: an attempt that failed to close a reminder is a stale row in a
+   * queue; an attempt rolled back because the queue update failed is a lost call.
+   */
+  await closeRemindersForCall(leadId, input.by ?? null)
+    .catch(() => { /* the attempt is what matters */ });
 
   // Recompute and stamp, purely so reports can filter cheaply. The stamp is an echo of
   // the derived rule, never the thing the rule reads.

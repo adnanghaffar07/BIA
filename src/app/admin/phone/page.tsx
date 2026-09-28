@@ -9,6 +9,9 @@ import {
 import PhoneIcon from '@mui/icons-material/Phone';
 import DownloadIcon from '@mui/icons-material/Download';
 import Link from 'next/link';
+import CallReminderList from '@/components/CallReminderList';
+import Tabs from '@mui/material/Tabs';
+import Tab from '@mui/material/Tab';
 import { useStickyState } from '@/hooks/useStickyState';
 /**
  * Type-only. The service reads @/lib/neon, and a value import would pull the database
@@ -98,6 +101,21 @@ export default function PhoneDashboardPage() {
     a.click();
   };
 
+  /**
+   * ── Two screens, not one column ─────────────────────────────────────────
+   *
+   * The call list and the reminders are different jobs. The list is "who do I ring next",
+   * worked top to bottom; the reminders are "who did I promise to ring back", and they
+   * arrive out of order. Stacked, the reminders pushed the filters and the queue down the
+   * page on a screen somebody spends the whole shift in.
+   *
+   * Kept in sessionStorage rather than component state alone: opening a lead from the
+   * reminders tab and coming back should return to the reminders, not to the call list.
+   * Session rather than local, because the default view of this page is the call queue.
+   */
+  const [tab, setTab] = useStickyState<'queue' | 'reminders'>('phone:tab', 'queue');
+  const [dueCount, setDueCount] = useState(0);
+
   return (
     <Container maxWidth="xl" sx={{ py: 3 }}>
       <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', mb: 0.5 }}>
@@ -108,6 +126,56 @@ export default function PhoneDashboardPage() {
         Who to ring next, and how far through the list we are. Rated accounts only — an
         unrated one has no band price to talk about.
       </Typography>
+
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v)}
+        sx={{ mb: 2, borderBottom: '1px solid #e3e6ea', minHeight: 40, '& .MuiTab-root': { minHeight: 40, textTransform: 'none', fontWeight: 700 } }}
+      >
+        <Tab value="queue" label="Call list" />
+        <Tab
+          value="reminders"
+          label={
+            /*
+              The due count rides on the tab, because that is the whole risk of splitting
+              these onto two screens: a reminder falling due while somebody is working the
+              call list would otherwise be invisible until they thought to look. The toast
+              still fires from anywhere; this is the standing count beside it.
+
+              A Chip in the flow rather than a <Badge>. A badge is absolutely positioned
+              outside its child, so on a tab it sat half over the edge and was clipped — the
+              count read as a red smudge. This one takes its own space and cannot be cut off.
+            */
+            <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+              <span>Reminders</span>
+              {dueCount > 0 && (
+                <Box
+                  component="span"
+                  sx={{
+                    bgcolor: '#b3261e', color: '#fff', fontSize: 11, fontWeight: 700,
+                    lineHeight: '18px', minWidth: 18, px: 0.5, borderRadius: '9px',
+                    textAlign: 'center',
+                  }}
+                >
+                  {dueCount}
+                </Box>
+              )}
+            </Stack>
+          }
+        />
+      </Tabs>
+
+      {/*
+        Mounted on BOTH tabs and hidden with CSS rather than unmounted.
+        Unmounting would restart its poll and lose the log's open/closed state every time
+        somebody switched tabs — and it is what keeps dueCount current for the badge above,
+        which has to stay right while the call list is the one on screen.
+      */}
+      <Box sx={{ display: tab === 'reminders' ? 'block' : 'none' }}>
+        <CallReminderList onCounts={(c) => setDueCount(c.due)} />
+      </Box>
+
+      <Box sx={{ display: tab === 'queue' ? 'block' : 'none' }}>
 
       {/* ── Filters ── */}
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
@@ -307,6 +375,7 @@ export default function PhoneDashboardPage() {
         </>
       )}
       {!loading && !data && !error && <CircularProgress />}
+      </Box>
     </Container>
   );
 }

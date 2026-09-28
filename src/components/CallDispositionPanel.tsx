@@ -1,7 +1,7 @@
 'use client';
 
 import { easternDisplay } from '@/lib/wallClock';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Box, Paper, Typography, Stack, Chip, Button, TextField, Alert, Divider, Tooltip,
 } from '@mui/material';
@@ -67,7 +67,75 @@ export default function CallDispositionPanel({ leadId }: { leadId: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [number, setNumber] = useState<string>('');
+  /**
+   * The number "Call now" asked for, read once from the URL.
+   *
+   * A ref rather than state: it is an instruction that arrives with the navigation and is
+   * consumed by the first load. Putting it in the dependency list would re-apply it every
+   * time the history reloaded, overriding a number the producer had since picked by hand.
+   */
+  const wantedNumberRef = useRef<string>('');
+  useEffect(() => {
+    try {
+      wantedNumberRef.current = new URLSearchParams(window.location.search).get('call') ?? '';
+    } catch { /* no window during SSR */ }
+  }, []);
   const [notes, setNotes] = useState('');
+  /**
+   * ── "Nobody picked up — try again in fifteen minutes" ────────────────────
+   *
+   * Deliberately NOT the Callback field beside it. That one is a time the homeowner agreed
+   * to, it is required on the outcomes that schedule one, and "callbacks honoured" is a
+   * number somebody will be measured on. This is the caller's own note to himself after a
+   * number rang out, and most will be dialled a few minutes either side of the minute they
+   * name. One column for both would make every retry look like a promise to a customer.
+   */
+  const [reminders, setReminders] = useState<Array<{ id: string; dueLabel: string; minutesUntil: number; phone: string | null }>>([]);
+  const [remBusy, setRemBusy] = useState(false);
+
+  const loadReminders = useCallback(async () => {
+    try {
+      const j = await (await fetch(`/api/call-reminders?leadId=${encodeURIComponent(leadId)}`)).json();
+      if (j.success) setReminders(j.reminders ?? []);
+    } catch { /* a reminder list that fails to load must not take the call panel down */ }
+  }, [leadId]);
+
+  const remind = async (minutes: number) => {
+    setRemBusy(true);
+    try {
+      const res = await fetch('/api/call-reminders', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          leadId,
+          // The number currently selected, so the reminder reopens on the one he was
+          // trying rather than making him pick again from ten, seven of them DNC-flagged.
+          phone: number || null,
+          minutes,
+          note: notes.trim() || null,
+        }),
+      });
+      const j = await res.json();
+      if (!j.success) throw new Error(j.error || 'Could not set that reminder');
+      setMsg(`Reminder set for ${j.reminder.dueLabel}`);
+      await loadReminders();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not set that reminder');
+    } finally {
+      setRemBusy(false);
+    }
+  };
+
+  const closeReminder = async (id: string, how: 'done' | 'dismissed') => {
+    try {
+      await fetch('/api/call-reminders', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id, how }),
+      });
+      await loadReminders();
+    } catch { /* the toast will still show it; closing is not worth an error banner */ }
+  };
   /**
    * Addresses taken mid-call (Frank, 25 Sep 2026 · item 8).
    *
@@ -85,13 +153,48 @@ export default function CallDispositionPanel({ leadId }: { leadId: string }) {
       const j = await (await fetch(`/api/leads/${leadId}/calls`)).json();
       if (!j.success) throw new Error(j.error || 'Could not read call history');
       setState(j.data);
-      setNumber((n) => n || j.data.dialable[0]?.number || '');
+      /**
+       * A number in ?call= wins over the best-first default.
+       *
+       * That parameter is set by "Call now" on a reminder, and the whole point of the
+       * reminder is THAT number — the one that rang out. Dropping back to the default would
+       * put somebody on a different line from the one they meant to retry, and on these
+       * cards seven of ten numbers are DNC-flagged.
+       *
+       * Digits only on both sides: the reminder stores what was dialled and the list holds
+       * its own formatting, so "(609) 443-1962" and "6094431962" are the same number.
+       */
+      const digits = (v: string) => String(v ?? '').replace(/D/g, '');
+      const wanted = digits(wantedNumberRef.current);
+      const match = wanted
+        ? (j.data.dialable as Array<{ number: string }>).find((d) => digits(d.number) === wanted)
+        : null;
+      setNumber((n) => (match?.number ?? (n || j.data.dialable[0]?.number || '')));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not read call history');
     }
   }, [leadId]);
 
   useEffect(() => { load(); }, [load]);
+  /**
+   * Reminders already set on this card, so reopening it shows what is pending rather than
+   * an empty row of buttons that makes it look as though nothing was ever scheduled.
+   *
+   * Wrapped rather than called straight: setState directly inside an effect invites
+   * cascading renders, and `alive` stops a slow response for the PREVIOUS lead painting its
+   * reminders onto this one — these panels are stepped through lead by lead, so that race is
+   * the normal case, and a reminder shown against the wrong card is a call to the wrong person.
+   */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const j = await (await fetch(`/api/call-reminders?leadId=${encodeURIComponent(leadId)}`)).json();
+        if (alive && j.success) setReminders(j.reminders ?? []);
+      } catch { /* a reminder list that fails to load must not take the call panel down */ }
+    })();
+    return () => { alive = false; };
+  }, [leadId]);
 
   const log = async (outcome: CallOutcome) => {
     const spec = CALL_OUTCOMES.find((o) => o.key === outcome)!;
@@ -359,6 +462,62 @@ export default function CallDispositionPanel({ leadId }: { leadId: string }) {
         Collapsed by default so it does not compete with the outcome buttons, which are what
         the panel is for.
       */}
+      {/*
+        Under the outcome buttons, because it is what you reach for AFTER tapping "No
+        answer" — not an alternative to recording what happened.
+      */}
+      <Box sx={{ mb: 1.5 }}>
+        <Typography variant="caption" sx={{ display: 'block', color: '#5a6675', mb: 0.5 }}>
+          No answer? Remind me to try again in —
+        </Typography>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', gap: 1 }}>
+          {[10, 15, 30, 60].map((m) => (
+            <Button
+              key={m}
+              size="small"
+              variant="outlined"
+              disabled={remBusy}
+              onClick={() => remind(m)}
+              sx={{ textTransform: 'none', minWidth: 0, px: 1.5 }}
+            >
+              {m < 60 ? `${m} min` : '1 hour'}
+            </Button>
+          ))}
+        </Stack>
+
+        {reminders.length > 0 && (
+          <Box sx={{ mt: 1 }}>
+            {reminders.map((r) => (
+              <Stack
+                key={r.id}
+                direction="row"
+                spacing={1}
+                sx={{ alignItems: 'center', mb: 0.5, flexWrap: 'wrap', gap: 0.5 }}
+              >
+                <Chip
+                  size="small"
+                  label={r.minutesUntil <= 0
+                    ? `due now${r.minutesUntil < -1 ? ` (${Math.abs(r.minutesUntil)} min ago)` : ''}`
+                    : `in ${r.minutesUntil} min`}
+                  sx={{
+                    height: 20, fontSize: 11, fontWeight: 700,
+                    bgcolor: r.minutesUntil <= 0 ? '#fdecea' : '#eef4ff',
+                    color: r.minutesUntil <= 0 ? '#b3261e' : '#1a3d7c',
+                  }}
+                />
+                <Typography variant="caption" sx={{ color: '#5a6675' }}>
+                  {r.dueLabel}{r.phone ? ` · ${r.phone}` : ''}
+                </Typography>
+                <Button size="small" variant="text" sx={{ minWidth: 0, px: 0.75 }}
+                  onClick={() => closeReminder(r.id, 'done')}>done</Button>
+                <Button size="small" variant="text" color="inherit" sx={{ minWidth: 0, px: 0.75, color: '#8a8f98' }}
+                  onClick={() => closeReminder(r.id, 'dismissed')}>drop</Button>
+              </Stack>
+            ))}
+          </Box>
+        )}
+      </Box>
+
       <Box sx={{ mb: 1.5 }}>
         {!capOpen ? (
           <Button size="small" variant="text" onClick={() => setCapOpen(true)} sx={{ pl: 0 }}>

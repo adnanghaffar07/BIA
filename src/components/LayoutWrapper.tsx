@@ -5,6 +5,7 @@ import { Box, CircularProgress } from '@mui/material';
 import { usePathname, useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import Sidebar, { SIDEBAR_EXPANDED, SIDEBAR_COLLAPSED } from '@/components/Sidebar';
+import CallReminderWatcher from '@/components/CallReminderWatcher';
 import { useAuth } from '@/context/AuthContext';
 
 export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
@@ -102,6 +103,15 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
       {shouldShowSidebar && (
         <Sidebar collapsed={collapsed} onToggle={toggleSidebar} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
       )}
+      {/*
+        Beside the sidebar rather than inside a page, because a reminder set on one lead
+        falls due while somebody is working the next one — a notice that only appears on the
+        page that created it is a notice nobody sees.
+
+        Gated on being signed in: it polls an endpoint that needs a session, and mounting it
+        on the login screen would be a request a minute that can only ever 401.
+      */}
+      {shouldShowSidebar && <CallReminderWatcher />}
       <Box
         sx={{
           flex: 1,

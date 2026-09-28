@@ -57,14 +57,23 @@ h1, h2, h3, h4, h5, h6 {
   line-height: 1.2;
 }
 
-/* Links */
-a {
+/* Links
+ *
+ * Scoped away from MUI buttons. A <Button component={Link}> renders an <a>, so this plain
+ * element selector beat the button's own colour and painted its label the same blue as the
+ * filled background — "Call now" on the reminders tab was blue text on a blue button,
+ * invisible. Every contained button rendered as a link had the same fault; it only showed
+ * where the background was dark enough to hide the text.
+ *
+ * :not() rather than adding a colour override to each button, because the next one somebody
+ * writes would have the bug again and it would not be obvious why. */
+a:not(.MuiButtonBase-root) {
   color: #1976d2;
   text-decoration: none;
   transition: color 0.2s ease;
 }
 
-a:hover {
+a:not(.MuiButtonBase-root):hover {
   color: #1565c0;
   text-decoration: underline;
 }
