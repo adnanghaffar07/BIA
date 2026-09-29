@@ -20,6 +20,7 @@ import InsightsIcon from '@mui/icons-material/Insights';
 import PhoneIcon from '@mui/icons-material/Phone';
 import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
+import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useAuth } from '@/context/AuthContext';
@@ -67,6 +68,11 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
     ] : []),
     // Admin + super-admin: data operations
     ...(user?.role === 'superadmin' || user?.role === 'admin' ? [
+      /**
+       * First in the admin group, because it is the only screen that answers 'what should
+       * I do next' rather than 'what is true'. Everything below it is a report.
+       */
+      { label: 'To do',       icon: <PlaylistAddCheckIcon />, path: '/admin/workflow' },
       { label: 'Campaigns',   icon: <CampaignIcon />,        path: '/lead-campaigns' },
       // Its own entry, above QC. QC is where somebody goes when they suspect a problem;
       // the ledger is the standing measure of the pipeline and the first thing Frank reads.

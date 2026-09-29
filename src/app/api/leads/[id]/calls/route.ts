@@ -13,21 +13,24 @@ import { CALL_OUTCOMES, type CallOutcome } from '@/lib/callOutcomes';
  * phone" and would tell a producer there is nobody to call.
  */
 
-const LEAD_COLS = `"id","propertyId","owner1FirstName","owner1LastName",
-  "owner2FirstName","owner2LastName","addressStreet","addressCity","addressZip",
-  "phone1","phone2","owner2Phone","phonesAll",
-  "email1","email2","owner2Email","emailsAll","skipTraceData",
-  "invalidPhones","callUnreachableAt","revisitFlag","revisitDate"`;
-
+/**
+ * Every column, for one row.
+ *
+ * This named twenty-two of them, and callState() has since grown to read one more —
+ * callQueueReturnedAt, the line a return-to-queue draws. Absent from the list it read as
+ * undefined, every attempt counted again, and a lead somebody had just put back still showed
+ * "Quoting · 1 attempt" on the card. The write had worked; this query could not see it, so
+ * the button looked broken.
+ *
+ * A star select on a single lead costs a few KB of rawData and cannot go out of date. The
+ * sibling routes beside this one — undo and capture-email — already do exactly that, and
+ * this was the odd one out. (It also carried a `void LEAD_COLS;` keeping a second, unused
+ * copy of the same list alive, which is how the two drifted without anyone noticing.)
+ */
 async function loadLead(id: string) {
   const rows = await sql`
-    SELECT "id","propertyId","owner1FirstName","owner1LastName",
-           "owner2FirstName","owner2LastName","addressStreet","addressCity","addressZip",
-           "phone1","phone2","owner2Phone","phonesAll",
-           "email1","email2","owner2Email","emailsAll","skipTraceData",
-           "invalidPhones","callUnreachableAt","revisitFlag","revisitDate"
-      FROM "Lead" WHERE "id" = ${id} OR "propertyId" = ${id} LIMIT 1` as Array<Record<string, unknown>>;
-  void LEAD_COLS;
+    SELECT * FROM "Lead"
+     WHERE "id" = ${id} OR "propertyId" = ${id} LIMIT 1` as Array<Record<string, unknown>>;
   return rows[0] ?? null;
 }
 
