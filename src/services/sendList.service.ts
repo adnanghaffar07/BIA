@@ -1,4 +1,3 @@
-import { sql } from '@/lib/neon';
 import { insuredEmails, coInsuredEmails, coInsuredName } from './recipients.service';
 import { groupHouseholds, householdScopeKey, type Household } from './household.service';
 import { blockedAddresses } from './emailVerification.service';
@@ -88,29 +87,11 @@ export type SendList = {
  */
 const MAX_ADDRESSES_PER_HOUSEHOLD = 6;
 
-const LEAD_COLS = `"id","propertyId","cohort","effectiveDate","grade","manualGrade","status",
-  "addressStreet","addressCity","addressState","addressZip",
-  "owner1FirstName","owner1LastName","owner2FirstName","owner2LastName",
-  "email1","email2","owner2Email","phone1","phone2","owner2Phone",
-  "emailsAll","phonesAll","skipTraceData",
-  "confirmedEmail","confirmedAt","confirmedVia","confirmedRole"`;
-
-/** Grade A leads in an effective-date window, with everything the rules need. */
-export async function loadCandidates(effFrom: string, effTo: string): Promise<Record<string, unknown>[]> {
-  const rows = await sql`
-    SELECT "id","propertyId","cohort","effectiveDate","grade","manualGrade","status",
-           "addressStreet","addressCity","addressState","addressZip",
-           "owner1FirstName","owner1LastName","owner2FirstName","owner2LastName",
-           "email1","email2","owner2Email","phone1","phone2","owner2Phone",
-           "emailsAll","phonesAll","skipTraceData",
-           "confirmedEmail","confirmedAt","confirmedVia","confirmedRole"
-      FROM "Lead"
-     WHERE "effectiveDate" >= ${effFrom} AND "effectiveDate" <= ${effTo}
-       AND COALESCE("manualGrade","grade") = 'A'
-     ORDER BY "effectiveDate", "owner1LastName"` as Record<string, unknown>[];
-  void LEAD_COLS;
-  return rows;
-}
+/**
+ * Re-exported so the existing callers keep working, and so there is one answer to "who is
+ * eligible" — see sendCandidates.service.ts for why it does not live here any more.
+ */
+export { loadCandidates } from './sendCandidates.service';
 
 /**
  * Build the list.

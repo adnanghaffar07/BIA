@@ -19,6 +19,7 @@ import SwapVertIcon from '@mui/icons-material/SwapVert';
 import InsightsIcon from '@mui/icons-material/Insights';
 import PhoneIcon from '@mui/icons-material/Phone';
 import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
+import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useAuth } from '@/context/AuthContext';
@@ -80,6 +81,13 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
       // Burying a file upload inside a reporting screen is how it goes on being done by
       // whoever has a terminal.
       { label: 'Verification', icon: <MarkEmailReadIcon />,   path: '/admin/verification' },
+      /**
+       * Next to Verification because they are the two halves of "can we mail this address":
+       * one asks whether the mailbox is alive, the other whether it belongs to the insured.
+       * Ruben works this one, so it is a top-level entry rather than a tab he has to know
+       * about — a queue nobody can find is a queue nobody clears.
+       */
+      { label: 'Name check',  icon: <PersonSearchIcon />,     path: '/admin/name-review' },
     ] : []),
   ];
 
