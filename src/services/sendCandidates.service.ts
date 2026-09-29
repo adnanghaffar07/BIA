@@ -40,6 +40,16 @@ import { sql } from '@/lib/neon';
 export async function loadCandidates(
   effFrom: string,
   effTo: string,
+  /**
+   * Which book. Defaults to A, which is every existing caller.
+   *
+   * Grade B is mailed too — email only, off the back of the roof-age blast — so the same
+   * question ("who could be written to in this window") has to be askable of it. Frank's
+   * surname rule says every skip-trace-recovered address, and it does not say Grade A; on
+   * 30 Sep the Grade B trace had recovered 133 addresses of which 53 would have failed that
+   * check, and none of them had been looked at because this function could only answer for A.
+   */
+  grade: 'A' | 'B' = 'A',
 ): Promise<Record<string, unknown>[]> {
   return await sql`
     SELECT "id","propertyId","cohort","effectiveDate","grade","manualGrade","status",
@@ -51,6 +61,6 @@ export async function loadCandidates(
            "confirmedEmail","confirmedAt","confirmedVia","confirmedRole"
       FROM "Lead"
      WHERE "effectiveDate" >= ${effFrom} AND "effectiveDate" <= ${effTo}
-       AND COALESCE("manualGrade","grade") = 'A'
+       AND COALESCE("manualGrade","grade") = ${grade}
      ORDER BY "effectiveDate", "owner1LastName"` as Record<string, unknown>[];
 }

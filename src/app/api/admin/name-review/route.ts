@@ -32,12 +32,14 @@ export async function GET(request: NextRequest) {
      */
     const view = request.nextUrl.searchParams.get('view') ?? 'open';
     const cohort = request.nextUrl.searchParams.get('cohort');
+    const grade = request.nextUrl.searchParams.get('grade');
     const [rows, summary] = await Promise.all([
       getReviewList({
         openOnly: view === 'open',
         decidedOnly: view === 'decided',
         cohortFrom: cohort || undefined,
         cohortTo: cohort || undefined,
+        grade: grade || undefined,
         limit: 2000,
       }),
       reviewSummary(),

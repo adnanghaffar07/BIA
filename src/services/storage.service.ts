@@ -119,6 +119,14 @@ const LEAD_COLS = [
   'personMatchBad', 'personMatchBadAt',
   'blastQueuedAt', 'blastQueuedBy', 'blastQueueGrade', 'blastQueueReason',
   'callUnreachableAt', 'invalidPhones',
+  /**
+   * The line a deliberate return-to-queue draws (migration 046).
+   *
+   * callState() reads this to decide which attempts count. Unselected it reads as undefined,
+   * every attempt counts again, and a lead a producer put back in the queue silently stays
+   * out of it — the button appearing to work being the whole failure.
+   */
+  'callQueueReturnedAt', 'callQueueReturnedBy', 'callQueueReturnedReason',
 ] as const;
 
 /**

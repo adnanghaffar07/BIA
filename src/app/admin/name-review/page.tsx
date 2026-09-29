@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useStickyState } from '@/hooks/useStickyState';
 import {
   Container, Box, Typography, Paper, Button, Chip, CircularProgress, Alert, Stack,
   MenuItem, TextField, LinearProgress, Tooltip,
@@ -49,6 +50,7 @@ type Row = {
   owner: string | null;
   coInsuredOwner: string | null;
   address: string | null;
+  grade: string | null;
 };
 
 type Summary = {
@@ -66,8 +68,24 @@ const VERDICT_LABEL: Record<string, { text: string; colour: 'error' | 'warning' 
 export default function NameReviewPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [cohort, setCohort] = useState<string>('');
-  const [view, setView] = useState<'open' | 'decided' | 'all'>('open');
+  /**
+   * Filters survive leaving the page (Frank Aug-2026).
+   *
+   * This queue is worked in short bursts between calls, and opening a lead from a row and
+   * coming back is the single most common thing anyone does on it. Losing the week and the
+   * grade on the way back means re-setting both every time, on a list of 732.
+   *
+   * The stale-response race that comes with restoring in an effect is already handled by
+   * the `wanted` counter below.
+   */
+  const [cohort, setCohort] = useStickyState<string>('nameReview:cohort', '');
+  const [view, setView] = useStickyState<'open' | 'decided' | 'all'>('nameReview:view', 'open');
+  /**
+   * Grade B addresses are mailed by EMAIL ONLY — there is no producer on a phone to notice
+   * a stranger before the send — so being able to work that book on its own matters more
+   * here than it does on most screens.
+   */
+  const [grade, setGrade] = useStickyState<string>('nameReview:grade', '');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   /** Rows currently being written, so a row cannot be double-clicked into two decisions. */
@@ -91,6 +109,7 @@ export default function NameReviewPage() {
       const qs = new URLSearchParams();
       qs.set('view', view);
       if (cohort) qs.set('cohort', cohort);
+      if (grade) qs.set('grade', grade);
       const res = await fetch(`/api/admin/name-review?${qs.toString()}`);
       const json = await res.json();
       if (mine !== wanted.current) return;
@@ -103,7 +122,7 @@ export default function NameReviewPage() {
     } finally {
       if (mine === wanted.current) setLoading(false);
     }
-  }, [cohort, view]);
+  }, [cohort, view, grade]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -204,6 +223,16 @@ export default function NameReviewPage() {
               <MenuItem value="decided">Already decided</MenuItem>
               <MenuItem value="all">Everything</MenuItem>
             </TextField>
+            <TextField
+              select size="small" label="Grade" value={grade}
+              onChange={(e) => setGrade(e.target.value)}
+              sx={{ minWidth: 120 }}
+              slotProps={{ inputLabel: { shrink: true } }}
+            >
+              <MenuItem value="">All grades</MenuItem>
+              <MenuItem value="A">Grade A</MenuItem>
+              <MenuItem value="B">Grade B</MenuItem>
+            </TextField>
             <Tooltip title="Reload">
               <Button size="small" variant="outlined" onClick={() => void load()}>
                 <RefreshIcon fontSize="small" />
@@ -299,6 +328,23 @@ export default function NameReviewPage() {
                   <Typography variant="body2" color="text.secondary">
                     Skip tracing attributed this address to the{' '}
                     {r.personRole === 'coInsured' ? 'co-insured' : 'insured'}.
+                    {/*
+                      Grade B says how the decision lands, so it belongs on the row.
+
+                      Grade A gets a phone call as well, which is a second chance to notice
+                      the address belongs to somebody else. Grade B is email only — approving
+                      one here IS the last check there will be.
+                    */}
+                    {r.grade === 'B' && (
+                      <Box component="span" sx={{ color: '#8a5a00', fontWeight: 600 }}>
+                        {' '}Grade B — email only, so nobody will speak to this household first.
+                      </Box>
+                    )}
+                    {r.grade && r.grade !== 'A' && r.grade !== 'B' && (
+                      <Box component="span" sx={{ color: '#5a6675' }}>
+                        {' '}This lead is Grade {r.grade} now and is not being mailed.
+                      </Box>
+                    )}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
                     {r.address || 'no property address'}

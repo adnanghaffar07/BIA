@@ -1,3 +1,4 @@
+import { notifyEngagement } from './engagementNotify.service';
 import { sql, pool } from '@/lib/neon';
 import { stopHousehold, type HouseholdStopResult } from './householdStop.service';
 import { easternDay, utcStoredToDate, easternInputToUtc } from '@/lib/wallClock';
@@ -6,7 +7,7 @@ import { suppress, suppressionFor } from './suppression.service';
 import { addActivity } from './storage.service';
 import { closeRemindersForCall } from './callReminder.service';
 import {
-  CALL_OUTCOMES, UNREACHABLE_RULE, STATUS_FOR_OUTCOME,
+  CALL_OUTCOMES, CALL_OUTCOME_LABEL, UNREACHABLE_RULE, STATUS_FOR_OUTCOME,
   NOT_INTERESTED_RECONTACT_DAYS_BEFORE_RENEWAL,
   type CallOutcome, type CallStatus,
 } from '@/lib/callOutcomes';
@@ -194,11 +195,28 @@ export function numbersOnCard(lead: Record<string, unknown>): Array<{
  */
 export async function callState(lead: Record<string, unknown>): Promise<CallState> {
   const leadId = String(lead.id);
+  /**
+   * ── Attempts from before a deliberate return to the queue do not count ───
+   *
+   * Frank, 29 Sep 2026, after testing a few cards: "I want it back in the regular queue...
+   * I can't do undo." The undo is ten minutes by design and is for a mis-tap, not for
+   * setting aside a call that really happened.
+   *
+   * So the rows stay and the LINE moves. Everything below derives exactly as it always did,
+   * over the attempts that count — which means a returned lead that is then dialled four
+   * more times goes unreachable again by the ordinary rule, with no special case.
+   *
+   * Compared in SQL rather than in JS. attemptedAt is `timestamp without time zone`, and a
+   * date comparison done in the driver reads it as server-local; that is the bug that made a
+   * callback due today never appear.
+   */
+  const returnedAt = lead.callQueueReturnedAt ?? null;
   const rows = await sql`
     SELECT "id","leadId","numberDialled","numberRole","numberLabel",
            "attemptedAt"::text AS "attemptedAt", "durationSeconds","outcome",
            "callbackAt"::text AS "callbackAt","notes","calledBy"
       FROM "CallAttempt" WHERE "leadId" = ${leadId}
+       AND (${returnedAt}::timestamp IS NULL OR "attemptedAt" > ${returnedAt}::timestamp)
      ORDER BY "attemptedAt" DESC` as CallAttempt[];
 
   const invalidNumbers: string[] = Array.isArray(lead.invalidPhones)
@@ -320,6 +338,141 @@ export async function callState(lead: Record<string, unknown>): Promise<CallStat
  * so where somebody can see the correction.
  */
 export const UNDO_WINDOW_MINUTES = 10;
+
+/**
+ * Put a lead back in the calling queue.
+ *
+ * Frank, 29 Sep 2026: "what's the best thing to get it back in the queue? I want it back in
+ * the regular queue... I can't do undo." And on why it is not just about his own test rows:
+ * "what if something is done incorrectly or a mistake was made and you wanted to get it
+ * back — things get stuck in here."
+ *
+ * ── Not an undo, and deliberately not one ───────────────────────────────────
+ * The undo deletes an attempt and is limited to ten minutes, because past that an attempt
+ * is a record of a call that really happened and the call log is what contactability is
+ * computed from. This deletes nothing. It draws a line and says the calling story starts
+ * again after it — so the card keeps both the calls and the fact that somebody set them
+ * aside, which is precisely what a wider undo window would have destroyed.
+ *
+ * ── What it does reverse ────────────────────────────────────────────────────
+ * "Back in the queue" has to mean actually callable, or it is a button that appears to work.
+ * A number one of those attempts marked bad stays out of rotation unless this clears it —
+ * the lead would return to the queue with nothing dialable on it. So invalidations caused by
+ * the discounted attempts are lifted, by the same test the undo uses: only where no OTHER
+ * attempt independently condemned that number.
+ *
+ * ── What it refuses to reverse ──────────────────────────────────────────────
+ * A suppression. "Not interested" and "do not call" are a person's own words, and quietly
+ * lifting one to tidy a queue is how a household that asked us to stop gets rung again. If
+ * the calls being set aside produced a live suppression, this refuses and says so; releasing
+ * it is a separate, deliberate act with its own record.
+ */
+export async function returnToQueue(input: {
+  lead: Record<string, unknown>;
+  by?: string | null;
+  reason?: string | null;
+}): Promise<{ returned: boolean; discounted?: number; restoredNumbers?: string[]; reason?: string }> {
+  const leadId = String(input.lead.id);
+
+  // Only the attempts that currently count — a lead can be returned to the queue twice.
+  const priorLine = (input.lead.callQueueReturnedAt ?? null) as string | null;
+  const attempts = (await sql`
+    SELECT "id","outcome","numberDialled" FROM "CallAttempt"
+     WHERE "leadId" = ${leadId}
+       AND (${priorLine}::timestamp IS NULL OR "attemptedAt" > ${priorLine}::timestamp)`
+  ) as Array<{ id: string; outcome: CallOutcome; numberDialled: string }>;
+
+  if (!attempts.length) {
+    return { returned: false, reason: 'This lead has no calls against it — it is already in the queue.' };
+  }
+
+  /**
+   * A live suppression from one of these calls stops this outright.
+   *
+   * Checked before anything is written, so a refusal leaves the lead exactly as it was.
+   */
+  const suppressing = attempts
+    .map((a) => CALL_OUTCOMES.find((o) => o.key === a.outcome)?.suppresses)
+    .filter(Boolean) as string[];
+  if (suppressing.length) {
+    const [live] = await sql`
+      SELECT COUNT(*)::int AS n FROM "Suppression"
+       WHERE "leadId" = ${leadId} AND "releasedAt" IS NULL
+         AND "reason" = ANY(${[...new Set(suppressing)]}::text[])` as Array<{ n: number }>;
+    if (Number(live?.n ?? 0) > 0) {
+      return {
+        returned: false,
+        reason: 'Someone on this household said not to contact them, and that is still in force. '
+          + 'Release the suppression first if it was recorded in error — returning the lead to the '
+          + 'queue will not undo what they asked for.',
+      };
+    }
+  }
+
+  /**
+   * Numbers these attempts condemned, where nothing outside the discounted set condemns them
+   * too. Same rule as the undo: an independent "bad number" on the same line stands.
+   */
+  const condemned = [...new Set(attempts
+    .filter((a) => CALL_OUTCOMES.find((o) => o.key === a.outcome)?.invalidatesNumber)
+    .map((a) => a.numberDialled))];
+  const ids = attempts.map((a) => a.id);
+  const restored: string[] = [];
+  for (const number of condemned) {
+    const [others] = await sql`
+      SELECT COUNT(*)::int AS n FROM "CallAttempt"
+       WHERE "leadId" = ${leadId} AND "numberDialled" = ${number}
+         AND NOT ("id" = ANY(${ids}::text[]))
+         AND "outcome" IN ('bad_number','wrong_person')` as Array<{ n: number }>;
+    if (Number(others?.n ?? 0) === 0) restored.push(number);
+  }
+
+  const invalid: string[] = Array.isArray(input.lead.invalidPhones)
+    ? (input.lead.invalidPhones as string[]) : [];
+  const keptInvalid = invalid.filter((n) => !restored.includes(n));
+
+  /**
+   * The line, the restored numbers and the cleared callback move together.
+   *
+   * NOW() rather than a time from the caller: this is compared against attemptedAt, which is
+   * `timestamp without time zone` written by the server. A browser clock reaching that
+   * comparison is the bug that hid a callback that was due today.
+   */
+  await sql`
+    UPDATE "Lead"
+       SET "callQueueReturnedAt"     = NOW(),
+           "callQueueReturnedBy"     = ${input.by ?? null},
+           "callQueueReturnedReason" = ${input.reason ?? null},
+           "invalidPhones"           = ${JSON.stringify(keptInvalid)}::jsonb,
+           "revisitFlag"             = FALSE,
+           "revisitDate"             = NULL,
+           "revisitNote"             = NULL,
+           "callUnreachableAt"       = NULL,
+           "updatedAt"               = NOW()
+     WHERE "id" = ${leadId}`;
+
+  /**
+   * Any reminder still pointing at the old story is closed, or Ruben gets a notification
+   * about a callback for a lead whose calling has been reset.
+   */
+  await closeRemindersForCall(leadId, input.by ?? null).catch(() => {});
+
+  /**
+   * The return is the record. The attempts are still there and still readable; this is the
+   * entry that explains why the card looks untouched despite having been called.
+   */
+  await addActivity(
+    leadId,
+    'note',
+    `Returned to the calling queue — ${attempts.length} earlier attempt(s) set aside`
+      + (input.reason ? `: ${input.reason}` : '')
+      + (restored.length ? `. Back in rotation: ${restored.join(', ')}` : ''),
+    { returnedToQueue: { discounted: attempts.length, restoredNumbers: restored, reason: input.reason ?? null } },
+    input.by ?? undefined,
+  ).catch(() => { /* the return matters more than the note about it */ });
+
+  return { returned: true, discounted: attempts.length, restoredNumbers: restored };
+}
 
 export async function undoLastAttempt(input: {
   lead: Record<string, unknown>;
@@ -536,17 +689,32 @@ export async function logAttempt(input: {
    * report it would be the worse of the two.
    */
   let emailPaused: HouseholdStopResult | null = null;
-  if (spec.pausesEmail) {
+  /**
+   * Any outcome that reached a person stops the sequence — see callOutcomes.ts.
+   *
+   * Notably this covers "not interested" and "do not call", which until 29 Sep 2026 only
+   * wrote a Suppression row. That stops the next PUSH and does nothing to a sequence already
+   * running on the platform, so a household that had asked us to stop kept receiving the
+   * remaining steps.
+   */
+  if (spec.reached) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       /**
        * No recipient is spared — unlike a reply, which spares the address that replied.
-       * A quote request came in on the PHONE, so there is no email recipient to keep, and
-       * every live address on the household should stop.
+       * The contact happened on the PHONE, so there is no email address to keep talking to,
+       * and every live address on the household should stop.
+       *
+       * The reason carries the outcome rather than a fixed string. It is what the stop
+       * record shows afterwards, and "quote requested on a call" printed against a household
+       * that had actually said do-not-call would misdescribe the one event most worth being
+       * able to look up.
        */
       emailPaused = await stopHousehold(
-        client, leadId, '', 'quote requested on a call', String(input.by ?? 'producer'),
+        client, leadId, '',
+        `${CALL_OUTCOME_LABEL[input.outcome] ?? input.outcome} — on a call`,
+        String(input.by ?? 'producer'),
       );
       await client.query('COMMIT');
     } catch (e) {
@@ -593,6 +761,31 @@ export async function logAttempt(input: {
     await sql`
       UPDATE "Lead" SET "callUnreachableAt" = COALESCE("callUnreachableAt", NOW())
        WHERE "id" = ${leadId}`;
+  }
+
+  /**
+   * ── Tell Frank when Ruben reaches somebody ───────────────────────────────
+   *
+   * Frank, 29 Sep 2026: "anytime there's real engagement, whether it's on the phone or the
+   * email, it should both correlate into a workflow." The email half of that runs off the
+   * reply webhook; this is the phone half, so both channels raise the same alert in the same
+   * shape and neither depends on anyone watching a screen.
+   *
+   * Only where a person was actually reached. A no-answer is not an event anybody needs a
+   * message about, and a notifier that fires on every dial is one people filter away —
+   * taking the four that mattered with it.
+   *
+   * Not awaited: the call is recorded and a producer is mid-queue. A mail relay must never
+   * be between Ruben and his next number.
+   */
+  if (spec.reached) {
+    void notifyEngagement({
+      leadId,
+      kind: 'call',
+      who: input.numberDialled ?? null,
+      detail: `${CALL_OUTCOME_LABEL[input.outcome] ?? input.outcome}`
+        + (input.notes ? ` — ${input.notes}` : ''),
+    });
   }
 
   return { id, status: state.status, suppressed, numberInvalidated };

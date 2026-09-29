@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Container, Box, Typography, Paper, Button, Chip, Table, TableHead, TableRow,
   TableCell, TableBody, CircularProgress, Alert, Stack, Tooltip, TextField,
@@ -64,7 +64,24 @@ export default function PhoneDashboardPage() {
   const [reach, setReach] = useStickyState('phone:reach', 'unverified');
   const [status, setStatus] = useStickyState('phone:status', 'all');
 
+  /**
+   * ── Only the newest request is allowed to paint ──────────────────────────
+   *
+   * Frank Aug-2026 asked that filters survive leaving the page, and useStickyState does
+   * keep them — but it restores in an effect, so every visit mounts with the DEFAULTS,
+   * fires a request for those, then restores the saved filters and fires a second one.
+   * Two are in flight, and whichever answers last wins. On a slow first and a fast second
+   * the dropdowns read C7 · Everyone rated while the numbers underneath are C1–C3 ·
+   * unverified — which looks exactly like the filters having reset themselves.
+   *
+   * A counter rather than a ref per filter: this page has four, and the cohorts screen
+   * guarded only its grade for the same reason and left its two date fields exposed. One
+   * counter covers every filter there will ever be.
+   */
+  const wanted = useRef(0);
+
   const load = useCallback(async () => {
+    const mine = ++wanted.current;
     setLoading(true); setError(null);
     try {
       const u = new URL('/api/admin/phone-dashboard', window.location.origin);
@@ -73,11 +90,17 @@ export default function PhoneDashboardPage() {
       u.searchParams.set('reach', reach);
       u.searchParams.set('status', status);
       const j = await (await fetch(u.toString())).json();
+      // A newer request has been sent since this one left. Its answer is the one that
+      // matches what is on screen, so this reply is discarded rather than painted.
+      if (mine !== wanted.current) return;
       if (!j.success) throw new Error(j.error || 'Could not load');
       setData(j as PhoneDashboard);
     } catch (e) {
+      if (mine !== wanted.current) return;
       setError(e instanceof Error ? e.message : 'Could not load');
-    } finally { setLoading(false); }
+    } finally {
+      if (mine === wanted.current) setLoading(false);
+    }
   }, [cohortFrom, cohortTo, reach, status]);
 
   useEffect(() => { load(); }, [load]);

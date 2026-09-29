@@ -89,7 +89,21 @@ export default function CohortsPage() {
   const wantedGrade = useRef<'A' | 'B'>(grade);
   useEffect(() => { wantedGrade.current = grade; }, [grade]);
 
+  /**
+   * The same race, for the filters the grade check cannot see.
+   *
+   * wantedGrade compares the grade a response carries against the grade now selected, which
+   * catches a stale GRADE and nothing else. Change the date window and two requests for the
+   * same grade are in flight; both pass that check, and the slower one paints. The dates
+   * restore from sessionStorage in an effect exactly as the grade does, so this fires on
+   * every ordinary visit to the page, not just on a fast click.
+   *
+   * A counter covers every filter at once, including any added later.
+   */
+  const wanted = useRef(0);
+
   const run = useCallback(async () => {
+    const mine = ++wanted.current;
     setLoading(true);
     setError(null);
     try {
@@ -98,6 +112,7 @@ export default function CohortsPage() {
       if (effFrom) u.searchParams.set('effFrom', effFrom);
       if (effTo) u.searchParams.set('effTo', effTo);
       const j = await (await fetch(u.toString())).json();
+      if (mine !== wanted.current) return;
       if (!j.success) throw new Error(j.error || 'Could not build the ledger');
 
       /**

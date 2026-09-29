@@ -77,6 +77,14 @@ export type ReviewRow = {
    */
   coInsuredOwner: string | null;
   address: string | null;
+  /**
+   * Read from the lead, never stored on the row.
+   *
+   * A grade copied onto the review row at build time would be a second answer to a question
+   * the Lead already answers, and it would go stale the moment somebody regrades a card —
+   * leaving a reviewer told this was Grade A about a lead that is not.
+   */
+  grade: string | null;
 };
 
 const norm = (e: unknown) => String(e ?? '').trim().toLowerCase();
@@ -127,9 +135,22 @@ export type BuildResult = {
  * settled ones alone.
  */
 export async function buildReviewQueue(params: {
-  effFrom: string; effTo: string; dryRun?: boolean;
+  effFrom: string; effTo: string;
+  /**
+   * Which book to check. Grade A by default — every existing caller.
+   *
+   * Grade B needs it just as much and had never had it: on 30 Sep the roof-age blast had
+   * recovered 133 insured addresses across 64 leads, 53 of which failed the surname check,
+   * and not one was in this queue. Grade B is mailed by email ONLY, so there is no producer
+   * on a phone to notice that the address belongs to somebody else before the send.
+   *
+   * Untraced leads cost nothing to include: only addresses the trace payload carries are
+   * ever queued, so a lead nobody has traced contributes none.
+   */
+  grade?: 'A' | 'B';
+  dryRun?: boolean;
 }): Promise<BuildResult> {
-  const { effFrom, effTo, dryRun = true } = params;
+  const { effFrom, effTo, grade = 'A', dryRun = true } = params;
 
   /**
    * The same population the send list works from, asked with the same function.
@@ -143,7 +164,7 @@ export async function buildReviewQueue(params: {
    * A review queue built over a narrower population than the send is worse than no queue,
    * because it reports all-clear about leads it never opened.
    */
-  const leads = await loadCandidates(effFrom, effTo) as Array<Record<string, any>>;
+  const leads = await loadCandidates(effFrom, effTo, grade) as Array<Record<string, any>>;
 
   /**
    * Addresses ZeroBounce has refused: invalid, abuse, spamtrap, do_not_mail.
@@ -302,18 +323,23 @@ export async function getReviewList(params: {
    * written.
    */
   decidedOnly?: boolean;
+  /** Narrow to one book, read live from the lead rather than from the row. */
+  grade?: string;
   limit?: number;
 } = {}): Promise<ReviewRow[]> {
   const rows = await sql`
     SELECT r.*, l."owner1FirstName", l."owner1LastName",
            l."owner2FirstName", l."owner2LastName",
-           l."addressStreet", l."addressCity"
+           l."addressStreet", l."addressCity",
+           COALESCE(l."manualGrade", l."grade") AS "leadGrade"
       FROM "EmailNameReview" r
       LEFT JOIN "Lead" l ON l."id" = r."leadId"
      WHERE (${params.cohortFrom ?? null}::text IS NULL OR r."cohort" >= ${params.cohortFrom ?? null})
        AND (${params.cohortTo ?? null}::text   IS NULL OR r."cohort" <= ${params.cohortTo ?? null})
        AND (${params.openOnly ?? false}::boolean = FALSE OR r."decision" IS NULL)
        AND (${params.decidedOnly ?? false}::boolean = FALSE OR r."decision" IS NOT NULL)
+       AND (${params.grade ?? null}::text IS NULL
+            OR COALESCE(l."manualGrade", l."grade") = ${params.grade ?? null})
      -- Mismatch first: "this belongs to a different name" is a decision somebody can
      -- actually make, where "we cannot tell" mostly is not.
      ORDER BY CASE r."verdict" WHEN 'mismatch' THEN 0 ELSE 1 END, r."cohort", r."email"
@@ -335,6 +361,7 @@ export async function getReviewList(params: {
     owner: [r.owner1FirstName, r.owner1LastName].filter(Boolean).join(' ') || null,
     coInsuredOwner: [r.owner2FirstName, r.owner2LastName].filter(Boolean).join(' ') || null,
     address: [r.addressStreet, r.addressCity].filter(Boolean).join(', ') || null,
+    grade: r.leadGrade ?? null,
   }));
 }
 

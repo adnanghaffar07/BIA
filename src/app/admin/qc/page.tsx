@@ -65,7 +65,13 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
   { key: 'call_outcome', label: 'Calls & Outcomes', icon: <PhoneIcon />, blurb: 'Where every workable lead stands on the two things a producer does to it: the call and the quote. Filter by call status, by what the last call returned, or by quote stage — the same states shown on the lead card.' },
   { key: 'emails_insured', label: 'Email list — insured', icon: <ContactPhoneIcon />, blurb: 'The go-live send list: every Grade A lead in the range with an email for the NAMED INSURED, which is who E1 mails. One row per lead, with the addresses themselves.' },
   { key: 'emails_all', label: 'Email list — insured or co-insured', icon: <ContactPhoneIcon />, blurb: 'The same list widened to leads reachable only at the co-insured. The difference between this and the insured list is what the insured-only rule costs in reach.' },
-  { key: 'blast_skiptrace', label: 'Blast Skip Traces', icon: <BoltIcon />, blurb: 'Leads traced by a Grade-A cohort blast rather than by hand — when it ran, who ran it, what each lead returned and what it cost. Grouped by run.' },
+  /**
+   * Named no grade, because the query has no grade filter — it returns every lead that a
+   * blast has queued or traced, A and B together. Calling it "a Grade-A cohort blast" put
+   * the wrong word above a screen showing 2,419 Grade B leads, and the sentence read as an
+   * explanation rather than as a mistake.
+   */
+  { key: 'blast_skiptrace', label: 'Blast Skip Traces', icon: <BoltIcon />, blurb: 'Leads traced by a cohort blast rather than by hand, Grade A and Grade B alike — when it ran, who ran it, what each lead returned and what it cost. Grouped by run.' },
   { key: 'recapture_log', label: 'Recapture Log', icon: <HistoryIcon />, blurb: 'Every account that came back into play: when, which renewal week it belongs to, which process returned it, and whether its cohort had already been frozen. A held account is one that arrived after its send list was built, so it is NOT in this cycle — those are the rows that need a decision.' },
 ];
 
@@ -76,11 +82,36 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
  * Ruben actually want — how many came back — and a count nobody can click is a count
  * nobody trusts.
  */
+/**
+ * The blurbs take the grade rather than naming one.
+ *
+ * "Grade A, quote-ready, no insured email" sat under the Grade B tab describing a
+ * population that was not on screen — and it read as an explanation rather than as a
+ * mistake, so the natural conclusion was that the 2,419 below it were Grade A. Frank ran a
+ * Grade B blast and then could not tell which book he was looking at.
+ *
+ * A function cannot go stale the way a sentence can: there is no version of this that
+ * silently says the wrong grade.
+ */
 const PIPELINE_STAGES = [
-  { key: 'isolated'  as const, label: 'Not traced yet',      color: '#b3261e', blurb: 'Grade A, quote-ready, no insured email, and no deep trace has ever run. Tracerfy goes first.' },
-  { key: 'tracerfy'  as const, label: 'Tracerfy found none', color: '#8a5a00', blurb: 'Tracerfy has run and returned no insured email. BatchData is next.' },
-  { key: 'batchdata' as const, label: 'BatchData found none', color: '#5a6675', blurb: 'Both vendors have now run and neither found an insured email. Exhausted — nothing further to try.' },
-  { key: 'recovered' as const, label: 'Recovered',           color: '#2e7d46', blurb: 'An address came back. The lead is re-graded and returned to the status it held before isolation.' },
+  {
+    key: 'isolated' as const, label: 'Not traced yet', color: '#b3261e',
+    blurb: (g: 'A' | 'B') => (g === 'A'
+      ? 'Grade A, quote-ready, no insured email, and no deep trace has ever run. Tracerfy goes first.'
+      : 'Grade B in the roof-age band, no insured email, and no deep trace has ever run. Tracerfy goes first.'),
+  },
+  {
+    key: 'tracerfy' as const, label: 'Tracerfy found none', color: '#8a5a00',
+    blurb: () => 'Tracerfy has run and returned no insured email. BatchData is next.',
+  },
+  {
+    key: 'batchdata' as const, label: 'BatchData found none', color: '#5a6675',
+    blurb: () => 'Both vendors have now run and neither found an insured email. Exhausted — nothing further to try.',
+  },
+  {
+    key: 'recovered' as const, label: 'Recovered', color: '#2e7d46',
+    blurb: () => 'An address came back. The lead is re-graded and returned to the status it held before isolation.',
+  },
 ];
 /**
  * Most a single blast will call, whatever the pool.
@@ -2604,6 +2635,18 @@ const MAX_RENDERED = 300;
                 <Typography variant="caption" sx={{ display: 'block', color: '#8a8f98' }}>
                   queued by {q.queuedBy.join(', ') || '—'}{q.oldest ? ` · oldest ${q.oldest}` : ''}
                 </Typography>
+                {/*
+                  Why the count on the button and the count during the run differ.
+
+                  The label is the queue length; the run first asks how many are actually
+                  workable and traces those. Trust and company-owned leads are skipped — so
+                  "Trace 2,419" starts reporting "5/2,330" and looks like it lost 89 leads.
+                  Saying it up front costs one line and removes the whole question.
+                */}
+                <Typography variant="caption" sx={{ display: 'block', color: '#8a8f98' }}>
+                  Leads owned by a trust or company are skipped and not charged for, so the
+                  run may cover slightly fewer than this.
+                </Typography>
 
                 {/*
                   Per queue, not one button for both. Running A and B together is the exact
@@ -2711,8 +2754,37 @@ const MAX_RENDERED = 300;
             </Button>
           </Stack>
 
+          {/*
+            ── Where the whole book went ─────────────────────────────────────
+
+            The four chips say how many leads sit at each stage and never said how many
+            there are altogether, so the only way to answer "how much have we traced, out of
+            what" was to add four numbers in your head and hope none of them overlapped.
+            Frank asked exactly that question after running a Grade B blast.
+
+            One sentence, arithmetic that closes: everything enrolled, split into done and
+            not done, plus the ones nobody has enrolled at all — which is the number that
+            makes the other four look wrong when it is missing.
+          */}
+          {!!pipeline.counts && (() => {
+            const c = pipeline.counts;
+            const enrolled = c.isolated + c.tracerfy + c.batchdata + c.recovered;
+            const traced = c.tracerfy + c.batchdata + c.recovered;
+            const total = enrolled + (c.awaitingIsolation ?? 0);
+            return (
+              <Typography variant="body2" sx={{ mb: 1, color: '#3d4658' }}>
+                <b>Grade {pipeGrade}</b> in this date range: <b>{total.toLocaleString()}</b> leads with no
+                insured email.{' '}
+                {traced.toLocaleString()} {traced === 1 ? 'has' : 'have'} been through a trace
+                {enrolled > 0 && ` (${Math.round((traced / enrolled) * 100)}% of the ${enrolled.toLocaleString()} enrolled)`},
+                {' '}<b>{c.isolated.toLocaleString()}</b> {c.isolated === 1 ? 'is' : 'are'} still waiting
+                {!!c.awaitingIsolation && <>, and {c.awaitingIsolation.toLocaleString()} {c.awaitingIsolation === 1 ? 'is' : 'are'} not enrolled yet</>}.
+              </Typography>
+            );
+          })()}
+
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-            {PIPELINE_STAGES.find((s) => s.key === pipeline.stage)?.blurb}
+            {PIPELINE_STAGES.find((s) => s.key === pipeline.stage)?.blurb(pipeGrade)}
             {' '}Recovery means an insured <b>email</b> — that is what isolation is. A lead that gains only a
             phone keeps the phone and stays in the pipeline.
           </Typography>
@@ -2760,7 +2832,7 @@ const MAX_RENDERED = 300;
                   onClick={() => {
                     const n = pipeline.counts?.awaitingIsolation ?? 0;
                     if (confirm(
-                      `Isolate ${n} Grade A lead${n === 1 ? '' : 's'} with no insured email?\n\n`
+                      `Isolate ${n} Grade ${pipeGrade} lead${n === 1 ? '' : 's'} with no insured email?\n\n`
                       + 'They move into this pipeline so they can be worked through Tracerfy and '
                       + 'BatchData. Each lead\'s current status is remembered and restored '
                       + 'automatically if an address turns up.\n\n'
@@ -2773,7 +2845,7 @@ const MAX_RENDERED = 300;
               }
             >
               <strong>
-                {pipeline.counts.awaitingIsolation} Grade A lead
+                {pipeline.counts.awaitingIsolation} Grade {pipeGrade} lead
                 {pipeline.counts.awaitingIsolation === 1 ? '' : 's'} in this range {pipeline.counts.awaitingIsolation === 1 ? 'has' : 'have'} no insured email and {pipeline.counts.awaitingIsolation === 1 ? 'is' : 'are'} not in the pipeline yet.
               </strong>
               {' '}The stages below only count leads that have been isolated, so they read
@@ -2805,6 +2877,28 @@ const MAX_RENDERED = 300;
               {(() => {
                 const vendor = pipeline.stage === 'isolated' ? 'tracerfy' : 'batchdata';
                 /**
+                 * ── The same leads are offered by the queue panel above ─────────
+                 *
+                 * queueForBlast stamps recoveryStage='isolated' as well as blastQueuedAt, so
+                 * a lead queued for a blast is enrolled in this pipeline at the same moment.
+                 * On 30 Sep that was a perfect overlap: 2,419 waiting in the Grade B queue,
+                 * 2,419 at "Not traced yet", 2,419 in both. Two buttons, one vendor, one set
+                 * of leads, and nothing on screen saying so — the reasonable reading was that
+                 * they did different things and one of them had not been run.
+                 *
+                 * Both are kept. They are not interchangeable: this one caps at MAX_PER_BLAST
+                 * and the queue runs the whole backlog in one go, which for 2,419 leads is the
+                 * difference between one click and twenty-four. Grade A leads isolated by hand
+                 * never enter the queue at all, so this button is the only way to work them.
+                 *
+                 * What was missing was the sentence telling you which to press.
+                 */
+                const queueForThisGrade = queues.find((x) => x.grade === pipeGrade);
+                const alsoQueued = pipeline.stage === 'isolated'
+                  && !!queueForThisGrade?.waiting
+                  && queueForThisGrade.waiting >= (pipeline.counts?.isolated ?? 0)
+                  && (pipeline.counts?.isolated ?? 0) > 0;
+                /**
                  * The workable rows, NOT counts[stage].
                  *
                  * counts[stage] includes trust-owned leads, which the run skips without
@@ -2816,7 +2910,10 @@ const MAX_RENDERED = 300;
                 return (
                   <>
                     <Button
-                      size="small" variant="contained"
+                      size="small"
+                      // Secondary when the queue above offers the same leads in one go, so the
+                      // two buttons stop competing for the same press.
+                      variant={alsoQueued ? 'outlined' : 'contained'}
                       startIcon={pipeline.busy ? <CircularProgress size={13} color="inherit" /> : <BoltIcon />}
                       onClick={() => runPipelineBlast(vendor, false)}
                       disabled={pipeline.busy || !pool}
@@ -2824,10 +2921,33 @@ const MAX_RENDERED = 300;
                       {`Run ${vendor === 'tracerfy' ? 'Tracerfy' : 'BatchData'} on `}
                       {pool <= MAX_PER_BLAST ? pool : `${MAX_PER_BLAST} of ${pool}`}
                     </Button>
+
+                    {alsoQueued && (
+                      <Typography variant="caption" sx={{ color: '#8a5a00', fontWeight: 600 }}>
+                        These are the same leads as the Grade {pipeGrade} queue above — the amber
+                        button there traces all {queueForThisGrade!.waiting.toLocaleString()} in one
+                        go. Use this one only to run a batch of {MAX_PER_BLAST}.
+                      </Typography>
+                    )}
                     <Typography variant="caption" sx={{ color: '#8a5a00' }}>
                       {pool > MAX_PER_BLAST
                         ? `Costs money · capped at ${MAX_PER_BLAST} per run, so this needs ${Math.ceil(pool / MAX_PER_BLAST)} runs · leads that return nothing move to the next stage`
                         : 'Costs money · leads that return nothing move to the next stage'}
+                      {/*
+                        Why the button offers fewer than the chip counts.
+
+                        The chip says 2,419 and the button says 2,330, and the 89 between
+                        them were explained only in a source comment. Two numbers that
+                        disagree with no reason given is the thing that makes a screen feel
+                        broken even when both are right.
+                      */}
+                      {pipelineEntities.length > 0 && (
+                        <> · {pipelineEntities.length.toLocaleString()} of the{' '}
+                          {(pipeline.counts?.[pipeline.stage] ?? 0).toLocaleString()} at this stage are owned by
+                          a trust or company, so a person-level trace cannot return anything for them —
+                          they are listed separately below and not charged for
+                        </>
+                      )}
                     </Typography>
                   </>
                 );

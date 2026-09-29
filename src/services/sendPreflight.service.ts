@@ -31,7 +31,8 @@ import { insuredEmails, coInsuredEmails } from './recipients.service';
  */
 
 export type PreflightIssue = {
-  code: 'holdout_on_list' | 'suppressed_on_list' | 'unreachable_on_list' | 'arms_unbalanced';
+  code: 'holdout_on_list' | 'suppressed_on_list' | 'unreachable_on_list' | 'arms_unbalanced'
+      | 'no_band_price';
   severity: 'blocker' | 'warning';
   /** Written for whoever is about to press send, not for whoever wrote this file. */
   headline: string;
@@ -65,7 +66,8 @@ export async function sendPreflight(params: { effFrom: string; effTo: string }):
            "campaignSegment", "insuredSubjectVariant", "insuredCtaArm",
            "coInsuredSubjectVariant", "coInsuredCtaArm",
            "email1", "email2", "owner2Email", "emailsAll", "skipTraceData",
-           "owner1FirstName", "owner1LastName", "owner2FirstName", "owner2LastName"
+           "owner1FirstName", "owner1LastName", "owner2FirstName", "owner2LastName",
+           "indicativeBandLow", "indicativeBandHigh"
       FROM "Lead"
      WHERE "sendListBuiltAt" IS NOT NULL
        AND "cohort" BETWEEN ${effFrom} AND ${effTo}
@@ -138,6 +140,39 @@ export async function sendPreflight(params: { effFrom: string; effTo: string }):
         + 'at the build rather than at the accounts.',
       count: unreachable.length,
       byCohort: bucket(unreachable),
+    });
+  }
+
+  /**
+   * ── The band price the copy promises ─────────────────────────────────────
+   *
+   * Frank's C1–C3 copy states a range — "somewhere between {{ band_low }} and
+   * {{ band_high }}" — and the figures are typed onto each card by hand. A card he has not
+   * reached yet carries no band, mergeVars correctly omits the keys rather than sending
+   * blanks, and the platform renders a variable it was never given as NOTHING.
+   *
+   * So the sentence still sends. It reads "somewhere between  and ", to a homeowner, about
+   * the one number they care about. Same failure as the test send that arrived saying
+   * "Hi ," — the contact was fine, the template asked for something that was not there, and
+   * nothing anywhere said a word.
+   *
+   * A blocker rather than a warning. The point of filling those cards is that the band is IN
+   * the copy; a send without it is not a degraded send, it is a broken one.
+   */
+  const unbanded = leads.filter((l) =>
+    l.indicativeBandLow == null || l.indicativeBandHigh == null
+    || Number(l.indicativeBandHigh) < Number(l.indicativeBandLow));
+  if (unbanded.length) {
+    issues.push({
+      code: 'no_band_price',
+      severity: 'blocker',
+      headline: `${unbanded.length} of ${leads.length} accounts have no band price on the card`,
+      detail: 'Any step whose copy uses {{ band_low }} or {{ band_high }} will send an empty '
+        + 'range to these households — the variable is absent, so it renders as nothing and the '
+        + 'sentence goes anyway. These are filled by hand on each lead card. Either finish them '
+        + 'or use copy for this wave that does not quote a range.',
+      count: unbanded.length,
+      byCohort: bucket(unbanded),
     });
   }
 

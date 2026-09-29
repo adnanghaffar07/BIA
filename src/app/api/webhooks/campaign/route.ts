@@ -1,3 +1,4 @@
+import { notifyEngagement } from '@/services/engagementNotify.service';
 import { NextRequest, NextResponse } from 'next/server';
 import { pool } from '@/lib/neon';
 import {
@@ -486,6 +487,32 @@ export async function POST(request: NextRequest) {
     }
 
     await client.query('COMMIT');
+
+    /**
+     * ── Tell Ruben and Frank, after the commit ───────────────────────────────
+     *
+     * Frank, 29 Sep 2026: "as soon as an engagement, an email is sent to Ruben, he knows how
+     * to get into the card, and it's pretty instantaneous... I have a feeling these may get
+     * buried, so a good fail-safety is having them directly emailed to us."
+     *
+     * AFTER the commit, and never inside it. The reply is the thing that must survive; a
+     * notification is a convenience on top of it. Holding a database transaction open across
+     * a call to someone else's mail service would put the record of a homeowner's reply at
+     * the mercy of that service being up.
+     *
+     * Not awaited into the response either — notifyEngagement swallows its own failures, and
+     * the vendor retries this webhook on a 5xx, so a slow mail relay must not turn a
+     * delivered reply into a redelivery.
+     */
+    if (kind === 'reply' || kind === 'click') {
+      void notifyEngagement({
+        leadId: row.leadId,
+        kind,
+        who: p.email,
+        detail: kind === 'reply' ? (p.replyText ?? null) : null,
+      });
+    }
+
     return NextResponse.json({
       ok: true, matched: true, event: p.eventType, kind, leadId: row.leadId,
       household: household ?? undefined,

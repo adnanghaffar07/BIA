@@ -146,6 +146,9 @@ export default function CallDispositionPanel({ leadId }: { leadId: string }) {
   const [capIns, setCapIns] = useState('');
   const [capCo, setCapCo] = useState('');
   const [capOpen, setCapOpen] = useState(false);
+  /** The "put it back in the queue" reveal — see returnToQueue below. */
+  const [reqOpen, setReqOpen] = useState(false);
+  const [reqReason, setReqReason] = useState('');
   const [callbackAt, setCallbackAt] = useState('');
 
   const load = useCallback(async () => {
@@ -274,6 +277,36 @@ export default function CallDispositionPanel({ leadId }: { leadId: string }) {
       setMsg('Last outcome undone. Anything it triggered has been reversed too.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not undo that');
+    } finally { setBusy(false); }
+  };
+
+  /**
+   * Put the lead back in the calling queue (Frank, 29 Sep 2026).
+   *
+   * "I want it back in the regular queue... I can't do undo." Undo is ten minutes and
+   * deletes the attempt; this keeps every call on the record and starts the calling story
+   * again after a line, so the card shows both what was dialled and who decided to set it
+   * aside.
+   */
+  const returnToQueue = async () => {
+    setMsg(null); setError(null);
+    setBusy(true);
+    try {
+      const j = await (await fetch(`/api/leads/${leadId}/calls/requeue`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reqReason.trim() || null }),
+      })).json();
+      if (!j.success) throw new Error(j.error || 'Could not return that lead to the queue');
+      if (!j.returned) { setError(j.reason || 'Could not return that lead to the queue.'); return; }
+      setState(j.data);
+      setReqOpen(false); setReqReason('');
+      setMsg(
+        `Back in the queue. ${j.discounted} earlier attempt${j.discounted === 1 ? '' : 's'} set aside`
+        + ' — still on the record below.'
+        + (j.restoredNumbers?.length ? ` Dialling again: ${j.restoredNumbers.join(', ')}.` : ''),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not return that lead to the queue');
     } finally { setBusy(false); }
   };
 
@@ -566,9 +599,44 @@ export default function CallDispositionPanel({ leadId }: { leadId: string }) {
       {state.attempts.length > 0 && (
         <>
           <Divider sx={{ my: 1.5 }} />
-          <Typography variant="caption" sx={{ fontWeight: 700, display: 'block', mb: 0.75 }}>
-            Every attempt
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', mb: 0.75 }}>
+            <Typography variant="caption" sx={{ fontWeight: 700 }}>
+              Every attempt
+            </Typography>
+            {/*
+              Sits beside the history, not among the outcome buttons.
+
+              It is a correction to what is already recorded, so it belongs where the record
+              is — and keeping it away from the eight things Ruben taps mid-call means it
+              cannot be hit by accident on the way to "No answer".
+            */}
+            <Button size="small" variant="text" disabled={busy}
+              onClick={() => { setReqOpen((v) => !v); setError(null); setMsg(null); }}
+              sx={{ minWidth: 0, py: 0, px: 0.75, fontSize: 11, color: '#5a6675' }}>
+              {reqOpen ? 'cancel' : 'put back in the queue'}
+            </Button>
+          </Box>
+
+          {reqOpen && (
+            <Box sx={{ mb: 1.5, p: 1.25, border: '1px solid #e3e7ee', borderRadius: 1, bgcolor: '#fafbfc' }}>
+              <Typography variant="caption" sx={{ display: 'block', color: '#5a6675', mb: 1 }}>
+                The calls below stay on the record. This lead goes back into the queue as though
+                it had not been called yet, and your name and reason go on the card.
+              </Typography>
+              <TextField
+                size="small" fullWidth autoFocus
+                label="Why (optional)"
+                placeholder="e.g. status set while testing"
+                value={reqReason}
+                onChange={(e) => setReqReason(e.target.value)}
+                slotProps={{ inputLabel: { shrink: true } }}
+                sx={{ mb: 1 }}
+              />
+              <Button size="small" variant="contained" disabled={busy} onClick={returnToQueue}>
+                Put back in the queue
+              </Button>
+            </Box>
+          )}
           {/*
             Undo sits on the newest row only, and only inside the window the service
             allows. A button on every row would invite editing history; this is for the

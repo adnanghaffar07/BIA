@@ -65,6 +65,27 @@ export async function agencyWebsite(): Promise<string> {
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
+/**
+ * The band a producer set by hand, or nothing.
+ *
+ * Returns an object to spread, so "no band" is the ABSENCE of both keys rather than two
+ * nulls. A null merge variable is not a gap the platform will warn anyone about — it is a
+ * populated cell containing a blank, and it renders mid-sentence as "somewhere between
+ * and ". The keys have to not exist.
+ *
+ * Money is emitted as a plain integer string: the copy wraps it in its own currency symbol
+ * ("$ {{ band_low }}"), so formatting here would read "$$925". Rounded because a renewal
+ * estimate quoted to the penny claims a precision a band does not have.
+ */
+function bandVars(lead: Record<string, any>): Record<string, string> {
+  const low = Number(lead?.indicativeBandLow);
+  const high = Number(lead?.indicativeBandHigh);
+  if (!Number.isFinite(low) || !Number.isFinite(high) || low <= 0 || high <= 0) return {};
+  // A band whose high is below its low is a typo, not a range, and it would read as one.
+  if (high < low) return {};
+  return { band_low: String(Math.round(low)), band_high: String(Math.round(high)) };
+}
+
 export function mergeVarsFor(
   lead: Record<string, any>,
   role: 'insured' | 'coInsured',
@@ -218,17 +239,33 @@ export function mergeVarsFor(
     version_label: versionLabel({ segment, cohort: cohortDate, step: 1, subjectVariant: variant, ctaArm: arm }),
 
     /**
-     * band_low and band_high are deliberately ABSENT.
+     * ── band_low / band_high ─────────────────────────────────────────────────
      *
-     * The CRM's lowPremium/highPremium are derived from a machine-generated expectedPremium
-     * and sit a median 3.2x above what the producer actually rated — on 531 of 540 rated
-     * accounts the producer's own number falls below the band. Frank: "they would receive a
-     * band price that doesn't exist."
+     * These were absent entirely, and the reason was sound: the CRM's lowPremium and
+     * highPremium are derived from a machine-generated expectedPremium and sit a median
+     * 3.2x above what the producer actually rated — on 531 of 540 rated accounts the
+     * producer's own number falls below the band. Frank: "they would receive a band price
+     * that doesn't exist."
      *
-     * Sending them as null would be no safer than sending them wrong: a null renders as a
-     * blank in the middle of "I'd expect it somewhere between  and ." Leaving the keys out
-     * entirely means the gap is visible at setup rather than at send.
+     * That objection was about lowPremium/highPremium. It was never about THESE fields.
+     * indicativeBandLow/High are producer-entered, set by hand on the lead card, and Frank
+     * spent the afternoon of 29 Sep filling them for C1–C3 — describing the result on the
+     * call as already working: "band low, band high, that I filled in, and then it pulls up
+     * to there." It did not. The keys were not emitted, so every figure he typed would have
+     * reached the platform as nothing at all.
+     *
+     * The push has treated this field as the published band all along — it stamps
+     * publishedBandLow/High from indicativeBandLow/High at send and judges the eventual bind
+     * against it. So the value a homeowner is recorded as having been shown was already this
+     * one; it simply never travelled into the email that was supposed to show it.
+     *
+     * ── Both, or neither ─────────────────────────────────────────────────────
+     * A lead carrying a low and no high still renders "somewhere between $736 and " — worse
+     * than an obvious gap, because it sends perfectly. Two C1–C3 cards are in exactly that
+     * state today. When either half is missing the keys stay out, so the hole shows at
+     * setup rather than in somebody's inbox. Same rule as the CTA link above.
      */
+    ...bandVars(lead),
 
     /**
      * The producer's own figure, under its own name — never a band and never a range.

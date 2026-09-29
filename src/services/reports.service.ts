@@ -543,8 +543,19 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
                   FILTER (WHERE "outcome" IN ('callback_scheduled','quote_requested',
                                               'not_interested','do_not_call')))[1] AS last_reached,
                (ARRAY_AGG("calledBy" ORDER BY "attemptedAt" DESC))[1]   AS last_by
-          FROM "CallAttempt"
-         GROUP BY "leadId"
+          FROM "CallAttempt" a
+          /*
+           * The return-to-queue line (migration 046), applied here exactly as callState
+           * applies it. A producer who puts a lead back in the queue sets attempts before
+           * that moment aside; a report still counting them would show the card as
+           * "attempting" while the card itself showed it queued — the two-implementations
+           * liability this CTE's own comment warns about, landing on the one feature whose
+           * entire purpose is to change what the status says.
+           */
+          JOIN "Lead" ql ON ql."id" = a."leadId"
+         WHERE ql."callQueueReturnedAt" IS NULL
+            OR a."attemptedAt" > ql."callQueueReturnedAt"
+         GROUP BY a."leadId"
       )
       /*
        * Named columns, not SELECT *.

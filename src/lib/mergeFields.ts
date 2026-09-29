@@ -87,14 +87,23 @@ export const MERGE_FIELDS: MergeField[] = [
   { name: 'meeting_link', token: '{{meeting_link}}', label: 'Booking link', example: 'https://…/meet', group: 'link', blocked: 'Waiting on the agency website from Frank — empty on every contact until then.' },
 
   /**
-   * band_low / band_high exist as columns on the import so the mapping can be built once,
-   * and they are EMPTY on every row. The CRM does hold a low/high pair, and it is not this:
-   * it is derived from a machine estimate and sits a median 3.2x above what the producer
-   * actually rated, below the band on 531 of 540 rated accounts. Frank: "they would receive
-   * a band price that doesn't exist."
+   * band_low / band_high were blocked, and the reason has since been answered.
+   *
+   * The block was never about a missing feature: it was that no source could be trusted.
+   * The CRM's own low/high pair is derived from a machine estimate sitting a median 3.2x
+   * above what the producer actually rated — below the band on 531 of 540 rated accounts.
+   * Frank: "they would receive a band price that doesn't exist."
+   *
+   * On 29 Sep 2026 he settled it by typing the range onto each card himself, judging it
+   * against the producer's own rating. That is the source, and it is a person rather than a
+   * model. These now carry whatever is on the card.
+   *
+   * Still empty on a card nobody has set, and still emitted only when BOTH halves are
+   * present — see bandVars() in mergeVars.service.ts for why half a range is worse than
+   * none. The example below is a real one of Frank's.
    */
-  { name: 'band_low', token: '{{band_low}}', label: 'Band — low', example: '(empty)', group: 'renewal', blocked: 'No agreed source for a price RANGE. The CRM band contradicts the producer rating on 98% of accounts — waiting on Frank.' },
-  { name: 'band_high', token: '{{band_high}}', label: 'Band — high', example: '(empty)', group: 'renewal', blocked: 'No agreed source for a price RANGE. The CRM band contradicts the producer rating on 98% of accounts — waiting on Frank.' },
+  { name: 'band_low', token: '{{band_low}}', label: 'Band — low', example: '925', group: 'renewal' },
+  { name: 'band_high', token: '{{band_high}}', label: 'Band — high', example: '1050', group: 'renewal' },
 
   { name: 'segment', token: '{{segment}}', label: 'Segment', example: 'Rated', group: 'tracking' },
   { name: 'cohort', token: '{{cohort}}', label: 'Cohort', example: 'C1', group: 'tracking' },

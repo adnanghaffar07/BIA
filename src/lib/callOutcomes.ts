@@ -34,16 +34,29 @@ export type CallOutcomeSpec = {
   /** Needs a date, so the reminder has something to fire at. */
   needsCallbackAt?: boolean;
   /**
-   * Stop the email sequence for this household.
+   * ── Stopping the email sequence is decided by `reached`, not by a flag ────
    *
-   * Frank: "Quote requested → quoting, and the email sequence pauses." Somebody who has
-   * asked for a quote on the phone should not keep receiving the cold sequence that asked
-   * them to — it reads as nobody at the agency talking to anybody else.
+   * This used to be an opt-in `pausesEmail?: boolean`, and it was set on exactly one
+   * outcome. Everything else that reached a human kept the cold sequence running:
    *
-   * The platform has no pause for one lead (see householdStop.service), so the recipient is
-   * removed from the campaign. The CRM keeps the history either way.
+   *   callback scheduled  spoke to them, agreed a time — and the intro email still went
+   *   not interested      they said no — and the sequence went on asking
+   *   do not call         they said stop — and the sequence went on sending
+   *
+   * The last one is not an annoyance. suppress() writes a Suppression row, which stops the
+   * NEXT push; it does not touch the platform, so a sequence already running keeps running.
+   * Only stopHousehold() removes the contact. A household that asked us to stop went on
+   * being mailed until the sequence ran out.
+   *
+   * Frank and Ruben settled the rule on 29 Sep 2026. Ruben: "they confirmed their email,
+   * they seem interested — for that card we should just not be automated outreach to them
+   * since they're already engaged." Frank: "cease all automation outreach via email."
+   *
+   * That rule is "we reached a person", which this file already records as `reached`. So
+   * the sequence stop is derived from it rather than carried beside it, and a new outcome
+   * cannot be added that reaches somebody and forgets to stop the email — which is the only
+   * way the three lines above could have happened.
    */
-  pausesEmail?: boolean;
   /**
    * The suppression ends, rather than standing forever.
    *
@@ -83,26 +96,26 @@ export const CALL_OUTCOMES: CallOutcomeSpec[] = [
   {
     key: 'callback_scheduled',
     label: 'Reached — callback scheduled',
-    follows: 'A reminder is set for the date and time you give.',
+    follows: 'A reminder is set for the date and time you give. The email sequence stops — you have spoken to them.',
     reached: true, invalidatesNumber: false, needsCallbackAt: true, tone: 'good',
   },
   {
     key: 'quote_requested',
     label: 'Reached — quote requested',
     follows: 'Handed to quoting. The email sequence stops — they are talking to us now.',
-    reached: true, invalidatesNumber: false, pausesEmail: true, tone: 'good',
+    reached: true, invalidatesNumber: false, tone: 'good',
   },
   {
     key: 'not_interested',
     label: 'Reached — not interested',
-    follows: 'Household left alone this cycle, and approached again 60 days before the next renewal.',
+    follows: 'The email sequence stops. Household left alone this cycle, and approached again 60 days before the next renewal.',
     reached: true, invalidatesNumber: false, suppresses: 'not_interested',
     recontactBeforeNextRenewal: true, tone: 'bad',
   },
   {
     key: 'do_not_call',
     label: 'Reached — do not call',
-    follows: 'DNC flag, household suppressed on every channel.',
+    follows: 'DNC flag, household suppressed on every channel, and the running email sequence stops now.',
     reached: true, invalidatesNumber: false, suppresses: 'dnc', tone: 'bad',
   },
 ];
