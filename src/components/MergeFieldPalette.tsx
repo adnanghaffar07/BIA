@@ -83,9 +83,19 @@ function FieldChip({ f, onInsert }: { f: MergeField; onInsert: (token: string) =
 
 export default function MergeFieldPalette({
   onInsert,
+  extra = [],
 }: {
   /** Click-to-insert. Drag is handled by the editor so it stays testable. */
   onInsert: (token: string) => void;
+  /**
+   * Variables created on the Email variables screen.
+   *
+   * They live in the database rather than in mergeFields.ts, so the static list below cannot
+   * see them. Passed in rather than fetched here: this component is rendered in two places
+   * and a fetch inside it would run twice and be untestable, while the list it needs is
+   * already loaded by the editor for its own validation.
+   */
+  extra?: MergeField[];
 }) {
   return (
     <Stack spacing={1.25}>
@@ -95,7 +105,19 @@ export default function MergeFieldPalette({
       </Typography>
 
       {MERGE_FIELD_GROUPS.map((g) => {
-        const fields = MERGE_FIELDS.filter((f) => f.group === g.key);
+        /**
+         * A field that would render empty is not offered.
+         *
+         * These used to be shown greyed, on the reasoning that a missing chip reads as "we
+         * forgot it" and gets typed by hand anyway. That held while the blocked list was
+         * long enough to look deliberate; with one entry left it just reads as a broken
+         * button, and offering something that cannot work is its own kind of misleading.
+         *
+         * Typing one by hand is still caught — blockedTokensIn() runs over the copy on every
+         * keystroke and names it before a save. Hiding the chip removes the invitation, not
+         * the safety net.
+         */
+        const fields = [...MERGE_FIELDS, ...extra].filter((f) => f.group === g.key && !f.blocked);
         if (!fields.length) return null;
         return (
           <Box key={g.key}>

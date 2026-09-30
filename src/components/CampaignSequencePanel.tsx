@@ -9,7 +9,8 @@ import AddIcon from '@mui/icons-material/Add';
 import LibraryBooksIcon from '@mui/icons-material/LibraryBooksOutlined';
 import BookmarkAddIcon from '@mui/icons-material/BookmarkAddOutlined';
 import MergeFieldPalette from '@/components/MergeFieldPalette';
-import { MERGE_FIELDS, unknownTokensIn, blockedTokensIn } from '@/lib/mergeFields';
+import { MERGE_FIELDS, unknownTokensIn, blockedTokensIn, type MergeField } from '@/lib/mergeFields';
+import { isSimpleHtml, htmlToText, textToHtml } from '@/lib/emailBody';
 import { TemplateLoadDialog, TemplateSaveDialog } from '@/components/TemplatePicker';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 
@@ -35,7 +36,29 @@ export default function CampaignSequencePanel({
   onSaved: () => void;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
-  const initial: SequenceStep[] = current.length ? current : [{ delay: 0, subject: '', body: '' }];
+  /**
+   * The editor works in readable text; HTML lives only at the boundary.
+   *
+   * The platform stores a body as HTML and this showed it raw, so a two-paragraph email
+   * arrived on screen as a wall of div tags. Nobody proofreads that — and it is how a
+   * misspelled merge field survived in live copy across eight campaigns, because a wrong
+   * variable is invisible inside markup and the platform prints nothing for it.
+   *
+   * Converted in here, converted back on save. A body too rich to survive that trip — a
+   * link, an image, anything carrying an attribute — is left exactly as it arrived, because
+   * eating a booking link on the way past would be far worse than showing somebody a tag.
+   */
+  const toEditable = (list: SequenceStep[]): SequenceStep[] =>
+    list.map((s) => (isSimpleHtml(s.body) ? { ...s, body: htmlToText(s.body) } : s));
+
+  /** Steps that arrived as HTML too rich to convert, so the screen can explain itself. */
+  const rawHtmlSteps = (current.length ? current : []).reduce<number[]>(
+    (acc, s, i) => (s.body && !isSimpleHtml(s.body) ? [...acc, i] : acc), [],
+  );
+
+  const initial: SequenceStep[] = toEditable(
+    current.length ? current : [{ delay: 0, subject: '', body: '' }],
+  );
   const [steps, setSteps] = useState<SequenceStep[]>(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,7 +121,8 @@ export default function CampaignSequencePanel({
     e: React.DragEvent<HTMLDivElement>,
   ) => {
     const token = e.dataTransfer.getData('text/plain');
-    if (!MERGE_FIELDS.some((f) => f.token === token)) return;
+    // Custom variables count as real: they are in the palette, so they must be insertable.
+    if (![...MERGE_FIELDS, ...customFields].some((f) => f.token === token)) return;
 
     e.preventDefault();
     const el = e.target as HTMLInputElement | HTMLTextAreaElement;
@@ -106,6 +130,37 @@ export default function CampaignSequencePanel({
     const at = typeof el?.selectionStart === 'number' ? el.selectionStart : value.length;
     update(i, { [field]: value.slice(0, at) + token + value.slice(at) });
   };
+
+  /**
+   * Variables somebody created on the Email variables screen.
+   *
+   * They live in the database, so neither the palette nor the validator in mergeFields.ts
+   * can see them from a static list. Loaded once here and handed to both — otherwise a
+   * variable you had just created would be missing from the chips AND flagged as unknown,
+   * which reads as the CRM refusing its own feature.
+   */
+  const [customFields, setCustomFields] = useState<MergeField[]>([]);
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const j = await (await fetch('/api/admin/merge-variables')).json();
+        if (!live || !j.success) return;
+        setCustomFields((j.variables as Array<{ name: string; value: string; description: string | null }>)
+          .map((v) => ({
+            name: v.name,
+            token: `{{${v.name}}}`,
+            label: v.description || v.name,
+            example: v.value || '(not set yet)',
+            group: 'custom' as const,
+            // Offered greyed when it has no value, the same as the blocked built-ins: a
+            // missing chip reads as "we forgot it" and gets typed by hand instead.
+            blocked: v.value.trim() ? undefined : 'No value set yet on the Email variables screen.',
+          })));
+      } catch { /* the editor still works without the extra chips */ }
+    })();
+    return () => { live = false; };
+  }, []);
 
   const addStep = () => setSteps((prev) => [...prev, { delay: 3, subject: '', body: '' }]);
   const removeStep = (i: number) => setSteps((prev) => prev.filter((_, n) => n !== i));
@@ -129,9 +184,10 @@ export default function CampaignSequencePanel({
    * Every unknown name in every step is listed at once rather than one per save — somebody
    * fixing a typo one save at a time is somebody who stops reading the message.
    */
+  const customNames = customFields.map((f) => f.name);
   const unknown = [...new Set(steps.flatMap((s) => [
-    ...unknownTokensIn(s.subject),
-    ...unknownTokensIn(s.body),
+    ...unknownTokensIn(s.subject, customNames),
+    ...unknownTokensIn(s.body, customNames),
   ]))];
 
   /**
@@ -156,7 +212,15 @@ export default function CampaignSequencePanel({
       const res = await fetch(`/api/lead-campaigns/${campaignId}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sequence: steps }),
+        /**
+         * Back to HTML on the way out, and only for the steps that came in as text. A step
+         * left as raw HTML is sent exactly as it was edited.
+         */
+        body: JSON.stringify({
+          sequence: steps.map((s, i) => (
+            rawHtmlSteps.includes(i) ? s : { ...s, body: textToHtml(s.body) }
+          )),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Could not save the sequence');
@@ -232,12 +296,18 @@ export default function CampaignSequencePanel({
                   placeholder="Your home insurance renews soon"
                 />
                 <TextField
-                  label="Body" size="small" fullWidth multiline minRows={6} value={s.body}
+                  label={rawHtmlSteps.includes(i) ? 'Body (HTML)' : 'Body'}
+                  size="small" fullWidth multiline minRows={10} value={s.body}
                   onChange={(e) => update(i, { body: e.target.value })}
                   slotProps={{ htmlInput: { 'data-step': i, 'data-field': 'body' } }}
                   onDrop={(e) => handleDrop(i, 'body', e)}
                   error={!s.body.trim()}
+                  helperText={rawHtmlSteps.includes(i)
+                    ? 'This email contains formatting or a link, so it is shown as HTML — editing it '
+                      + 'as plain text would lose that. Blank lines and line breaks still work as written.'
+                    : 'Write it as you would an email. Line breaks are kept.'}
                   placeholder={'Hi {{firstName}},\n\nYour policy on {{property_address}} renews on {{renewal_date}}…'}
+                  sx={{ '& textarea': { fontFamily: rawHtmlSteps.includes(i) ? 'monospace' : 'inherit', lineHeight: 1.6 } }}
                 />
               </Stack>
             </Paper>
@@ -326,7 +396,7 @@ export default function CampaignSequencePanel({
             p: 2,
           }}
         >
-          <MergeFieldPalette onInsert={(token) => insertToken(token)} />
+          <MergeFieldPalette onInsert={(token) => insertToken(token)} extra={customFields} />
         </Box>
       </Stack>
     </Box>

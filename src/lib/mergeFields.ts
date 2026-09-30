@@ -21,7 +21,7 @@
  * cannot quietly drift the way the four-chip version did.
  */
 
-export type MergeFieldGroup = 'person' | 'property' | 'renewal' | 'copy' | 'link' | 'tracking';
+export type MergeFieldGroup = 'person' | 'property' | 'renewal' | 'copy' | 'link' | 'tracking' | 'custom' | 'platform';
 
 export type MergeField = {
   /** The variable name exactly as the platform holds it. */
@@ -47,6 +47,8 @@ export const MERGE_FIELD_GROUPS: { key: MergeFieldGroup; title: string; hint?: s
   { key: 'renewal', title: 'Their renewal' },
   { key: 'link', title: 'Booking' },
   { key: 'tracking', title: 'Tracking', hint: 'Carried so a reply can be matched back to the right person and version. Not meant for the body of an email.' },
+  { key: 'platform', title: 'Filled by the sending platform', hint: 'Not ours — the platform resolves these itself from whichever mailbox sends. The signature in particular follows the sender, so it is always the right producer.' },
+  { key: 'custom', title: 'Set by you', hint: 'From the Email variables screen. The same value goes to every homeowner, and changing it there changes it in every campaign at once.' },
 ];
 
 export const MERGE_FIELDS: MergeField[] = [
@@ -64,7 +66,22 @@ export const MERGE_FIELDS: MergeField[] = [
   { name: 'subject_3', token: '{{subject_3}}', label: 'Subject — email 3', example: '(C4–C7 only — blank for C1–C3)', group: 'copy' },
   { name: 'cta_1', token: '{{cta_1}}', label: 'Ask — email 1', example: 'Reply "yes" and I\'ll get started.', group: 'copy' },
   { name: 'cta_2', token: '{{cta_2}}', label: 'Ask — email 2', example: "Reply and I'll have your number back to you tomorrow.", group: 'copy' },
-  { name: 'cta_3', token: '{{cta_3}}', label: 'Ask — email 3', example: '(C4–C7 only — blank for C1–C3)', group: 'copy' },
+  /**
+   * Blocked for the same reason as the booking link, and it is the same missing value.
+   *
+   * BOTH arms of the step-3 ask end in "{{ agency_website }}/meet", and mergeVars refuses to
+   * ship a CTA whose link it cannot complete — a blank ask is a gap somebody closes, where
+   * "Pick a time and I'll call you: /meet" is a broken promise that sends perfectly.
+   *
+   * So this is empty on every lead, measured: 0 of 300. It is hidden rather than offered,
+   * and it comes back on its own the moment the website is set — nothing here needs changing
+   * again.
+   *
+   * cta_2 is NOT blocked, though its arm 2 carries the same link: arm 1 does not, so it fills
+   * for roughly seven leads in ten. A variable that works most of the time is a different
+   * thing from one that never works.
+   */
+  { name: 'cta_3', token: '{{cta_3}}', label: 'Ask — email 3', example: '(C4–C7 only)', group: 'copy', blocked: 'Both versions of the third ask end in the booking link, so this is empty until the agency website is set — the same value the Booking link is waiting on.' },
 
   { name: 'firstName', token: '{{firstName}}', label: 'First name', example: 'Trisha', group: 'person' },
   { name: 'lastName', token: '{{lastName}}', label: 'Last name', example: 'Mcnamara', group: 'person' },
@@ -113,6 +130,25 @@ export const MERGE_FIELDS: MergeField[] = [
   { name: 'producer_premium', token: '{{producer_premium}}', label: 'Producer premium', example: '1419', group: 'tracking' },
   { name: 'crm_property_id', token: '{{crm_property_id}}', label: 'CRM property id', example: '1000438593', group: 'tracking' },
   { name: 'crm_lead_id', token: '{{crm_lead_id}}', label: 'CRM lead id', example: '1000438593', group: 'tracking' },
+
+  /**
+   * ── The platform's own, offered because they were being typed from memory ──
+   *
+   * These are not built here and never travel with a contact — the sending platform resolves
+   * them itself. They were left out of this list on the grounds that they are not ours, and
+   * the result was that the one everybody actually needs was invisible: somebody writing copy
+   * had no way to know {{accountSignature}} existed, and the signature got typed out by hand
+   * into the body of all eight campaigns instead. That is the duplicate signature in the send
+   * preview, and the five producer fields that arrive blank.
+   *
+   * accountSignature is the important one. It resolves to the signature of whichever mailbox
+   * actually sends, so the licence number and the name always belong to the person who sent
+   * it — which a value attached to the contact cannot guarantee once the platform starts
+   * rotating between mailboxes.
+   */
+  { name: 'accountSignature', token: '{{accountSignature}}', label: 'Sender signature', example: "the sending mailbox's signature", group: 'platform' },
+  { name: 'sendingAccountFirstName', token: '{{sendingAccountFirstName}}', label: 'Sender first name', example: 'Frank', group: 'platform' },
+  { name: 'unsubscribeLink', token: '{{unsubscribeLink}}', label: 'Unsubscribe link', example: 'added by the platform', group: 'platform' },
 ];
 
 export const MERGE_FIELD_NAMES: ReadonlySet<string> = new Set(MERGE_FIELDS.map((f) => f.name));
@@ -137,8 +173,16 @@ export function tokensIn(text: string): string[] {
  * Returned rather than thrown so the editor can name every one of them at once. Somebody
  * fixing a typo one save at a time is somebody who stops reading the message.
  */
-export function unknownTokensIn(text: string): string[] {
-  const bad = tokensIn(text).filter((t) => !MERGE_FIELD_NAMES.has(t));
+export function unknownTokensIn(text: string, alsoKnown: Iterable<string> = []): string[] {
+  /**
+   * alsoKnown carries the variables somebody created on the Email variables screen.
+   *
+   * They live in the database, not in this file, so a static list cannot see them — and an
+   * editor that calls a variable unknown the moment somebody adds one teaches people to
+   * ignore the warning, which is the one thing this check cannot survive.
+   */
+  const extra = new Set(alsoKnown);
+  const bad = tokensIn(text).filter((t) => !MERGE_FIELD_NAMES.has(t) && !extra.has(t));
   return [...new Set(bad)];
 }
 

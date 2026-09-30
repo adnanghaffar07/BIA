@@ -21,6 +21,7 @@ import PhoneIcon from '@mui/icons-material/Phone';
 import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
+import DataObjectIcon from '@mui/icons-material/DataObject';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useAuth } from '@/context/AuthContext';
@@ -74,6 +75,8 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
        */
       { label: 'To do',       icon: <PlaylistAddCheckIcon />, path: '/admin/workflow' },
       { label: 'Campaigns',   icon: <CampaignIcon />,        path: '/lead-campaigns' },
+      // Beside Campaigns because it only matters to somebody writing email copy.
+      { label: 'Email variables', icon: <DataObjectIcon />, path: '/admin/merge-variables' },
       // Its own entry, above QC. QC is where somebody goes when they suspect a problem;
       // the ledger is the standing measure of the pipeline and the first thing Frank reads.
       { label: 'Cohorts',     icon: <SwapVertIcon />,        path: '/admin/cohorts' },

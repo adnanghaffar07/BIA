@@ -1,3 +1,4 @@
+import { globalMergeVars } from './globalMergeVars.service';
 import crypto from 'crypto';
 import { EMAIL_RE } from './recipients.service';
 import { allInsuredAddresses, allCoInsuredAddresses, type AddressSignals } from './addressRank.service';
@@ -498,6 +499,8 @@ export async function pushChunk(
    * chances for half a push to carry a booking link and half to carry none.
    */
   const site = await agencyWebsite();
+  // Same for every homeowner (migration 047) — loaded once, sent with every contact.
+  const globals = await globalMergeVars();
 
   const payload: LeadInput[] = toSend.map((r) => ({
     email: r.email,
@@ -520,7 +523,7 @@ export async function pushChunk(
      * own fields. Sending them again here would hand the platform two variables called
      * firstName — its built-in and one of ours — and nothing would report the collision.
      */
-    custom_variables: customOnly(mergeVarsFor(r.lead, r.personRole === 'insured' ? 'insured' : 'coInsured', site)),
+    custom_variables: customOnly(mergeVarsFor(r.lead, r.personRole === 'insured' ? 'insured' : 'coInsured', site, globals)),
   }));
 
   const added = await addLeadsToCampaign(campaignId, payload);

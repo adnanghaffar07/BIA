@@ -110,13 +110,71 @@ export function signatureText(html: string | null | undefined): string {
  * to the person whose name is above it, is not something code can answer — and pretending
  * a regex settles it would be worse than saying nothing.
  */
-function problemsWith(text: string, name: string): { problems: string[]; postal: boolean; optOut: boolean } {
+/**
+ * Images that will not load in somebody's inbox.
+ *
+ * ── Why this is checked against the HTML and not the text ───────────────────
+ * Every other check here reads the plain text, and signatureText() strips tags — so an image
+ * is invisible to all of them. Frank's mailbox was carrying
+ * `blob:https://app.instantly.ai/3c352f01-…`, a handle to something in the browser's own
+ * memory that stops existing when the tab closes. It had been saved, it looked right in the
+ * editor, and it would have rendered as a broken-image icon in every recipient's inbox.
+ * Nothing anywhere said a word.
+ *
+ * A mail client fetches images over the public internet, as a stranger, with no session. So
+ * the only source that works is an absolute https URL:
+ *
+ *   blob:      exists only in the tab that made it
+ *   data:      Gmail and Outlook strip them
+ *   http:      blocked as insecure by most clients
+ *   relative   nothing to resolve it against
+ */
+function imageProblems(html: string | null | undefined): string[] {
+  const out: string[] = [];
+  const srcs = [...String(html ?? '').matchAll(/<img[^>]*\ssrc\s*=\s*["']([^"']*)["']/gi)]
+    .map((m) => m[1].trim());
+
+  for (const src of srcs) {
+    if (/^https:\/\//i.test(src)) continue;
+    if (/^blob:/i.test(src)) {
+      out.push('the logo is a temporary browser link (blob:) — it will show as a broken image '
+        + 'to everyone. Host the image and use its https address.');
+    } else if (/^data:/i.test(src)) {
+      out.push('the logo is embedded as data — Gmail and Outlook strip these. Host the image '
+        + 'and use its https address.');
+    } else if (/^http:\/\//i.test(src)) {
+      out.push('the logo is on http, which most mail clients block. Use the https address.');
+    } else {
+      out.push(`the logo address "${src.slice(0, 40)}" is not a full web address, so no mail `
+        + 'client can fetch it.');
+    }
+  }
+  return out;
+}
+
+function problemsWith(
+  text: string,
+  name: string,
+  html?: string | null,
+): { problems: string[]; postal: boolean; optOut: boolean } {
   const problems: string[] = [];
   const lower = text.toLowerCase();
 
+  /**
+   * Checked before the empty test, because a signature that is ONLY a logo has no text at
+   * all — and "empty" would be the one thing reported about a signature whose actual fault
+   * is a broken image.
+   */
+  const imgs = imageProblems(html);
+
   if (!text) {
-    return { problems: ['empty — this mailbox would send with no signature at all'], postal: false, optOut: false };
+    return {
+      problems: ['empty — this mailbox would send with no signature at all', ...imgs],
+      postal: false,
+      optOut: false,
+    };
   }
+  problems.push(...imgs);
 
   /**
    * A postal address, required by §5 and by bulk-sender rules generally. Detected by a
@@ -158,7 +216,7 @@ export async function getSignature(email: string): Promise<MailboxSignature> {
   const html = (a.signature ?? null) as string | null;
   const text = signatureText(html);
   const name = [a.first_name, a.last_name].filter(Boolean).join(' ');
-  const { problems, postal, optOut } = problemsWith(text, name);
+  const { problems, postal, optOut } = problemsWith(text, name, html);
   return {
     email, name, html, text,
     present: text.length > 0,
@@ -184,6 +242,24 @@ export async function allSignatures(): Promise<MailboxSignature[]> {
  * trip decided, and the postal address and opt-out line are the parts most likely to be lost.
  */
 export async function setSignature(email: string, html: string): Promise<MailboxSignature> {
+  /**
+   * An image that cannot load is refused, not warned about.
+   *
+   * Every other fault here is reported and saved anyway, because they are judgement calls a
+   * person may have a reason for — a signature can legitimately be a work in progress. A
+   * broken image is not a judgement call. A blob: URL points into the memory of the browser
+   * tab that made it and stops existing when that tab closes, so there is no state of the
+   * world in which saving it is what somebody meant.
+   *
+   * It also cannot be seen: the editor shows the picture perfectly while the tab is open,
+   * which is exactly how one reached a live mailbox and sat there.
+   */
+  const broken = imageProblems(html);
+  if (broken.length) {
+    throw new Error(
+      `${broken[0]} Nothing was saved — fix the image address and save again.`,
+    );
+  }
   await updateEmailAccount(email, { signature: html });
   return getSignature(email);
 }
@@ -277,7 +353,9 @@ export async function planSignatures(
       .filter(Boolean).join(' ').trim();
     const { text, missing } = renderSignature(template, { email, name }, values);
     const html = textToSignatureHtml(text);
-    const { problems } = problemsWith(text, name);
+    // html here is generated from plain text, so it can carry no image — passed anyway so
+    // the two call sites cannot drift about what is checked.
+    const { problems } = problemsWith(text, name, html);
     return { email, name, text, html, problems, missing };
   });
 }

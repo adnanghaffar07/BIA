@@ -20,6 +20,7 @@ import CampaignPushDialog from '@/components/CampaignPushDialog';
 import CampaignCsvImportDialog from '@/components/CampaignCsvImportDialog';
 import CampaignMailboxPanel from '@/components/CampaignMailboxPanel';
 import CampaignSettingsPanel from '@/components/CampaignSettingsPanel';
+import CampaignCopyCheck from '@/components/CampaignCopyCheck';
 import CampaignSequencePanel from '@/components/CampaignSequencePanel';
 import CampaignAnalyticsPanel from '@/components/CampaignAnalyticsPanel';
 import CampaignRepliesPanel from '@/components/CampaignRepliesPanel';
@@ -77,6 +78,8 @@ export default function CampaignDetailPage() {
   const [tab, setTab] = useState(TAB_ANALYTICS);
   const [dirty, setDirty] = useState(false);
   const [pendingTab, setPendingTab] = useState<number | null>(null);
+  /** Bumped on every sequence save, so the copy check re-runs against the new copy. */
+  const [copySaved, setCopySaved] = useState(0);
 
   const [addOpen, setAddOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -356,11 +359,23 @@ export default function CampaignDetailPage() {
           )}
 
           {tab === TAB_SEQUENCE && (
+            <CampaignCopyCheck campaignId={detail.id} reloadOn={copySaved} />
+          )}
+
+          {tab === TAB_SEQUENCE && (
             <CampaignSequencePanel
               campaignId={detail.id}
               current={detail.sequence ?? []}
               onDirtyChange={setDirty}
-              onSaved={() => { load(); }}
+              /**
+               * The copy check has to re-run when the copy changes.
+               *
+               * It loaded once on mount, so saving a sequence left it answering about the
+               * previous version — a variable just added showed nothing, and the fix for it
+               * appeared only after a manual page reload. The check exists to be read at the
+               * moment somebody edits the copy, which is exactly when it was stale.
+               */
+              onSaved={() => { load(); setCopySaved((n) => n + 1); }}
             />
           )}
 

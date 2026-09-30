@@ -1,3 +1,4 @@
+import { globalMergeVars } from './globalMergeVars.service';
 import { sql } from '@/lib/neon';
 import { listCampaigns, listLeadsInCampaign, type VendorLead } from '@/lib/integrations/leadCampaign';
 import { mergeVarsFor, customOnly, agencyWebsite } from './mergeVars.service';
@@ -172,6 +173,7 @@ export async function checkCampaignDrift(campaignId: string): Promise<DriftRepor
 
   const vendorLeads = await listLeadsInCampaign(campaignId);
   const site = await agencyWebsite();
+  const globals = await globalMergeVars();
 
   /**
    * Tie each contact back to a card.
@@ -245,7 +247,7 @@ export async function checkCampaignDrift(campaignId: string): Promise<DriftRepor
 
     const lead = leadById.get(String(link.leadId))!;
     const role = link.personRole === 'insured' ? 'insured' : 'coInsured';
-    const expected = customOnly(mergeVarsFor(lead, role, site));
+    const expected = customOnly(mergeVarsFor(lead, role, site, globals));
 
     // The built-ins are set through the API's own fields, so they are not in `expected` —
     // but the platform stores them in the same map, and a wrong first name is exactly the

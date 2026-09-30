@@ -58,8 +58,17 @@ export function customOnly(vars: MergeVars): MergeVars {
  * an address carrying Frank's name.
  */
 export async function agencyWebsite(): Promise<string> {
+  /**
+   * From the merge-variable table (migration 047), which is now where somebody sets it on a
+   * screen. AppConfig is still read as a fallback so an existing value keeps working, but
+   * nothing writes there any more — two places to set one website is how the booking link
+   * and the signature end up naming different domains.
+   */
   const rows = await sql`
-    SELECT "value" FROM "AppConfig" WHERE "key" = 'agency_website'` as Array<{ value: string }>;
+    SELECT "value" FROM "MergeVariable" WHERE "name" = 'agency_website'
+    UNION ALL
+    SELECT "value" FROM "AppConfig" WHERE "key" = 'agency_website'
+    LIMIT 1` as Array<{ value: string }>;
   return String(rows[0]?.value ?? '').trim();
 }
 
@@ -89,8 +98,17 @@ function bandVars(lead: Record<string, any>): Record<string, string> {
 export function mergeVarsFor(
   lead: Record<string, any>,
   role: 'insured' | 'coInsured',
-  /** From AppConfig. Frank owns it; until he supplies it the booking link stays empty. */
+  /** Set on the variables screen. Until it is supplied the booking link stays empty. */
   agencyWebsite = '',
+  /**
+   * Variables whose value is the same for every homeowner, from the variables screen.
+   *
+   * Merged UNDER the per-lead values below, never over them. If the two ever carry the same
+   * name the per-lead one wins, because it is the one that is actually about this household
+   * — and nameProblem() refuses the collision at the point of typing anyway, so this is a
+   * second lock on a door that should already be shut.
+   */
+  globals: Record<string, string> = {},
 ): MergeVars {
   /**
    * ── The renewal date must not go near new Date() ─────────────────────────
@@ -197,6 +215,9 @@ export function mergeVarsFor(
    * firstName.
    */
   return {
+    // Same for every homeowner, spread first so nothing below can be displaced by one.
+    ...globals,
+
     // ── The platform's own, spelled its way ──
     firstName: (role === 'insured' ? lead.owner1FirstName : lead.owner2FirstName) ?? '',
     lastName: (role === 'insured' ? lead.owner1LastName : lead.owner2LastName) ?? '',

@@ -1,7 +1,7 @@
 import { updateLead, addActivity } from '@/services/storage.service';
 import { runBatchData } from './batchData.service';
 import { runTracerfy } from '@/services/tracerfy.service';
-import { coInsuredEmails, coInsuredPhones } from './recipients.service';
+import { insuredEmails, coInsuredEmails, coInsuredPhones } from './recipients.service';
 import { ownerEntityOf, entityTraceRefusal } from '@/lib/ownerEntity';
 
 /**
@@ -290,13 +290,47 @@ export async function traceAndApply(
     }
   }
 
+  /**
+   * "Did this trace gain us something we did not already have?"
+   *
+   * The email test was a bare email1 column check — the one this project has removed
+   * everywhere else that reachability is decided. It is wrong in both directions: a lead
+   * holding an address in email2, or inside the trace payload, reads as having none, so an
+   * address we already had gets counted as recovered; and the insured's addresses are
+   * attributed per person inside that payload, so a CO-INSURED address sitting in email1
+   * reads as the insured's.
+   *
+   * insuredEmails() is what the send list, the push and the reachability report all ask, so
+   * this now agrees with them about what "we have an address" means.
+   */
   const recoveredPhone = Boolean(result.phones[0] && !lead.phone1);
-  const recoveredEmail = Boolean(result.emails[0] && !lead.email1);
+  const recoveredEmail = Boolean(result.emails[0] && insuredEmails(lead).length === 0);
 
   const update = buildTraceUpdate(
     lead, result, now,
     blast ? { runId: blast.runId, createdBy } : undefined,
   );
+
+  /**
+   * ── Record what the trace gained, not just report it ─────────────────────
+   *
+   * recoveredPhone and recoveredEmail were computed above, returned for the run's own
+   * counters, and never written to the lead. The only writers of those columns were the
+   * recovery pipeline and isolate.service, both at the moment a lead LEAVES isolation — so
+   * the same real-world fact ("this trace found a number we did not have") was recorded for
+   * one code path and silently dropped for the other.
+   *
+   * Measured on 30 Sep: 1,315 of 1,413 traced leads had recoveredEmail unset, and not one
+   * lead anywhere carried `false`. A column that is only ever true or absent cannot be
+   * counted, and reading it as "has an email" understated recovery by a factor of thirty —
+   * which is how a report went out saying condos traced at 2% when the real figure is 70%.
+   *
+   * Only written when true. A trace that gained nothing must not stamp `false` over a `true`
+   * an earlier trace earned: these say what has ever been recovered for this lead, not what
+   * the most recent call happened to return.
+   */
+  if (recoveredPhone) update.recoveredPhone = true;
+  if (recoveredEmail) update.recoveredEmail = true;
 
   // buildTraceUpdate has already folded insuredPatch into `update`; this local is only
   // for the co-insured name reported back to the caller.

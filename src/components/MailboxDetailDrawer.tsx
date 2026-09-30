@@ -118,6 +118,33 @@ function Metric({ value, label }: { value: React.ReactNode; label: string }) {
   );
 }
 
+/**
+ * A signature made safe to render inside this page.
+ *
+ * The HTML comes back from the sending platform, where it can be edited by anyone with an
+ * account. That is not a threat model this screen gets to ignore just because the content is
+ * "ours": dropping it into the page unfiltered would run whatever it contained, with the
+ * session of whoever opened the drawer.
+ *
+ * So scripts, event handlers, javascript: URLs and embedded frames are stripped before it is
+ * shown. Everything a signature legitimately needs — text, breaks, links, an image — passes
+ * through untouched, which is the point: the preview has to be what a recipient sees, or it
+ * is worse than no preview.
+ *
+ * Nothing here is saved. It only affects what is drawn.
+ */
+function previewHtml(html: string): string {
+  return String(html ?? '')
+    .replace(/<\s*(script|style|iframe|object|embed)\b[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+    .replace(/<\s*(script|style|iframe|object|embed)\b[^>]*\/?\s*>/gi, '')
+    // on* handlers, quoted or bare.
+    .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
+    .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
+    .replace(/\son\w+\s*=\s*[^\s>]+/gi, '')
+    // javascript: and data: in any URL position.
+    .replace(/(href|src|action)\s*=\s*(["'])\s*(javascript|vbscript):[^"']*\2/gi, '$1="#"');
+}
+
 export default function MailboxDetailDrawer({
   email, open, onClose, onChanged,
 }: {
@@ -417,12 +444,48 @@ export default function MailboxDetailDrawer({
                     multiline minRows={8} fullWidth size="small"
                     value={signatureText(raw)}
                     onChange={(e) => set('signature', textToSignatureHtml(e.target.value))}
+
                     placeholder={'Frank Tragni\nLicensed Insurance Producer · Burlington Insurance Agency\nNJ Producer License #1234567\n\nDirect: (555) 123-4567 — I answer my own phone\nWeb: burlingtoninsurance.com\nSchedule 15 minutes: burlingtoninsurance.com/meet\n\nBurlington Insurance Agency\n12 Main Street, Freehold NJ 07728\nIndependent agency, licensed and serving New Jersey\n\nPrefer I didn’t write again? Reply "stop" and you’re off my list for good.'}
                     slotProps={{ htmlInput: { style: { fontSize: 13, lineHeight: 1.6 } } }}
                     helperText="Write it as it should read. Line breaks are kept; the platform's HTML is generated on save. The postal address and the opt-out line are required on every send and exist only here."
                   />
                 );
               })()}
+
+              {/*
+                ── What it will actually look like ──────────────────────────
+
+                The platform shows a rich editor, so a signature always looks finished there.
+                This showed the HTML instead, which is honest but unreadable, and between the
+                two nobody could answer the only question that matters: what lands in the
+                inbox.
+
+                The preview is deliberately rendered HERE rather than trusted from the
+                platform's own editor. A logo pasted in over there is often a blob: handle
+                into that browser tab's memory — it renders perfectly in their editor and
+                nowhere else on earth. Rendering it in our own page, from the stored HTML, is
+                the same thing a recipient's mail client does: if it shows broken here, it is
+                broken for everyone.
+              */}
+              {!!(form.signature ?? '').trim() && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="caption" sx={{ fontWeight: 700, color: '#5a6675' }}>
+                    How it will look
+                  </Typography>
+                  <Box
+                    sx={{
+                      mt: 0.5, p: 1.5, border: '1px solid #e3e7ee', borderRadius: 1,
+                      bgcolor: '#fff', fontSize: 13, lineHeight: 1.6,
+                      '& img': { maxWidth: '100%' },
+                    }}
+                    dangerouslySetInnerHTML={{ __html: previewHtml(form.signature ?? '') }}
+                  />
+                  <Typography variant="caption" sx={{ color: '#8a8f98', display: 'block', mt: 0.5 }}>
+                    A broken image here means it is broken for recipients too — a logo has to be
+                    a public https address, not one pasted from another tab.
+                  </Typography>
+                </Box>
+              )}
             </Paper>
 
             <Paper variant="outlined" sx={{ p: 2 }}>
