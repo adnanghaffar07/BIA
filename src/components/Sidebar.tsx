@@ -7,6 +7,8 @@ import {
 } from '@mui/material';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import { useStickyState } from '@/hooks/useStickyState';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import PeopleIcon from '@mui/icons-material/People';
 import QueueIcon from '@mui/icons-material/PlaylistAddCheck';
@@ -22,6 +24,7 @@ import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
 import DataObjectIcon from '@mui/icons-material/DataObject';
+import FactCheckIcon from '@mui/icons-material/FactCheck';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useAuth } from '@/context/AuthContext';
@@ -47,6 +50,14 @@ interface SidebarProps {
 
 export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
+  /**
+   * Whether the Campaigns group is open.
+   *
+   * Starts open and survives navigating away, so the two screens under it are not hidden
+   * from anybody who has not found them yet — a closed-by-default group would make the send
+   * check invisible to exactly the person who needs it.
+   */
+  const [campaignsOpen, setCampaignsOpen] = useStickyState('nav:campaignsOpen', true);
   const { logout, user } = useAuth();
 
   const isActive = (path: string) =>
@@ -75,8 +86,19 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
        */
       { label: 'To do',       icon: <PlaylistAddCheckIcon />, path: '/admin/workflow' },
       { label: 'Campaigns',   icon: <CampaignIcon />,        path: '/lead-campaigns' },
-      // Beside Campaigns because it only matters to somebody writing email copy.
-      { label: 'Email variables', icon: <DataObjectIcon />, path: '/admin/merge-variables' },
+      /**
+       * Indented under Campaigns, because neither is a place anybody goes on its own — one
+       * holds the values the copy uses and the other answers "why hasn't this gone out",
+       * and both questions start from a campaign. Shown as siblings they read as two more
+       * top-level areas of the CRM, which is three things to scan instead of one.
+       *
+       * Collapsible, at the cost noted below: a group that starts closed is a group whose
+       * contents somebody has to already know about. It therefore starts OPEN and remembers
+       * what you last chose, so closing it is a decision rather than a default that quietly
+       * anybody who has not already found it.
+       */
+      { label: 'Email variables', icon: <DataObjectIcon />, path: '/admin/merge-variables', child: true, parent: '/lead-campaigns' },
+      { label: 'Can we send?', icon: <FactCheckIcon />, path: '/admin/send-check', child: true, parent: '/lead-campaigns' },
       // Its own entry, above QC. QC is where somebody goes when they suspect a problem;
       // the ledger is the standing measure of the pipeline and the first thing Frank reads.
       { label: 'Cohorts',     icon: <SwapVertIcon />,        path: '/admin/cohorts' },
@@ -173,6 +195,13 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
       <List sx={{ flex: 1, pt: 1.5, px: isCollapsed ? 0.5 : 1 }}>
         {navItems.map((item) => {
           const active = isActive(item.path);
+          /**
+           * Sub-items sit under their parent.
+           *
+           * Never indented while collapsed: there is no parent label on screen to sit under,
+           * so the indent would read as misaligned icons rather than as nesting.
+           */
+          const child = (item as { child?: boolean }).child === true && !isCollapsed;
           const btn = (
             <ListItemButton
               component={Link}
@@ -183,16 +212,17 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
                 borderRadius: 1.5,
                 mb: 0.5,
                 px: isCollapsed ? 1.25 : 1.5,
-                py: 1,
+                pl: child ? 3.25 : undefined,
+                py: child ? 0.75 : 1,
                 justifyContent: isCollapsed ? 'center' : 'flex-start',
                 backgroundColor: active ? ACTIVE_BG : 'transparent',
                 borderLeft: active ? `3px solid ${ACTIVE_BORDER}` : '3px solid transparent',
                 '&:hover': { backgroundColor: active ? ACTIVE_BG : HOVER_BG },
                 transition: 'all 0.15s ease',
-                minHeight: 44,
+                minHeight: child ? 38 : 44,
               }}
             >
-              <ListItemIcon sx={{ color: active ? ICON_ACTIVE : ICON_DEFAULT, minWidth: isCollapsed ? 0 : 36, justifyContent: 'center' }}>
+              <ListItemIcon sx={{ color: active ? ICON_ACTIVE : ICON_DEFAULT, minWidth: isCollapsed ? 0 : (child ? 30 : 36), justifyContent: 'center', '& svg': { fontSize: child ? 18 : undefined } }}>
                 {item.icon}
               </ListItemIcon>
               {!isCollapsed && (
@@ -201,7 +231,7 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
                   slotProps={{
                     primary: {
                       sx: {
-                        fontSize: '0.875rem',
+                        fontSize: child ? '0.82rem' : '0.875rem',
                         fontWeight: active ? 700 : 400,
                         color: active ? '#f8fafc' : 'rgba(255,255,255,0.75)',
                       },
@@ -212,8 +242,42 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
             </ListItemButton>
           );
 
+          /**
+           * A sub-item is hidden when its group is closed — and always shown while the
+           * sidebar is collapsed, where the group heading is not on screen to be opened.
+           */
+          const parent = (item as { parent?: string }).parent;
+          if (parent && !isCollapsed && !campaignsOpen) return null;
+
+          /**
+           * The chevron toggles; the row still navigates.
+           *
+           * Making the whole row toggle would cost the parent its own destination, and
+           * Campaigns is a page somebody actually wants. Two targets in one row is a small
+           * price for keeping both behaviours.
+           */
+          const isGroupParent = !isCollapsed
+            && navItems.some((n) => (n as { parent?: string }).parent === item.path);
+
           return (
-            <ListItem key={item.path} disablePadding>
+            <ListItem
+              key={item.path}
+              disablePadding
+              secondaryAction={isGroupParent ? (
+                <Box
+                  component="button"
+                  aria-label={campaignsOpen ? 'Collapse' : 'Expand'}
+                  onClick={(e: React.MouseEvent) => { e.preventDefault(); setCampaignsOpen((v) => !v); }}
+                  sx={{
+                    border: 0, background: 'transparent', cursor: 'pointer', p: 0.25,
+                    display: 'flex', alignItems: 'center', color: 'rgba(255,255,255,0.55)',
+                    '&:hover': { color: '#fff' },
+                  }}
+                >
+                  {campaignsOpen ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
+                </Box>
+              ) : undefined}
+            >
               {isCollapsed
                 ? <Tooltip title={item.label} placement="right">{btn}</Tooltip>
                 : btn}
