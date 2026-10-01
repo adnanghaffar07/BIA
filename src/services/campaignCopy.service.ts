@@ -99,6 +99,58 @@ export type CopyAudit = {
  * account settings rather than the CRM.
  */
 /**
+ * The lead behind each of these addresses.
+ *
+ * ── Two passes, because the address may not be on a column ──────────────────
+ * A column-only lookup found 1 lead in a campaign of 53. That was fixed by attributing with
+ * insuredEmails()/coInsuredEmails() — the functions that walk the trace payload — but the
+ * walk only ever saw rows the SQL had already returned BY COLUMN, so an address that exists
+ * nowhere but inside skipTraceData still came back "no lead". On the 20-contact campaign
+ * that was 6 of them: every one had the address sitting in insuredEmails(), on a row the
+ * query never fetched. The same column-versus-payload mistake, made one level up.
+ *
+ * So the payload is searched too — but only for the addresses the first pass could not
+ * place. The scan is over jsonb text and cannot use an index, and running it for addresses
+ * already resolved would pay for it on every contact instead of the handful that need it.
+ *
+ * The SQL is only a sieve. Which person an address belongs to is still decided by
+ * insuredEmails()/coInsuredEmails(), so a payload row that merely mentions an address —
+ * a relative, a previous owner — never becomes that address's lead.
+ */
+async function leadsByEmail(emails: string[]): Promise<Map<string, Record<string, any>>> {
+  const wanted = [...new Set(emails.map((e) => String(e ?? '').trim().toLowerCase()).filter(Boolean))];
+  const byEmail = new Map<string, Record<string, any>>();
+  if (!wanted.length) return byEmail;
+
+  const absorb = (rows: Array<Record<string, any>>) => {
+    for (const l of rows) {
+      for (const e of [...insuredEmails(l), ...coInsuredEmails(l), l.email1, l.email2, l.owner2Email]) {
+        const k = String(e ?? '').trim().toLowerCase();
+        if (k && !byEmail.has(k)) byEmail.set(k, l);
+      }
+    }
+  };
+
+  absorb(await sql`
+    SELECT * FROM "Lead"
+     WHERE lower("email1") = ANY(${wanted}::text[])
+        OR lower("email2") = ANY(${wanted}::text[])
+        OR lower("owner2Email") = ANY(${wanted}::text[])
+        OR "emailsAll" ?| ${wanted}::text[]` as Array<Record<string, any>>);
+
+  const missing = wanted.filter((e) => !byEmail.has(e));
+  if (missing.length) {
+    const likes = missing.map((e) => '%' + e + '%');
+    absorb(await sql`
+      SELECT * FROM "Lead"
+       WHERE "skipTraceData" IS NOT NULL
+         AND "skipTraceData"::text ILIKE ANY(${likes}::text[])` as Array<Record<string, any>>);
+  }
+
+  return byEmail;
+}
+
+/**
  * Push today's values onto the contacts already standing in a campaign.
  *
  * ── Why it is needed at all ─────────────────────────────────────────────────
@@ -137,31 +189,7 @@ export async function resyncCampaignVariables(campaignId: string): Promise<{
    * coInsuredEmails() — the functions that walk the payload and attribute each address to a
    * person — which is what every other part of the system means by "this lead's address".
    */
-  const wanted = contacts
-    .map((c) => String(c?.email ?? '').trim().toLowerCase())
-    .filter(Boolean);
-
-  const candidates = wanted.length
-    ? await sql`
-        SELECT * FROM "Lead"
-         WHERE lower("email1") = ANY(${wanted}::text[])
-            OR lower("email2") = ANY(${wanted}::text[])
-            OR lower("owner2Email") = ANY(${wanted}::text[])
-            OR "emailsAll" ?| ${wanted}::text[]` as Array<Record<string, any>>
-    : [];
-
-  const byEmail = new Map<string, Record<string, any>>();
-  for (const l of candidates) {
-    for (const e of [...insuredEmails(l), ...coInsuredEmails(l)]) {
-      const k = String(e).trim().toLowerCase();
-      if (k && !byEmail.has(k)) byEmail.set(k, l);
-    }
-    // The columns too, in case a producer typed an address the payload never saw.
-    for (const e of [l.email1, l.email2, l.owner2Email]) {
-      const k = String(e ?? '').trim().toLowerCase();
-      if (k && !byEmail.has(k)) byEmail.set(k, l);
-    }
-  }
+  const byEmail = await leadsByEmail(contacts.map((c) => String(c?.email ?? '')));
   const leadFor = (email: string) => byEmail.get(email) ?? null;
   const out = {
     contacts: contacts.length, updated: 0, skipped: 0, sharedOnly: 0,
@@ -375,22 +403,7 @@ export async function auditCampaignCopy(campaignId: string): Promise<CopyAudit> 
      * contacts reported as "nothing to send". One rule, so the check and the fix cannot
      * disagree about who a contact is.
      */
-    const wanted = contactVars.map((c) => c.email.toLowerCase());
-    const candidates = wanted.length
-      ? await sql`
-          SELECT * FROM "Lead"
-           WHERE lower("email1") = ANY(${wanted}::text[])
-              OR lower("email2") = ANY(${wanted}::text[])
-              OR lower("owner2Email") = ANY(${wanted}::text[])
-              OR "emailsAll" ?| ${wanted}::text[]` as Array<Record<string, any>>
-      : [];
-    const byEmail = new Map<string, Record<string, any>>();
-    for (const l of candidates) {
-      for (const e of [...insuredEmails(l), ...coInsuredEmails(l), l.email1, l.email2, l.owner2Email]) {
-        const k = String(e ?? '').trim().toLowerCase();
-        if (k && !byEmail.has(k)) byEmail.set(k, l);
-      }
-    }
+    const byEmail = await leadsByEmail(contactVars.map((c) => c.email));
     for (const c of contactVars) {
       const hit = byEmail.get(c.email.toLowerCase());
       if (hit) { lead = hit; sampleEmail = c.email; break; }
