@@ -200,3 +200,139 @@ export async function subjectCoverage(): Promise<{
 export async function subjectTemplates(): Promise<Record<string, string>> {
   return Object.fromEntries(await subjectLookup());
 }
+
+/**
+ * ── Zoya owns the routing, not just the words ───────────────────────────────
+ *
+ * Abdullah, 2 Oct 2026: "do not hardcode anything, let Zoya think which subject goes to
+ * which email and which variant."
+ *
+ * The seed fixed each line to a segment, a step, a variant and a set of cohorts. That made
+ * the TEXT editable and left the MAPPING in the code — so "try this line on C4 instead" was
+ * still a developer job, which is the thing we were removing.
+ *
+ * Everything below changes the mapping. The risk it introduces is real and is why the
+ * checks exist: two lines claiming the same audience, or an audience with no line at all.
+ */
+
+/** A routing claim: one segment, one step, one variant, and the cohorts it covers. */
+export interface Routing {
+  segment: Segment;
+  step: number;
+  variant: 'A' | 'B';
+  /** Empty means every cohort. */
+  cohorts: string[];
+}
+
+export const COHORT_CODES = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7'] as const;
+
+/**
+ * Two lines cannot claim the same audience.
+ *
+ * The lookup takes the first match, so an overlap means one of the two lines silently never
+ * sends and nobody can tell which. A unique index cannot catch it — {C1,C2} and {C2,C3} are
+ * different values that collide on C2 — so it is checked here, against every other row.
+ */
+export async function routingConflicts(
+  routing: Routing,
+  ignoreId?: string,
+): Promise<Array<{ id: string; name: string; cohorts: string[] }>> {
+  const rows = await getSubjects();
+  const mine = routing.cohorts.length ? new Set(routing.cohorts) : new Set(COHORT_CODES);
+  return rows
+    .filter((r) => {
+      if (r.id === ignoreId || r.segment !== routing.segment || r.variant !== routing.variant) return false;
+      /**
+       * Grade B's line answers for EVERY step, so its step is not part of its identity.
+       *
+       * subjectLookup expands a grade_b row across steps 1–3 (§5.11 gives Grade B one pair,
+       * used at every email). Comparing steps here would call a second grade_b line at step 2
+       * conflict-free while the lookup had both answering — one of them silently never
+       * sending, which is the exact thing this check exists to prevent. Found by testing the
+       * check rather than by reading it.
+       */
+      if (routing.segment === 'grade_b') return true;
+      return r.step === routing.step;
+    })
+    .filter((r) => {
+      const theirs = r.cohorts.length ? r.cohorts : [...COHORT_CODES];
+      return theirs.some((c) => mine.has(c));
+    })
+    .map((r) => ({ id: r.id, name: r.name, cohorts: r.cohorts }));
+}
+
+export async function setSubjectRouting(
+  id: string,
+  routing: Routing,
+): Promise<{ ok: true } | { ok: false; problems: SubjectProblem[] }> {
+  if (![1, 2, 3].includes(routing.step)) {
+    return { ok: false, problems: [{ field: 'template', message: 'A sequence has three emails.' }] };
+  }
+  const clash = await routingConflicts(routing, id);
+  if (clash.length) {
+    return {
+      ok: false,
+      problems: [{
+        field: 'template',
+        message: `"${clash[0].name}" already covers ${clash[0].cohorts.join(', ') || 'every cohort'} `
+          + 'for that email and variant. Two lines claiming one audience means one of them '
+          + 'never sends, and nothing would say which.',
+      }],
+    };
+  }
+  await sql`
+    UPDATE "CampaignSubject"
+       SET "segment" = ${routing.segment}, "step" = ${routing.step},
+           "variant" = ${routing.variant}, "cohorts" = ${routing.cohorts}::text[],
+           "updatedAt" = NOW()
+     WHERE "id" = ${id}`;
+  return { ok: true };
+}
+
+export async function createSubject(
+  routing: Routing,
+  name: string,
+  template: string,
+  by: string | null,
+): Promise<{ ok: true; id: string } | { ok: false; problems: SubjectProblem[] }> {
+  const custom = Object.keys(await globalMergeVars());
+  const problems = subjectProblems(name, template, custom);
+  if (problems.length) return { ok: false, problems };
+  const clash = await routingConflicts(routing);
+  if (clash.length) {
+    return {
+      ok: false,
+      problems: [{
+        field: 'template',
+        message: `"${clash[0].name}" already covers that audience. Change the cohorts, the `
+          + 'email or the variant first.',
+      }],
+    };
+  }
+  const id = crypto.randomUUID();
+  await sql`
+    INSERT INTO "CampaignSubject" ("id","segment","step","variant","cohorts","name","template","updatedBy")
+    VALUES (${id}, ${routing.segment}, ${routing.step}, ${routing.variant},
+            ${routing.cohorts}::text[], ${name.trim()}, ${template.trim()}, ${by})`;
+  return { ok: true, id };
+}
+
+/**
+ * Removing a line is allowed, and the caller is told what it costs.
+ *
+ * Deleting the only line for an audience does not blank the email — subjectFor() still
+ * answers — but it does mean that audience silently stops following this screen, which is
+ * exactly the confusion the screen was built to end. So the audiences it strands are
+ * returned rather than the delete being refused: Zoya may well be deleting one line because
+ * she is about to add a better one.
+ */
+export async function deleteSubject(id: string): Promise<{ ok: true; stranded: string[] }> {
+  const before = await subjectCoverage();
+  await sql`DELETE FROM "CampaignSubject" WHERE "id" = ${id}`;
+  const after = await subjectCoverage();
+  const was = new Set(before.missing.map((m) => `${m.segment}|${m.cohort}|${m.step}|${m.variant}`));
+  const stranded = after.missing
+    .filter((m) => !was.has(`${m.segment}|${m.cohort}|${m.step}|${m.variant}`))
+    .map((m) => `${m.segment} · ${m.cohort} · email ${m.step} · ${m.variant}`);
+  return { ok: true, stranded };
+}
