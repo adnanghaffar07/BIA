@@ -234,7 +234,38 @@ const CAMPAIGN_VAR_COLUMNS: QcColumn[] = [
   { header: 'band_carrier', value: (r: QcRow) => String(r.campaignVars?.band_carrier ?? '') },
 ]);
 
-function columnsFor(report: ReportType): QcColumn[] {
+/**
+ * One address per column, as many columns as the widest row needs.
+ *
+ * ── Why not one cell with commas in it ──────────────────────────────────────
+ * The joined cell was unreadable on screen — three wrapped addresses in a 90px column — and
+ * worse in the file: a spreadsheet cannot sort, filter or verify a cell holding three
+ * values, and a verification tool handed that CSV sees one column of nonsense rather than
+ * three addresses. Zoya runs exactly that tool over exactly this export.
+ *
+ * ── Why the count comes from the rows ───────────────────────────────────────
+ * A fixed cap would silently drop the fourth address on the one card that has four, which is
+ * the shape of bug this file keeps finding elsewhere: a hand-set limit nothing checks. The
+ * widest row in the result set decides, so a card with five gets five columns and a result
+ * set with none still shows one, so the header is never missing entirely.
+ */
+function listColumns(
+  header: string,
+  rows: QcRow[],
+  pick: (r: QcRow) => string[] | null | undefined,
+  format: (v: string) => string = (v) => v,
+): QcColumn[] {
+  const widest = rows.reduce((n, r) => Math.max(n, pick(r)?.length ?? 0), 0);
+  return Array.from({ length: Math.max(1, widest) }, (_, i) => ({
+    header: `${header} ${i + 1}`,
+    value: (r: QcRow) => {
+      const v = pick(r)?.[i];
+      return v ? format(v) : '';
+    },
+  }));
+}
+
+function columnsFor(report: ReportType, rows: QcRow[] = []): QcColumn[] {
   const base: QcColumn[] = [
     /**
      * The key every export was missing.
@@ -331,13 +362,13 @@ function columnsFor(report: ReportType): QcColumn[] {
          * hold several insured addresses, so all of them are listed; an empty cell means
          * none, which reads the same as the old "No".
          */
-        { header: 'Insured Email', value: (r) => (r.insuredEmailList ?? []).join(', ') },
+        ...listColumns('Insured Email', rows, (r) => r.insuredEmailList),
         // The second email in the cadence goes to this person, so the export has to carry
         // who they are — an address with no name cannot be addressed.
         { header: 'Co-Insured Name', value: (r) => r.coInsuredName ?? '' },
-        { header: 'Co-Insured Email', value: (r) => (r.coInsuredEmailList ?? []).join(', ') },
-        { header: 'Insured Phone', value: (r) => (r.insuredPhoneList ?? []).map(fmtPhone).join(', ') },
-        { header: 'Co-Insured Phone', value: (r) => (r.coInsuredPhoneList ?? []).map(fmtPhone).join(', ') },
+        ...listColumns('Co-Insured Email', rows, (r) => r.coInsuredEmailList),
+        ...listColumns('Insured Phone', rows, (r) => r.insuredPhoneList, fmtPhone),
+        ...listColumns('Co-Insured Phone', rows, (r) => r.coInsuredPhoneList, fmtPhone),
         { header: 'Deep Traced', value: (r) => yn(r.matched) },
         /**
          * contactability (Sec. 4.1) — first among the contact columns on purpose.
@@ -360,11 +391,11 @@ function columnsFor(report: ReportType): QcColumn[] {
            * them would make the two exports impossible to check against each other, which
            * is the only reason there are two.
            */
-          { header: 'Insured Email', value: (r) => (r.insuredEmailList ?? []).join(', ') },
+          ...listColumns('Insured Email', rows, (r) => r.insuredEmailList),
           ...(report === 'emails_all'
             ? [
               { header: 'Co-Insured Name', value: (r: QcRow) => r.coInsuredName ?? '' },
-              { header: 'Co-Insured Email', value: (r: QcRow) => (r.coInsuredEmailList ?? []).join(', ') },
+              ...listColumns('Co-Insured Email', rows, (r) => r.coInsuredEmailList),
               // The leads this list adds and the insured-only list loses.
               { header: 'Co-Insured Only', value: (r: QcRow) => yn(r.coInsuredOnly) },
             ]
@@ -906,7 +937,25 @@ export default function QcReportsPage() {
   const [hydrated, setHydrated] = useState(false);
   const restoredRef = useRef(false);
 
+  /**
+   * ── Only the newest request may write to the screen ──────────────────────
+   *
+   * Switching reports starts a fetch and leaves the previous one in flight. Whichever
+   * resolves LAST wins, and the slow one is usually the big one: leaving Referrals
+   * (1,385 rows) for the email list reliably landed the referral rows under the email-list
+   * tab. It is not obviously wrong on screen either — the stale callback also calls
+   * setRowsReport with ITS OWN report, so the columns follow the old rows and the table is
+   * internally consistent. Only the tab, the record count and the date range say otherwise,
+   * which reads as a filter that did not apply rather than a response that arrived late.
+   *
+   * Every write below is therefore guarded on the sequence number this run was given. An
+   * AbortController would stop the request, but not the ones already past the await inside
+   * the vendor client — the guard covers both and is cheaper to reason about.
+   */
+  const runSeq = useRef(0);
   const run = useCallback(async () => {
+    const seq = ++runSeq.current;
+    const current = () => seq === runSeq.current;
     setLoading(true); setError(null);
     try {
       // The ledger is one row per WEEK, not per lead, so it has its own endpoint and its
@@ -918,6 +967,7 @@ export default function QcReportsPage() {
         const r = await fetch(u.toString());
         const j = await r.json();
         if (!j.success) throw new Error(j.error || 'Report failed');
+        if (!current()) return;
         setLedger(j.data || []);
         setRows([]);
         setRowsReport(report);
@@ -943,6 +993,7 @@ export default function QcReportsPage() {
       const res = await fetch(url.toString());
       const json = await res.json();
       if (!json.success) throw new Error(json.error || 'Report failed');
+      if (!current()) return;
       setRows(json.data || []);
       setRowsReport(report);
       setRan(true);
@@ -954,11 +1005,12 @@ export default function QcReportsPage() {
         void loadQueues();
       }
     } catch (e) {
+      if (!current()) return;
       setError(e instanceof Error ? e.message : 'Report failed');
       setRows([]);
       setRowsReport(null);
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
     /**
      * listGrade, ageMin and ageMax belong here for the same reason the rest do: run()
@@ -1396,7 +1448,11 @@ export default function QcReportsPage() {
    * the OLD report's rows would show empty cells for a moment and — worse — export them
    * that way if someone clicked during the fetch.
    */
-  const tableColumns = useMemo(() => columnsFor(rowsReport ?? report), [rowsReport, report]);
+  const tableColumns = useMemo(
+    // rows, because the address columns are counted from the widest row on screen.
+    () => columnsFor(rowsReport ?? report, rows),
+    [rowsReport, report, rows],
+  );
   // Keyed off the SELECTED report, not the one last run, so switching to the ledger hides
   // the generic table immediately rather than leaving the previous report's rows on screen.
   const rendersOwnTable = REPORTS_WITH_OWN_TABLE.includes(report);
