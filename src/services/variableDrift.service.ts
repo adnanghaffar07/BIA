@@ -3,6 +3,8 @@ import { sql } from '@/lib/neon';
 import { listCampaigns, listLeadsInCampaign, type VendorLead } from '@/lib/integrations/leadCampaign';
 import { mergeVarsFor, customOnly, agencyWebsite } from './mergeVars.service';
 import { mergeFieldByName } from '@/lib/mergeFields';
+import { ctaWordings } from './campaignCta.service';
+import { subjectTemplates } from './campaignSubject.service';
 
 /**
  * What the platform holds for each contact, against what the CRM says today.
@@ -174,6 +176,10 @@ export async function checkCampaignDrift(campaignId: string): Promise<DriftRepor
   const vendorLeads = await listLeadsInCampaign(campaignId);
   const site = await agencyWebsite();
   const globals = await globalMergeVars();
+  // The three asks, edited on the CTA screen. Loaded beside globals because both are
+  // the same kind of thing: shared copy that every contact in this push receives.
+  const ctas = await ctaWordings();
+  const subjects = await subjectTemplates();
 
   /**
    * Tie each contact back to a card.
@@ -247,7 +253,7 @@ export async function checkCampaignDrift(campaignId: string): Promise<DriftRepor
 
     const lead = leadById.get(String(link.leadId))!;
     const role = link.personRole === 'insured' ? 'insured' : 'coInsured';
-    const expected = customOnly(mergeVarsFor(lead, role, site, globals));
+    const expected = customOnly(mergeVarsFor(lead, role, site, globals, ctas, subjects));
 
     // The built-ins are set through the API's own fields, so they are not in `expected` —
     // but the platform stores them in the same map, and a wrong first name is exactly the

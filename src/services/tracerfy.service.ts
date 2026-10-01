@@ -1,5 +1,6 @@
 import type { Lead } from '@/types/lead';
 import { matchInsuredPerson, insuredPatchFromPersons } from './skipTrace.service';
+import { logTrace } from './skipTraceLog.service';
 import { readVendorJson } from './vendorErrors';
 
 /**
@@ -60,7 +61,13 @@ function toReapiPerson(p: any) {
  * named INSURED's contacts first (so phone1/email1 belong to them, not a co-owner), plus
  * the co-insured/DOB patch and the full raw response. Throws on transport / auth errors.
  */
-export async function runTracerfy(lead: Lead): Promise<TracerfyResult> {
+export async function runTracerfy(
+  lead: Lead,
+  /** Set by a blast so its traces can be summarised as one run (Frank, 1 Oct). */
+  opts: { runId?: string | null; by?: string | null } = {},
+): Promise<TracerfyResult> {
+  const startedAt = Date.now();
+  let requests = 0;
   const key = process.env.TRACERFY_API_KEY;
   if (!key) throw new Error('Tracerfy API key not configured (TRACERFY_API_KEY).');
 
@@ -81,6 +88,7 @@ export async function runTracerfy(lead: Lead): Promise<TracerfyResult> {
   }
 
   const callEnhanced = async (firstName: string) => {
+    requests++;
     const res = await fetch(ENHANCED_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
@@ -149,10 +157,45 @@ export async function runTracerfy(lead: Lead): Promise<TracerfyResult> {
       ? [ownerRaw.first_name, ownerRaw.last_name].filter(Boolean).join(' ').trim() || null
       : null;
 
+  const dedupedPhones = [...new Set(phones)];
+  const dedupedEmails = [...new Set(emails)];
+  const matched = !!json?.hit && (persons.length > 0);
+
+  /**
+   * Logged here rather than at the call sites — see skipTraceLog.service for why.
+   *
+   * Awaited, so a trace and its record cannot be separated by the process ending between
+   * them. The write swallows its own failures, so this can never cost us a trace.
+   */
+  await logTrace({
+    leadId: String(l.id),
+    propertyId: l.propertyId ? String(l.propertyId) : null,
+    provider: 'tracerfy',
+    tier: 'enhanced',
+    runId: opts.runId ?? null,
+    sentFirstName: first,
+    sentLastName: last,
+    sentAddress: address,
+    sentCity: city,
+    sentState: state,
+    sentZip: zip,
+    requests,
+    outcome: matched ? 'hit' : 'miss',
+    returnedName: ownerName,
+    personCount: persons.length,
+    phoneCount: dedupedPhones.length,
+    emailCount: dedupedEmails.length,
+    // Read from the response, never assumed at 15 a hit — the assumption is precisely what
+    // a question about the bill would be checking.
+    credits: Number(json?.credits_deducted ?? 0) || 0,
+    durationMs: Date.now() - startedAt,
+    createdBy: opts.by ?? null,
+  });
+
   return {
-    phones: [...new Set(phones)],
-    emails: [...new Set(emails)],
-    matched: !!json?.hit && (persons.length > 0),
+    phones: dedupedPhones,
+    emails: dedupedEmails,
+    matched,
     raw: json,
     insuredPatch,
     personCount: persons.length,

@@ -57,7 +57,17 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
    * from anybody who has not found them yet — a closed-by-default group would make the send
    * check invisible to exactly the person who needs it.
    */
-  const [campaignsOpen, setCampaignsOpen] = useStickyState('nav:campaignsOpen', true);
+  /**
+   * Open state is PER GROUP, keyed by the parent's path.
+   *
+   * It was a single flag, which was right while Campaigns was the only group. A second one
+   * under Phone made the two share a chevron: collapsing Campaigns hid Call coverage, and
+   * the arrow next to Phone reported the state of a group somewhere else on the list.
+   */
+  const [openGroups, setOpenGroups] = useStickyState<Record<string, boolean>>('nav:openGroups', {});
+  const isGroupOpen = (path: string) => openGroups[path] ?? true;
+  const toggleGroup = (path: string) =>
+    setOpenGroups((prev) => ({ ...prev, [path]: !(prev[path] ?? true) }));
   const { logout, user } = useAuth();
 
   const isActive = (path: string) =>
@@ -98,6 +108,9 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
        * anybody who has not already found it.
        */
       { label: 'Email variables', icon: <DataObjectIcon />, path: '/admin/merge-variables', child: true, parent: '/lead-campaigns' },
+      { label: 'Subject lines', icon: <DataObjectIcon />, path: '/admin/subjects', child: true, parent: '/lead-campaigns' },
+      { label: 'CTAs', icon: <CampaignIcon />, path: '/admin/ctas', child: true, parent: '/lead-campaigns' },
+      { label: 'Campaign copy', icon: <DataObjectIcon />, path: '/admin/campaign-copy', child: true, parent: '/lead-campaigns' },
       { label: 'Can we send?', icon: <FactCheckIcon />, path: '/admin/send-check', child: true, parent: '/lead-campaigns' },
       // Its own entry, above QC. QC is where somebody goes when they suspect a problem;
       // the ledger is the standing measure of the pipeline and the first thing Frank reads.
@@ -107,6 +120,10 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
       // Its own entry rather than a tab inside Outreach: this one is a work queue somebody
       // opens to find the next call, not a report they open to read numbers.
       { label: 'Phone',       icon: <PhoneIcon />,           path: '/admin/phone' },
+      // Under Phone, because it answers the question the queue cannot: how much of the
+      // cohort has actually been dialled. On 1 Oct C1 held 326 numbers with 15 worked and
+      // nothing in the CRM said so — Frank asked twice and nobody could answer.
+      { label: 'Call coverage', icon: <FactCheckIcon />, path: '/admin/call-coverage', child: true, parent: '/admin/phone' },
       { label: 'Weekly Pull', icon: <EventRepeatIcon />,     path: '/admin/pull-weekly' },
       // Its own entry because Zoya opens it, and she does not otherwise come to QC Reports.
       // Burying a file upload inside a reporting screen is how it goes on being done by
@@ -247,7 +264,7 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
            * sidebar is collapsed, where the group heading is not on screen to be opened.
            */
           const parent = (item as { parent?: string }).parent;
-          if (parent && !isCollapsed && !campaignsOpen) return null;
+          if (parent && !isCollapsed && !isGroupOpen(parent)) return null;
 
           /**
            * The chevron toggles; the row still navigates.
@@ -266,15 +283,15 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen = false, onMob
               secondaryAction={isGroupParent ? (
                 <Box
                   component="button"
-                  aria-label={campaignsOpen ? 'Collapse' : 'Expand'}
-                  onClick={(e: React.MouseEvent) => { e.preventDefault(); setCampaignsOpen((v) => !v); }}
+                  aria-label={isGroupOpen(item.path) ? 'Collapse' : 'Expand'}
+                  onClick={(e: React.MouseEvent) => { e.preventDefault(); toggleGroup(item.path); }}
                   sx={{
                     border: 0, background: 'transparent', cursor: 'pointer', p: 0.25,
                     display: 'flex', alignItems: 'center', color: 'rgba(255,255,255,0.55)',
                     '&:hover': { color: '#fff' },
                   }}
                 >
-                  {campaignsOpen ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
+                  {isGroupOpen(item.path) ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
                 </Box>
               ) : undefined}
             >

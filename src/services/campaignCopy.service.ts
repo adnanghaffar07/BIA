@@ -4,6 +4,8 @@ import { mergeVarsFor, agencyWebsite, customOnly } from './mergeVars.service';
 import { insuredEmails, coInsuredEmails } from './recipients.service';
 import { globalMergeVars } from './globalMergeVars.service';
 import { mergeFieldByName, tokensIn } from '@/lib/mergeFields';
+import { ctaWordings } from './campaignCta.service';
+import { subjectTemplates } from './campaignSubject.service';
 
 /**
  * What the copy asks for, against what we actually send.
@@ -170,8 +172,9 @@ export async function resyncCampaignVariables(campaignId: string): Promise<{
   sharedOnly: number;
   failed: Array<{ email: string; fields: string[] }>;
 }> {
-  const [contacts, site, globals] = await Promise.all([
-    listLeadsInCampaign(campaignId), agencyWebsite(), globalMergeVars(),
+  const [contacts, site, globals, ctas, subjects] = await Promise.all([
+    listLeadsInCampaign(campaignId), agencyWebsite(), globalMergeVars(), ctaWordings(),
+    subjectTemplates(),
   ]);
 
   /**
@@ -229,7 +232,7 @@ export async function resyncCampaignVariables(campaignId: string): Promise<{
            */
           coInsuredEmails(lead).some((e) => String(e).trim().toLowerCase() === email)
             ? 'coInsured' : 'insured',
-          site, globals,
+          site, globals, ctas, subjects,
         ))
       : globals;
 
@@ -432,7 +435,9 @@ export async function auditCampaignCopy(campaignId: string): Promise<CopyAudit> 
    * contact by value; a per-lead one differs per household by design.
    */
   const globals = await globalMergeVars();
-  const vars = lead ? mergeVarsFor(lead, 'insured', await agencyWebsite(), globals) : {};
+  const vars = lead
+    ? mergeVarsFor(lead, 'insured', await agencyWebsite(), globals, await ctaWordings(), await subjectTemplates())
+    : {};
   if (lead) {
     base.sample = {
       leadId: String(lead.id),

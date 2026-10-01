@@ -195,6 +195,32 @@ export async function getCampaign(id: string): Promise<Campaign> {
 }
 
 /**
+ * Replace a campaign's email sequence.
+ *
+ * ── Why this exists ─────────────────────────────────────────────────────────
+ * The subject and body were hand-typed into the platform, so the same sentence lived in two
+ * places and the copies drifted: an em-dash lost, one subject truncated to "the last
+ * stretc", a step 1 carrying the step 2 line. Worse, six campaigns referenced
+ * {{first_name}} when the platform's built-in is {{firstName}} — which renders nothing, so
+ * the first line read "Hi ,".
+ *
+ * ── Whole-sequence write, and that is the dangerous part ────────────────────
+ * The vendor has no endpoint for one step, so the entire `sequences` array is sent. Anything
+ * the caller omits from it is GONE — a step somebody added on the platform this morning
+ * included. So callers build the new array from a FRESH getCampaign() read and change only
+ * the fields they mean to, rather than from anything cached.
+ */
+export async function updateCampaignSequences(
+  id: string,
+  sequences: unknown[],
+): Promise<Campaign> {
+  return (await apiFetch(`/campaigns/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ sequences }),
+  })).json() as Promise<Campaign>;
+}
+
+/**
  * Every campaign's counters in ONE call — merge into the list client-side by id.
  * Doing this per campaign would be N+1 for a dashboard that always shows all of them.
  */

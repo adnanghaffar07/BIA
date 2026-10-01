@@ -16,6 +16,8 @@ import { type Segment } from './campaignSegment.service';
 import { mergeVarsFor, customOnly, agencyWebsite } from './mergeVars.service';
 import { resolveInboxCollisions } from './inboxCollision.service';
 import { blockedAddresses } from './emailVerification.service';
+import { ctaWordings } from './campaignCta.service';
+import { subjectTemplates } from './campaignSubject.service';
 
 /**
  * Push CRM leads into a campaign.
@@ -501,6 +503,10 @@ export async function pushChunk(
   const site = await agencyWebsite();
   // Same for every homeowner (migration 047) — loaded once, sent with every contact.
   const globals = await globalMergeVars();
+  // The three asks, edited on the CTA screen. Loaded beside globals because both are
+  // the same kind of thing: shared copy that every contact in this push receives.
+  const ctas = await ctaWordings();
+  const subjects = await subjectTemplates();
 
   const payload: LeadInput[] = toSend.map((r) => ({
     email: r.email,
@@ -523,7 +529,7 @@ export async function pushChunk(
      * own fields. Sending them again here would hand the platform two variables called
      * firstName — its built-in and one of ours — and nothing would report the collision.
      */
-    custom_variables: customOnly(mergeVarsFor(r.lead, r.personRole === 'insured' ? 'insured' : 'coInsured', site, globals)),
+    custom_variables: customOnly(mergeVarsFor(r.lead, r.personRole === 'insured' ? 'insured' : 'coInsured', site, globals, ctas, subjects)),
   }));
 
   const added = await addLeadsToCampaign(campaignId, payload);

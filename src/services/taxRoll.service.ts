@@ -23,7 +23,10 @@
  * volume. It is equally happy being fed a township-supplied data extract instead;
  * `compareOwnerNames` does the actual verification and is source-agnostic.
  */
-import { compareOwnerNames, NameComparison } from './ownerNameMatch.service';
+// `type` on the interface: without it Node's type-stripping loader treats NameComparison as
+// a real export and refuses to load this module at runtime, which tsc never sees because it
+// erases the import anyway.
+import { compareOwnerNames, type NameComparison } from './ownerNameMatch.service';
 
 const API_ROOT = 'https://api.edmundsgovtech.cloud/wipp-core/v1';
 
@@ -187,14 +190,70 @@ const STREET_SUFFIX: Record<string, string> = {
   SQ: 'SQUARE', TRL: 'TRAIL', WAY: 'WAY',
 };
 
-/** Canonical form for comparing two street addresses ("21 Moonlight Way" ≡ "21 MOONLIGHT WAY"). */
+/**
+ * Canonical form for comparing two street addresses ("21 Moonlight Way" ≡ "21 MOONLIGHT WAY").
+ *
+ * ── Why the unit word is flattened ──────────────────────────────────────────
+ * The roll and the card disagree about what to call the same thing. Our card holds "73
+ * Overlook Way Unit D"; Manalapan's roll holds "73 Overlook Way Apt D". Compared literally
+ * those are two different properties, so the strict filter below threw away an exact match
+ * — and the card came back "not on tax roll" with a co-insured (Esther Lin) sitting in the
+ * record nobody could see. Frank found that one by hand on 30 Sep and asked why we hadn't.
+ *
+ * ── Why "51b" is split ──────────────────────────────────────────────────────
+ * Frank, item 8: "75b" should be read as "75 Unit B". The roll writes the unit as its own
+ * field; our source sometimes glues it to the house number. Left alone, "51B PIAZZA TASSO"
+ * matches nothing at all, because no roll has a house numbered 51B.
+ */
 export function normalizeStreet(s: unknown): string {
-  const base = String(s ?? '').toUpperCase().replace(/[.,#]/g, ' ').replace(/\s+/g, ' ').trim();
+  let base = String(s ?? '')
+    .toUpperCase()
+    .replace(/[.,]/g, ' ')
+    // "#" is a unit marker, not punctuation to be deleted: "24 Deepwater Cir # A".
+    .replace(/#\s*/g, ' UNIT ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // "51B PIAZZA TASSO" → "51 PIAZZA TASSO UNIT B". Only when a single letter is glued to
+  // the leading house number, which is the shape the source actually produces.
+  const glued = base.match(/^(\d+)([A-Z])\s+(.*)$/);
+  if (glued) base = `${glued[1]} ${glued[3]} UNIT ${glued[2]}`;
+
   return base
     .split(' ')
     .map((tok) => STREET_SUFFIX[tok] ?? tok)
+    // APT, UNIT, STE and friends all name the same thing. One word, so the comparison is
+    // about which unit it is rather than which word the clerk typed.
+    .map((tok) => (UNIT_WORD.has(tok) ? 'UNIT' : tok))
     .join(' ')
+    .replace(/\s+/g, ' ')
     .trim();
+}
+
+/** Every word a municipality might use for the same sub-address. */
+const UNIT_WORD = new Set(['APT', 'APARTMENT', 'UNIT', 'STE', 'SUITE', 'BLDG', 'BUILDING']);
+
+/**
+ * The queries to ask the roll for, broadest last.
+ *
+ * The search was previously given the address exactly as we hold it, which is the one form
+ * least likely to work: "33 Hummingbird Ct" returns nothing, while "33 HUMMINGBIRD COURT"
+ * returns the property. The roll spells its suffixes out and we abbreviate them, so every
+ * abbreviated address — 46 of 62 cards in C1 — was asking for a street that, as far as the
+ * search was concerned, does not exist.
+ *
+ * The last form drops the suffix and the unit entirely. That is Frank's fallback and it is
+ * deliberately last: "73 OVERLOOK" finds the building when "73 OVERLOOK WAY" finds nothing,
+ * but it also returns every unit in it, so it is only safe behind the match test below.
+ */
+export function searchQueries(street: string): string[] {
+  const norm = normalizeStreet(street);
+  const raw = String(street ?? '').trim();
+  const numberAndName = norm
+    .replace(/\s+UNIT\s+\S+\s*$/, '')
+    .replace(new RegExp(`\\s+(${Object.values(STREET_SUFFIX).join('|')})\\s*$`), '')
+    .trim();
+  return [...new Set([norm, raw, numberAndName].filter(Boolean))];
 }
 
 // ── Lookup ──────────────────────────────────────────────────────────────────
@@ -211,6 +270,11 @@ export type TaxRollLookup =
   | { outcome: 'found'; records: TaxRollRecord[]; municipality: Municipality }
   /** Every roll answered, none of them holds this address. A fact about the property. */
   | { outcome: 'not_found' }
+  /**
+   * The building is on the roll but we cannot tell which unit is ours. Frank, item 9:
+   * these get flagged to him rather than resolved by picking one.
+   */
+  | { outcome: 'ambiguous'; candidates: TaxRollRecord[]; municipality: Municipality }
   /** No roll is configured for this ZIP. We cannot know either way. */
   | { outcome: 'unsupported' }
   /** At least one roll could not be reached. We cannot know either way. */
@@ -223,12 +287,22 @@ export async function lookupTaxRoll(
   const munis = WIPP_BY_ZIP[String(zip ?? '').trim()];
   if (!munis?.length || !String(street ?? '').trim()) return { outcome: 'unsupported' };
   const want = normalizeStreet(street);
+  const queries = searchQueries(street);
   /** Rolls that errored rather than answering "no". */
   const failures: string[] = [];
+  /**
+   * Near misses from the broadest query — same building, and we could not tell which unit.
+   *
+   * Collected rather than discarded so the caller can say so. Frank, item 9: accept the
+   * fallback "only when exactly one parcel or unit comes back; otherwise flag it to me".
+   * Silently picking the first of four would put a neighbour's name on the card.
+   */
+  const nearby: Array<{ record: TaxRollRecord; municipality: Municipality }> = [];
 
   for (const muni of munis) {
     for (const endpoint of SEARCH_ENDPOINTS) {
-      const url = `${API_ROOT}${endpoint.path}?propertyLoc=${encodeURIComponent(street.trim())}${endpoint.extra}&size=50`;
+      for (const query of queries) {
+      const url = `${API_ROOT}${endpoint.path}?propertyLoc=${encodeURIComponent(query)}${endpoint.extra}&size=50`;
       assertSafeUrl(url);
 
       let json: any;
@@ -255,20 +329,63 @@ export async function lookupTaxRoll(
       }
 
       const rows: any[] = Array.isArray(json) ? json : (json?.content ?? []);
-      const hits = rows
+      const parsed = rows
         .map((r) => ({ ownerName: clean(r?.ownerName), propertyLoc: clean(r?.propertyLoc), accountId: clean(r?.accountId) }))
-        .filter((r) => r.ownerName)
-        // The search is fuzzy — only trust records whose address actually matches ours,
-        // otherwise we could verify against a neighbouring property.
-        .filter((r) => normalizeStreet(r.propertyLoc) === want);
+        .filter((r) => r.ownerName);
 
+      // The search is fuzzy — only trust records whose address actually matches ours,
+      // otherwise we could verify against a neighbouring property.
+      const hits = parsed.filter((r) => normalizeStreet(r.propertyLoc) === want);
       if (hits.length) return { outcome: 'found', records: hits, municipality: muni };
+
+      /**
+       * Same building, different unit — or the same street with no unit on our side.
+       * Held back for the ambiguity test rather than treated as a miss.
+       */
+      for (const r of parsed) {
+        if (sameBuilding(r.propertyLoc, street)) nearby.push({ record: r, municipality: muni });
+      }
+      }
     }
+  }
+
+  /**
+   * Frank's last resort, with his condition on it.
+   *
+   * One parcel back means we found the property under a spelling we did not predict, and
+   * that is a real answer. More than one means we found the BUILDING — "73 Overlook" returns
+   * units A, B, C and D — and which of those is our household is exactly what we were trying
+   * to establish. He asked for those to come to him, so they are reported, not guessed.
+   */
+  const distinct = new Map(nearby.map((n) => [normalizeStreet(n.record.propertyLoc), n]));
+  if (distinct.size === 1) {
+    const only = [...distinct.values()][0];
+    return { outcome: 'found', records: [only.record], municipality: only.municipality };
+  }
+  if (distinct.size > 1) {
+    return {
+      outcome: 'ambiguous',
+      candidates: [...distinct.values()].map((n) => n.record),
+      municipality: [...distinct.values()][0].municipality,
+    };
   }
 
   // Only claim the property is absent when every roll actually answered. If any attempt
   // errored, the truthful answer is "we do not know".
   return failures.length ? { outcome: 'unavailable', errors: failures } : { outcome: 'not_found' };
+}
+
+/**
+ * Same house number and street, whatever each side calls the unit.
+ *
+ * Used only to decide whether a row is worth holding for the ambiguity test above — never
+ * to accept a match, which still requires the full normalised address to be equal.
+ */
+function sameBuilding(a: string, b: string): boolean {
+  const key = (s: string) => normalizeStreet(s).replace(/\s+UNIT\s+\S+\s*$/, '').trim();
+  const ka = key(a);
+  const kb = key(b);
+  return !!ka && ka === kb;
 }
 
 /**
@@ -281,7 +398,10 @@ export async function verifyOwnerName(lead: {
   addressZip?: string | null;
   owner1FirstName?: string | null;
   owner1LastName?: string | null;
-}): Promise<OwnerVerification | { status: 'not_found' | 'unsupported' | 'unavailable'; detail: string }> {
+}): Promise<OwnerVerification | {
+  status: 'not_found' | 'unsupported' | 'unavailable' | 'ambiguous';
+  detail: string;
+}> {
   const zip = String(lead.addressZip ?? '').trim();
   if (!WIPP_BY_ZIP[zip]?.length) {
     return { status: 'unsupported', detail: `No tax roll is configured for ZIP ${zip || '(none)'}.` };
@@ -304,6 +424,19 @@ export async function verifyOwnerName(lead: {
     return {
       status: 'not_found',
       detail: `No matching property found on the tax roll for "${lead.addressStreet ?? ''}".`,
+    };
+  }
+  /**
+   * The building is there; which unit is ours is not established. Frank asked for these
+   * rather than a best guess, so the detail names the units found — that list is the whole
+   * point of surfacing it, and resolving one by eye takes seconds with it in front of you.
+   */
+  if (lookup.outcome === 'ambiguous') {
+    const locs = lookup.candidates.map((c) => c.propertyLoc).slice(0, 6);
+    return {
+      status: 'ambiguous',
+      detail: `${lookup.candidates.length} units at this address on ${lookup.municipality.town}'s roll `
+        + `and none matches "${lead.addressStreet ?? ''}" exactly: ${locs.join(' · ')}`,
     };
   }
 

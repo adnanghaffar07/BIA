@@ -31,6 +31,7 @@ import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import ContactPhoneIcon from '@mui/icons-material/ContactPhone';
 import PhoneIcon from '@mui/icons-material/PhoneInTalk';
 import DownloadIcon from '@mui/icons-material/Download';
+import VerifiedUserIcon from '@mui/icons-material/VerifiedUserOutlined';
 import Link from 'next/link';
 import { useStickyState } from '@/hooks/useStickyState';
 import { LEDGER_COLUMNS, type LedgerRow as SharedLedgerRow } from '@/components/ledgerColumns';
@@ -47,7 +48,7 @@ import { LEDGER_COLUMNS, type LedgerRow as SharedLedgerRow } from '@/components/
 type LedgerRow = SharedLedgerRow;
 
 
-type ReportType = 'recapture_log' | 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log';
+type ReportType = 'already_ours' | 'recapture_log' | 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log';
 
 
 const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: string }[] = [
@@ -72,6 +73,15 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
    * explanation rather than as a mistake.
    */
   { key: 'blast_skiptrace', label: 'Blast Skip Traces', icon: <BoltIcon />, blurb: 'Leads traced by a cohort blast rather than by hand, Grade A and Grade B alike — when it ran, who ran it, what each lead returned and what it cost. Grouped by run.' },
+  {
+    key: 'already_ours',
+    label: 'Already with our carriers',
+    icon: <VerifiedUserIcon />,
+    blurb: 'Accounts a producer found were already placed with Travelers or Plymouth Rock. '
+      + 'Frank, 1 Oct: "it literally shows the proof of our concept." Most are declined by '
+      + 'the carrier that already holds them and still eligible with the other, so the row '
+      + 'says which one can write it — these are rewrites, not dead ends.',
+  },
   { key: 'recapture_log', label: 'Recapture Log', icon: <HistoryIcon />, blurb: 'Every account that came back into play: when, which renewal week it belongs to, which process returned it, and whether its cohort had already been frozen. A held account is one that arrived after its send list was built, so it is NOT in this cycle — those are the rows that need a decision.' },
 ];
 
@@ -150,6 +160,7 @@ const REPORT_GROUPS: { label: string; keys: ReportType[] }[] = [
   { label: 'Data quality', keys: ['type_mismatch', 'skiptrace_mismatch', 'owner_verify', 'contact_coverage'] },
   { label: 'Producer work', keys: ['call_outcome'] },
   { label: 'Outreach', keys: ['emails_insured', 'emails_all', 'referral', 'blast_skiptrace', 'recapture_log', 'keyword'] },
+  { label: 'Opportunity', keys: ['already_ours'] },
 ];
 
 const gradeColor = (g: string | null) =>
@@ -192,13 +203,19 @@ type QcColumn = {
  * Named exactly as the sending tool must reference them — camelCase, no spaces, because a
  * header here becomes the variable name on import and the platform's own are {{firstName}}.
  *
- * bandLow and bandHigh are present but always EMPTY, and that is deliberate rather than an
- * oversight. The CRM does hold a low/high pair, but it is derived from a machine-generated
- * estimate and sits a median 3.2x above what the producer actually rated — on 531 of 540
- * rated accounts the producer's own figure falls below it. Shipping that would put a price
- * in front of a homeowner that nobody produced. The columns exist so the mapping can be set
- * up now and the values dropped in the moment Frank says where a real range comes from.
- * producerPremium sits beside them so the difference is visible rather than assumed.
+ * band_low and band_high were held deliberately EMPTY until 1 Oct 2026, and that is worth
+ * keeping on the record. The pair the CRM held then came from a machine-generated estimate
+ * sitting a median 3.2x above what the producer actually rated — on 531 of 540 rated
+ * accounts the producer's own figure fell below it — so shipping it would have put a price
+ * in front of a homeowner that nobody produced. The columns existed so the mapping could be
+ * set up, waiting on Frank to say where a real range comes from.
+ *
+ * He said. The band is now derived from the cheapest premium of a carrier that rated the
+ * home ELIGIBLE — the producer's own figure, the one producerPremium shows beside it — at
+ * 90% rounded down to $25 and 105% rounded up. So the number in these columns is the number
+ * in the email, and the reason for the blank is gone. Leaving them hardcoded to '' after
+ * that is what made a working formula look broken: the value was in campaignVars the whole
+ * time, and the table printed nothing over it.
  */
 const CAMPAIGN_VAR_COLUMNS: QcColumn[] = [
   'firstName', 'lastName', 'street_address', 'street_name', 'town',
@@ -206,13 +223,15 @@ const CAMPAIGN_VAR_COLUMNS: QcColumn[] = [
   'subject_1', 'subject_2', 'subject_3',
   'cta_1', 'cta_2', 'cta_3',
   'segment', 'cohort', 'subject_variant', 'cta_arm', 'version_label',
-].map((k) => ({
+].map((k): QcColumn => ({
   header: k,
   value: (r: QcRow) => String(r.campaignVars?.[k] ?? ''),
 })).concat([
-  { header: 'band_low', value: () => '' },
-  { header: 'band_high', value: () => '' },
-  { header: 'producer_premium', value: (r: QcRow) => String(r.campaignVars?.producer_premium ?? '') },
+  { header: 'band_low', value: (r: QcRow) => String(r.campaignVars?.band_low ?? ''), numeric: true },
+  { header: 'band_high', value: (r: QcRow) => String(r.campaignVars?.band_high ?? ''), numeric: true },
+  { header: 'producer_premium', value: (r: QcRow) => String(r.campaignVars?.producer_premium ?? ''), numeric: true },
+  /** Which carrier the band was built from — the cheapest that rated the home eligible. */
+  { header: 'band_carrier', value: (r: QcRow) => String(r.campaignVars?.band_carrier ?? '') },
 ]);
 
 function columnsFor(report: ReportType): QcColumn[] {

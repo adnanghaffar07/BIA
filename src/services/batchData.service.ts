@@ -1,6 +1,7 @@
 import type { Lead } from '@/types/lead';
 import { insuredPatchFromPersons } from './skipTrace.service';
 import { readVendorJson } from './vendorErrors';
+import { logTrace } from './skipTraceLog.service';
 
 /**
  * BatchData skip trace — the FALLBACK, used only where Tracerfy came back empty.
@@ -101,7 +102,12 @@ function toReapiPerson(p: any, nameOverride: { first: string; last: string } | n
  * string of false misses — the lesson from the Tracerfy blast that made ~290 pointless
  * calls after the account ran dry.
  */
-export async function runBatchData(lead: Lead | any): Promise<BatchDataResult> {
+export async function runBatchData(
+  lead: Lead | any,
+  /** Set by a blast so its traces can be summarised as one run (Frank, 1 Oct). */
+  opts: { runId?: string | null; by?: string | null } = {},
+): Promise<BatchDataResult> {
+  const startedAt = Date.now();
   const key = process.env.BATCHDATA_API_KEY;
   if (!key) throw new Error('BATCHDATA_API_KEY is not set');
 
@@ -130,7 +136,42 @@ export async function runBatchData(lead: Lead | any): Promise<BatchDataResult> {
   const person = json?.results?.persons?.[0];
   const matched = person?.meta?.matched === true && person?.meta?.error !== true;
 
+  /**
+   * ── The request carries no name, and that is the record ──────────────────
+   *
+   * Frank asked whether a vendor picks the owner from the address alone, because if so
+   * "our verified names never reach it". For BatchData the answer is yes, always: the body
+   * above is a propertyAddress and nothing else. Writing sentFirstName as null is not a gap
+   * in the log — it is that fact, stored per trace, so the question has an answer next time
+   * without anybody reading this file.
+   */
+  const logged = async (outcome: 'hit' | 'miss', extra: {
+    returnedName?: string | null; personCount?: number; phoneCount?: number; emailCount?: number;
+  }) => logTrace({
+    leadId: String(lead?.id ?? ''),
+    propertyId: lead?.propertyId ? String(lead.propertyId) : null,
+    provider: 'batchdata',
+    tier: 'skip-trace',
+    runId: opts.runId ?? null,
+    sentFirstName: null,
+    sentLastName: null,
+    sentAddress: String(street),
+    sentCity: String(city),
+    sentState: 'NJ',
+    sentZip: String(zip),
+    requests: 1,
+    outcome,
+    credits: Number(json?.results?.meta?.credits ?? json?.credits ?? 0) || null,
+    durationMs: Date.now() - startedAt,
+    createdBy: opts.by ?? null,
+    ...extra,
+  });
+
   if (!matched) {
+    await logged('miss', {
+      returnedName: person?.property?.owner?.name?.full ?? null,
+      personCount: 0, phoneCount: 0, emailCount: 0,
+    });
     return {
       phones: [], emails: [], matched: false, raw: json, insuredPatch: {}, personCount: 0,
       ownerName: person?.property?.owner?.name?.full ?? null,
@@ -151,6 +192,13 @@ export async function runBatchData(lead: Lead | any): Promise<BatchDataResult> {
 
   const emails: string[] = persons[0].emails.map((e: any) => e.email).filter(Boolean);
   const phones: string[] = persons[0].phones.map((p: any) => p.phone).filter(Boolean);
+
+  await logged('hit', {
+    returnedName: person?.property?.owner?.name?.full ?? null,
+    personCount: persons.length,
+    phoneCount: phones.length,
+    emailCount: emails.length,
+  });
 
   return {
     phones,

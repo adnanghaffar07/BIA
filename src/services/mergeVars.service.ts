@@ -1,6 +1,6 @@
 import { sql } from '@/lib/neon';
 import { subjectFor, stepsFor, versionLabel, CTA_BY_STEP, GRADE_B_CTA, SEGMENT_LABEL, type Segment } from './campaignSegment.service';
-import { cohortCode } from './cohort';
+import { cohortCode, cohortNumber } from './cohort';
 
 /**
  * The merge variables one person receives, built in ONE place.
@@ -86,13 +86,78 @@ const pad = (n: number) => String(n).padStart(2, '0');
  * ("$ {{ band_low }}"), so formatting here would read "$$925". Rounded because a renewal
  * estimate quoted to the penny claims a precision a band does not have.
  */
+/**
+ * Eligibility is part of the price, not a label beside it.
+ *
+ * Frank, 1 Oct 2026: "the lowest premium from a carrier that rated the home eligible".
+ * A cheaper number from a carrier that declined the risk is not a price we can stand
+ * behind — quoting it would mean opening with a figure no carrier will honour.
+ *
+ * Only the exact string "eligible" counts. The column also holds "review" and
+ * "ineligible", and a truthiness test would have treated both as a yes: on 196069171
+ * Travelers is "review" at $860 against an eligible Plymouth at $1,075, so a loose test
+ * publishes a band $215 under anything obtainable.
+ */
+const RATED_ELIGIBLE = (v: unknown) => String(v ?? '').trim().toLowerCase() === 'eligible';
+
+export function bandBaseline(
+  lead: Record<string, any>,
+): { premium: number; carrier: 'travelers' | 'plymouth' } | null {
+  const options: Array<{ premium: number; carrier: 'travelers' | 'plymouth' }> = [];
+  const t = Number(lead?.travelersPremium);
+  if (Number.isFinite(t) && t > 0 && RATED_ELIGIBLE(lead?.travelersEligible)) {
+    options.push({ premium: t, carrier: 'travelers' });
+  }
+  const p = Number(lead?.plymouthPremium);
+  if (Number.isFinite(p) && p > 0 && RATED_ELIGIBLE(lead?.plymouthEligible)) {
+    options.push({ premium: p, carrier: 'plymouth' });
+  }
+  if (!options.length) return null;
+  options.sort((a, b) => a.premium - b.premium);
+  return options[0];
+}
+
+/**
+ * The band a homeowner actually reads.
+ *
+ * ── Why it is derived and not stored ────────────────────────────────────────
+ * On 30 Sep exactly 4 leads in the whole database carried a band while 1,836 Grade A
+ * leads did not, and every priced email was going out with a hole where the number
+ * belonged. The carrier premiums were there the whole time. A stored band would have
+ * meant a backfill today and another one every week as cards are rated, with the email
+ * silently wrong in the gap between rating and backfill. Derived, a card is priced the
+ * moment a carrier rates it.
+ *
+ * ── Rounding ────────────────────────────────────────────────────────────────
+ * Frank, 1 Oct 2026: low is 90% of the baseline "rounded down to $25", high is 105%.
+ * He specified rounding only on the low side. The high is rounded OUTWARD to the same
+ * $25 step, because the two errors are not equal: a band that is $20 too wide costs
+ * nothing, and a band the real quote lands just above makes the opening number look
+ * like a bait. Flagged to him rather than left as a silent reading of his rule.
+ */
+const DOWN_TO_25 = (n: number) => Math.floor(n / 25) * 25;
+const UP_TO_25 = (n: number) => Math.ceil(n / 25) * 25;
+
 function bandVars(lead: Record<string, any>): Record<string, string> {
-  const low = Number(lead?.indicativeBandLow);
-  const high = Number(lead?.indicativeBandHigh);
-  if (!Number.isFinite(low) || !Number.isFinite(high) || low <= 0 || high <= 0) return {};
-  // A band whose high is below its low is a typo, not a range, and it would read as one.
-  if (high < low) return {};
-  return { band_low: String(Math.round(low)), band_high: String(Math.round(high)) };
+  /**
+   * A band set by hand outranks the formula. It is how an underwriter overrides a
+   * machine, and a derivation that quietly wins over a person's correction is a
+   * derivation nobody can steer.
+   */
+  const setLow = Number(lead?.indicativeBandLow);
+  const setHigh = Number(lead?.indicativeBandHigh);
+  if (Number.isFinite(setLow) && Number.isFinite(setHigh) && setLow > 0 && setHigh > 0
+      && setHigh >= setLow) {
+    return { band_low: String(Math.round(setLow)), band_high: String(Math.round(setHigh)) };
+  }
+
+  const base = bandBaseline(lead);
+  if (!base) return {};
+  const low = DOWN_TO_25(base.premium * 0.90);
+  const high = UP_TO_25(base.premium * 1.05);
+  // A zero floor or an inverted range is not a price range, and it would read as one.
+  if (low <= 0 || high < low) return {};
+  return { band_low: String(low), band_high: String(high) };
 }
 
 export function mergeVarsFor(
@@ -109,6 +174,16 @@ export function mergeVarsFor(
    * second lock on a door that should already be shut.
    */
   globals: Record<string, string> = {},
+  /**
+   * The three asks as edited on the CTA screen, keyed by step. Omitted by a caller with no
+   * database to read, which then gets the wording compiled into CTA_BY_STEP.
+   */
+  ctas: Record<number, string> = {},
+  /**
+   * The subject lines as edited on the Subjects screen, keyed
+   * segment|step|variant|cohortCode. Omitted by a caller with no database to read.
+   */
+  subjects: Record<string, string> = {},
 ): MergeVars {
   /**
    * ── The renewal date must not go near new Date() ─────────────────────────
@@ -168,9 +243,28 @@ export function mergeVarsFor(
     .replace(/\{\{\s*town\s*\}\}/g, town)
     .replace(/\{\{\s*agency_website\s*\}\}/g, agencyWebsite.replace(/\/+$/, ''));
 
-  const subjectAt = (step: number) => (steps.includes(step)
-    ? fill(subjectFor({ segment, cohort: cohortDate, step, variant }).template)
-    : '');
+  /**
+   * ── The subject comes from the Subjects screen, not from this file ───────
+   *
+   * Same move as the CTAs, and the same fallback: a caller with no database to read gets
+   * the compiled wording. A subject is the one field an email cannot send without — a blank
+   * one is both an unopened email and a spam signal — so an empty stored value falls through
+   * to subjectFor() rather than being sent as nothing.
+   */
+  const subjectAt = (step: number) => {
+    if (!steps.includes(step)) return '';
+    /**
+     * Keyed by cohort as well, because that is one of the axes the copy varies on: §1.2
+     * has C1–C5 leading with the number and C6/C7 introducing first. A key without it would
+     * serve one cohort's line to all seven — and it would look right, because every line in
+     * the table is a real line somebody wrote.
+     */
+    const code = `C${cohortNumber(cohortDate)}`;
+    const stored = subjects[`${segment}|${step}|${variant}|${code}`]
+      // Grade B's pair carries no cohort: one question, every week.
+      ?? subjects[`${segment}|${step}|${variant}|*`];
+    return fill(stored || subjectFor({ segment, cohort: cohortDate, step, variant }).template);
+  };
 
   /**
    * ── The CTA goes through `fill` too, and that is the whole point ──────────
@@ -190,9 +284,25 @@ export function mergeVarsFor(
    * broken promise that sends perfectly. Same reasoning as band_low, and `missingLink`
    * below exists so the gap is counted out loud instead of discovered in an inbox.
    */
+  /**
+   * ── The wording comes from the CTA screen, not from this file ────────────
+   *
+   * Abdullah, 1 Oct 2026: the three asks are edited in the CRM under Campaigns, one value
+   * each, so every lead picks up the same wording and Zoya can change a sentence without a
+   * deploy. `ctas` carries those values; CTA_BY_STEP remains as the floor for a caller that
+   * has no database to read — and for Grade B, whose single ask (§3, "R4 · Single arm, wave
+   * two") is a different offer rather than a variant of these three.
+   *
+   * Note what this ends: with one wording per step there is no longer an arm 1 and an arm 2
+   * to deal people between, so the CTA half of the §3 A/B test stops. The subject-line
+   * variant is untouched, and `arm` is still carried on the lead and still reported, so a
+   * past result stays readable.
+   */
   const ctaAt = (step: number) => {
     if (!steps.includes(step)) return '';
-    const wording = segment === 'grade_b' ? GRADE_B_CTA.wording : CTA_BY_STEP[step][arm].wording;
+    const wording = segment === 'grade_b'
+      ? GRADE_B_CTA.wording
+      : (ctas[step] ?? CTA_BY_STEP[step][arm].wording);
     if (!meetingLink && /\{\{\s*agency_website\s*\}\}/.test(wording)) return '';
     return fill(wording);
   };
@@ -293,7 +403,9 @@ export function mergeVarsFor(
      * Carried so the export can show it beside the empty band columns, where the gap
      * between what a producer rated and what the CRM would have published is visible.
      */
-    producer_premium: lead.travelersPremium ?? lead.plymouthPremium ?? null,
+    producer_premium: bandBaseline(lead)?.premium ?? null,
+    /** Which carrier the band was built from, for the card and the export. */
+    band_carrier: bandBaseline(lead)?.carrier ?? null,
     crm_property_id: lead.propertyId ?? null,
     crm_lead_id: lead.id ?? null,
   };

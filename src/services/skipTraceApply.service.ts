@@ -3,6 +3,7 @@ import { runBatchData } from './batchData.service';
 import { runTracerfy } from '@/services/tracerfy.service';
 import { insuredEmails, coInsuredEmails, coInsuredPhones } from './recipients.service';
 import { ownerEntityOf, entityTraceRefusal } from '@/lib/ownerEntity';
+import { compareOwnerNames } from './ownerNameMatch.service';
 
 /**
  * One place where a deep skip trace is decided and written.
@@ -241,8 +242,19 @@ export async function traceAndApply(
    * nothing, leaving all three columns NULL.
    */
   blast?: { runId: string },
+  /** Frank's re-trace rule, off by default — see nameRejected below. */
+  opts?: { rejectNameMismatch?: boolean },
 ): Promise<SkipTraceOutcome> {
-  const tracerfy = await runTracerfy(lead as any);
+  /**
+   * The run id reaches the vendor call, not just the lead columns.
+   *
+   * It was already stamped on the lead so a blast-traced card could be told from a
+   * hand-traced one. Without it on the trace log too, every blast's traces record a null
+   * run — and "which run was this, and did it do anything" is the question the log exists
+   * to answer (Frank, 1 Oct: "a run that fails is caught the same day").
+   */
+  const traceOpts = { runId: blast?.runId ?? null, by: createdBy };
+  const tracerfy = await runTracerfy(lead as any, traceOpts);
   const now = new Date();
 
   /**
@@ -270,7 +282,7 @@ export async function traceAndApply(
   const tracerfyUsable = tracerfy.matched && tracerfy.emails.length > 0;
   if (!tracerfyUsable && process.env.BATCHDATA_API_KEY) {
     try {
-      const bd = await runBatchData(lead);
+      const bd = await runBatchData(lead, traceOpts);
       if (bd.matched && (bd.emails.length > 0 || bd.phones.length > 0)) {
         provider = 'batchdata';
         result = {
@@ -306,10 +318,40 @@ export async function traceAndApply(
   const recoveredPhone = Boolean(result.phones[0] && !lead.phone1);
   const recoveredEmail = Boolean(result.emails[0] && insuredEmails(lead).length === 0);
 
-  const update = buildTraceUpdate(
-    lead, result, now,
-    blast ? { runId: blast.runId, createdBy } : undefined,
-  );
+  /**
+   * ── Reject a result that belongs to somebody else ────────────────────────
+   *
+   * Frank, 1 Oct 2026, on re-tracing against WIIP-verified names: "Reject any result whose
+   * name doesn't match."
+   *
+   * result.ownerName is non-null only when the insured we hold matched NONE of the people
+   * the vendor returned — a spouse or co-owner on the deed still counts as a match and
+   * leaves it null. So a non-null name here is the vendor saying "this address belongs to
+   * someone other than your insured", and writing its phones and emails onto the card
+   * attaches a stranger's contacts to the household. The name itself is still recorded for
+   * review, and the trace is still logged and still billed; only the contacts are withheld.
+   *
+   * Opt-in, because the card button's behaviour is deliberate and unchanged: a producer
+   * looking at one lead can see both names side by side and decide. A blast has nobody
+   * looking, which is the difference.
+   */
+  const nameRejected = !!(opts?.rejectNameMismatch && result.ownerName
+    && compareOwnerNames(
+      { first: lead.owner1FirstName, last: lead.owner1LastName },
+      String(result.ownerName),
+    ).result === 'mismatch');
+
+  const update = nameRejected
+    ? {
+      // What the trace told us about WHO, without a word about how to reach them.
+      skipTraceOwnerName: result.ownerName ?? null,
+      deepSkipTracedAt: now,
+      ...(blast ? { blastSkipTracedAt: now, blastSkipTracedBy: createdBy, blastRunId: blast.runId } : {}),
+    } as Record<string, any>
+    : buildTraceUpdate(
+      lead, result, now,
+      blast ? { runId: blast.runId, createdBy } : undefined,
+    );
 
   /**
    * ── Record what the trace gained, not just report it ─────────────────────

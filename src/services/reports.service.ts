@@ -10,6 +10,10 @@ import {
 } from './contactability.service';
 import { cohortLabel } from './cohort';
 import { classifyGradeChange } from './gradeChangeReason';
+import { agencyWebsite } from './mergeVars.service';
+import { globalMergeVars } from './globalMergeVars.service';
+import { ctaWordings } from './campaignCta.service';
+import { subjectTemplates } from './campaignSubject.service';
 
 /**
  * QC / data-validation reports (Frank Jul-2026). The CRM captures producer notes,
@@ -17,7 +21,7 @@ import { classifyGradeChange } from './gradeChangeReason';
  * let Frank/Ruben pull that data back out to spot trends without cross-referencing
  * the Travelers portal by hand.
  */
-export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log';
+export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log' | 'already_ours';
 
 export interface QcRow {
   propertyId: string;
@@ -327,6 +331,66 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
       });
   }
 
+  /**
+   * Accounts already placed with one of our own two carriers.
+   *
+   * Frank, 1 Oct 2026: "specifically 'currently insured with us' I want all of these
+   * accounts flagged — it literally shows the proof of our concept, an account we intended
+   * to outreach is already placed with our two carriers."
+   *
+   * ── Why it reads the free text and not the reason code ───────────────────
+   * There is no reason code for this. The dropdown offers prior_loss, underwriting_capacity,
+   * fema_flood_adjacent and investor_non_owner_occupied; a producer meeting one of these
+   * accounts picks "other" and types what happened. So the fact lives in the detail field,
+   * in whatever words were to hand, and the phrasings in the book are:
+   *
+   *     Currently with Plymouth        x26      Currently insured with PM       x3
+   *     Currently w. Plymouth           x3      Currently insured with Plymouth x2
+   *     Already with Plymouth           x1      ... and five more one-offs
+   *
+   * Searching for "currently insured" — the phrase Frank used — finds nine of the
+   * forty-two. The dominant wording does not contain the word "insured" at all. Hence the
+   * pattern below, which keys on the carrier name next to a word meaning "already".
+   *
+   * ── Why they are not a dead end ──────────────────────────────────────────
+   * Almost every one is Travelers eligible and Plymouth ineligible-or-review: Plymouth
+   * declines them BECAUSE the risk is already theirs. So these are not accounts to drop —
+   * they are rewrites our other carrier can take, which is exactly the proof Frank means.
+   */
+  if (type === 'already_ours') {
+    rows = await sql`
+      SELECT * FROM "Lead"
+       WHERE "travelersEligibilityDetail" ~* '(current|already|existing|in ?force)'
+          OR "plymouthEligibilityDetail"  ~* '(current|already|existing|in ?force)'` as any[];
+    const OURS = /(plymouth|\bpm\b|travelers)/i;
+    const ALREADY = /(current|already|existing|in ?force)/i;
+    return rows
+      .filter((r: any) => {
+        const txt = [r.travelersEligibilityDetail, r.plymouthEligibilityDetail].filter(Boolean).join(' | ');
+        return ALREADY.test(txt) && OURS.test(txt);
+      })
+      .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
+      .map((r: any) => {
+        const notes = [
+          r.travelersEligibilityDetail ? `Travelers — ${r.travelersEligibilityDetail}` : null,
+          r.plymouthEligibilityDetail ? `Plymouth — ${r.plymouthEligibilityDetail}` : null,
+        ].filter(Boolean).join('  |  ');
+        /**
+         * Which carrier could still write it, said plainly. The whole point of the report is
+         * the opportunity, and leaving the reader to infer it from two eligibility columns
+         * is how a list of forty-two becomes a list nobody works.
+         */
+        const open = r.travelersEligible === 'eligible' && r.plymouthEligible !== 'eligible'
+          ? 'Travelers can still write this'
+          : r.plymouthEligible === 'eligible' && r.travelersEligible !== 'eligible'
+            ? 'Plymouth can still write this'
+            : r.travelersEligible === 'eligible' && r.plymouthEligible === 'eligible'
+              ? 'Both carriers eligible'
+              : 'Neither carrier eligible';
+        return rowOf(r, notes, null, null, open);
+      });
+  }
+
   if (type === 'grade_overrides') {
     // BOTH sources: a producer's override and the rules re-grading on re-enrichment.
     //
@@ -578,6 +642,7 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
              l."boundPremium", l."boundCarrier", l."boundBy",
              l."lostAt", l."lostReason",
              l."indicativeBandLow", l."indicativeBandHigh",
+             l."travelersPremium", l."plymouthPremium",
              COALESCE(a.tries, 0)  AS call_tries,
              a.days                AS call_days,
              a.last_at             AS call_last_at,
@@ -607,6 +672,10 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
           OR l."lostReason" IS NOT NULL
           OR l."status" = 'lost'
           OR l."indicativeBandLow" IS NOT NULL
+          -- A card a carrier has priced belongs in a report about rating, whatever
+          -- its grade. Without this the fixed test above never sees it.
+          OR l."travelersPremium" IS NOT NULL
+          OR l."plymouthPremium" IS NOT NULL
        ORDER BY l."effectiveDate"`;
 
     return rows
@@ -650,10 +719,20 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
         const quoteStage = r.boundPremium != null || r.status === 'bound' ? 'sold'
           : (r.lostAt != null || r.lostReason != null) ? 'lost'
             : r.quotedPremium != null ? 'quoted'
-              // BOTH ends, matching quoteState. Two leads carry a low with no high —
-              // a half-written band is not a price anybody was given, and counting them
-              // as rated made this report disagree with the card it describes.
-              : (r.indicativeBandLow != null && r.indicativeBandHigh != null) ? 'rated'
+              /*
+               * Rated means a carrier priced it. Nothing else.
+               *
+               * This tested indicativeBandLow AND indicativeBandHigh, which are stored
+               * columns almost nothing fills: on 1 Oct the QC report called 0 of 655
+               * C4-C7 Grade A cards rated while 417 of them carried a carrier premium.
+               * The band is derived from the premium now, so testing the band here asked
+               * whether somebody had typed one in by hand.
+               *
+               * Frank, 1 Oct 2026: "Rated means a carrier premium exists. Nothing else."
+               * The export on line ~870 of this same file already read it that way, so
+               * two reports over one table disagreed about how many leads were rated.
+               */
+              : (r.travelersPremium != null || r.plymouthPremium != null) ? 'rated'
                 : 'not_rated';
 
         const bits = [
@@ -832,6 +911,23 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     assertRecipientCols(rows[0], `${type} report`);
 
     const insuredOnly = type === 'emails_insured';
+    /**
+     * ── The export has to be fed what the push is fed ────────────────────────
+     *
+     * The comment below has long claimed this is "built by the SAME function the push
+     * uses", and it is — but it was being called with none of the function's inputs: no
+     * agency website, no shared variables, no CTA wordings. Same function, different
+     * arguments, different answer.
+     *
+     * It showed the moment the CTAs became editable. The asks were changed on the CTA
+     * screen and this export went on printing the old compiled wording, complete with the
+     * arm 1 / arm 2 split that no longer exists — so the file Zoya works from disagreed
+     * with what the campaign would actually send, which is the one thing an export of the
+     * send list must never do.
+     */
+    const [site, globals, ctas, subjects] = await Promise.all([
+      agencyWebsite(), globalMergeVars(), ctaWordings(), subjectTemplates(),
+    ]);
     return rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       /**
@@ -892,7 +988,7 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
            * carrying the insured{{firstName}} against a co-insured address would greet the
            * wrong person by name.
            */
-          campaignVars: mergeVarsFor(r, insured.length ? 'insured' : 'coInsured'),
+          campaignVars: mergeVarsFor(r, insured.length ? 'insured' : 'coInsured', site, globals, ctas, subjects),
         };
       });
   }
