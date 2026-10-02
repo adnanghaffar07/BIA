@@ -41,9 +41,25 @@ export async function GET(request: NextRequest) {
         name: c.name,
         status: c.status,
         statusLabel: CAMPAIGN_STATUS[c.status] ?? `Status ${c.status}`,
+        // When the campaign was made, not when it was switched on. The gap between the two
+        // is what made the sequence fire both steps at once on 2 Oct, so it is worth seeing.
+        createdAt: c.timestamp_created ?? null,
         leads: Math.max(counted, a?.leads_count ?? 0),
         leadsTruncated: leadCounts.truncated,
         contacted: a?.contacted_count ?? 0,
+        /**
+         * How far through the sequence the campaign is, matching the platform's own bar.
+         *
+         * completed_count is people who have reached the END of the sequence, not emails
+         * sent — which is why it is the right number and `sent` is not. A two-step campaign
+         * sends twice per person, so "sent" passes the lead count halfway through and reads
+         * as over 100% done. On 2 Oct one campaign showed 53 leads against 93 sent, which is
+         * the question this column exists to answer.
+         *
+         * Verified against the platform's own display: 40 completed of 53 leads shows there
+         * as 75%, and completed/leads gives exactly that.
+         */
+        completed: a?.completed_count ?? 0,
         sent,
         opens: a?.open_count ?? 0,
         replies: a?.reply_count ?? 0,

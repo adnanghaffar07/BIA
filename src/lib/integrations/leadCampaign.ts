@@ -185,9 +185,20 @@ export type LeadInput = {
  * Light picker list — id/name/status only.
  * Doubles as the connection check, so keep it cheap: no analytics fetch here.
  */
-export async function listCampaigns(): Promise<Array<Pick<Campaign, 'id' | 'name' | 'status'>>> {
+/**
+ * timestamp_created is carried through because the list response already contains it.
+ *
+ * Fetching it any other way means getCampaign() per campaign — nine extra round trips for a
+ * date the first call already returned. Every caller that only wants id/name/status is
+ * unaffected; it is one more field on an object they already have.
+ */
+export async function listCampaigns(): Promise<
+  Array<Pick<Campaign, 'id' | 'name' | 'status' | 'timestamp_created'>>
+> {
   const items = await paginate<Campaign>('/campaigns');
-  return items.map((c) => ({ id: c.id, name: c.name, status: c.status }));
+  return items.map((c) => ({
+    id: c.id, name: c.name, status: c.status, timestamp_created: c.timestamp_created,
+  }));
 }
 
 export async function getCampaign(id: string): Promise<Campaign> {

@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Container, Box, Typography, Paper, Tabs, Tab, Table, TableHead, TableRow, TableCell,
-  TableBody, Chip, CircularProgress, Alert, Stack, Button,
+  TableBody, Chip, CircularProgress, Alert, Stack, Button, LinearProgress,
 } from '@mui/material';
 import CampaignIcon from '@mui/icons-material/Campaign';
 import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
@@ -30,7 +30,8 @@ type TabKey = 'campaigns' | 'mailboxes';
 
 type CampaignRow = {
   id: string; name: string; status: number; statusLabel: string;
-  leads: number; leadsTruncated?: boolean; contacted: number; sent: number; opens: number; replies: number;
+  createdAt?: string | null;
+  leads: number; leadsTruncated?: boolean; contacted: number; completed: number; sent: number; opens: number; replies: number;
   clicks: number; bounced: number; unsubscribed: number;
   openRate: number | null; replyRate: number | null; bounceRate: number | null;
 };
@@ -128,7 +129,7 @@ export default function LeadCampaignsPage() {
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow>
-                {['Campaign', 'Status', 'Leads', 'Sent', 'Opens', 'Replies', 'Clicks', 'Bounced', 'Unsub'].map((h) => (
+                {['Campaign', 'Status', 'Created', 'Progress', 'Leads', 'Sent', 'Opens', 'Replies', 'Clicks', 'Bounced', 'Unsub'].map((h) => (
                   <TableCell key={h} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</TableCell>
                 ))}
               </TableRow>
@@ -146,6 +147,36 @@ export default function LeadCampaignsPage() {
                     </TableCell>
                     <TableCell>
                       <Chip label={c.statusLabel} size="small" sx={{ height: 20, fontSize: 11, bgcolor: sc.bg, color: sc.fg, fontWeight: 600 }} />
+                    </TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap', color: '#5c6b78', fontSize: 13 }}>
+                      {c.createdAt
+                        ? new Date(c.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                        : '—'}
+                    </TableCell>
+                    {/*
+                      How far through the sequence, the same measure the platform shows.
+
+                      Counted on people who have finished it, not on emails sent. A two-step
+                      campaign sends twice per person, so Sent passes the lead count halfway
+                      through — 53 leads against 93 sent on 2 Oct — and reads as more than
+                      done. Progress answers the question that number raises.
+                    */}
+                    <TableCell sx={{ minWidth: 118 }}>
+                      {c.leads > 0 ? (
+                        <Box>
+                          <Box sx={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>
+                            {Math.round((c.completed / c.leads) * 100)}%
+                          </Box>
+                          <LinearProgress
+                            variant="determinate"
+                            value={Math.min(100, Math.round((c.completed / c.leads) * 100))}
+                            sx={{ height: 6, borderRadius: 3, mt: 0.25 }}
+                          />
+                          <Box sx={{ fontSize: 10, color: '#8a94a6', mt: 0.25 }}>
+                            {c.completed.toLocaleString()} of {c.leads.toLocaleString()} finished
+                          </Box>
+                        </Box>
+                      ) : <Box sx={{ color: '#8a94a6' }}>—</Box>}
                     </TableCell>
                     <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>
                       {c.leads.toLocaleString()}{c.leadsTruncated && c.leads > 0 ? '+' : ''}
@@ -167,7 +198,7 @@ export default function LeadCampaignsPage() {
               })}
               {!loading && campaigns.length === 0 && !error && (
                 <TableRow>
-                  <TableCell colSpan={9} sx={{ textAlign: 'center', py: 4, color: '#888' }}>
+                  <TableCell colSpan={11} sx={{ textAlign: 'center', py: 4, color: '#888' }}>
                     No campaigns on the platform yet.
                   </TableCell>
                 </TableRow>
