@@ -887,6 +887,27 @@ export default function LeadDetailPage() {
     ? (parseRollOwners(String(lead.ownerVerifyName)).person2?.display ?? null)
     : null;
 
+  /**
+   * What the tax roll says about the CO-insured, when it disagrees with the card.
+   *
+   * Read from coInsuredVerifyStatus rather than re-derived here: the QC report and the card
+   * must not be able to reach different conclusions about the same two names, which is what
+   * two parsers of the same string eventually do.
+   *
+   * 'match' and the no-second-owner cases deliberately render nothing. A line that appears
+   * on every card saying the two agree is a line nobody reads by the third card, and it
+   * would hide the 131 that do not.
+   */
+  const coInsuredVerify = (() => {
+    const st = lead.coInsuredVerifyStatus as string | null;
+    if (!st || !lead.coInsuredVerifyName) return null;
+    const cfg: Record<string, { label: string; color: string }> = {
+      mismatch: { label: 'Tax roll says', color: '#b3261e' },
+      partial: { label: 'Tax roll says', color: '#8a5a00' },
+    };
+    return cfg[st] ?? null;
+  })();
+
   // Owner-name verification badge (Frank Jul-2026). Shows the outcome of checking the
   // insured name against the municipal tax roll. Deliberately graded, not a plain tick:
   // a surname-only match usually means the roll lists a spouse or co-owner, which is
@@ -1104,7 +1125,32 @@ export default function LeadDetailPage() {
               {lead.reapiDob && (
                 <Row label="REAPI DOB" value={dobDisplay(lead.reapiDob)} />
               )}
-              {coInsuredName && <Row label="Co-Insured" value={coInsuredName} />}
+              {coInsuredName && (
+                <Row
+                  label="Co-Insured"
+                  value={
+                    <Box component="span">
+                      {coInsuredName}
+                      {/*
+                        ── The roll's version, on the card rather than on hover ──
+                        Frank, item 8: "Co-insured from WIIP shows on the card, not just on
+                        hover." The row above only ever appeared when the card named NOBODY,
+                        so a card holding the WRONG second person looked identical to one
+                        holding the right one — Harish Chandra's card showed Saranya
+                        Radhakrishnan with nothing to say the roll reads differently.
+
+                        Only shown when they actually differ. Repeating the same name twice
+                        on every agreeing card would train people to stop reading it.
+                      */}
+                      {coInsuredVerify && (
+                        <Box component="span" sx={{ display: 'block', fontSize: 11, mt: 0.25, color: coInsuredVerify.color }}>
+                          {coInsuredVerify.label}: <strong>{lead.coInsuredVerifyName}</strong>
+                        </Box>
+                      )}
+                    </Box>
+                  }
+                />
+              )}
               {rollSecondInsured && (
                 <Row
                   label="Co-Insured"

@@ -92,7 +92,7 @@ const orderIsAmbiguous = (rollName: string) => !String(rollName ?? '').includes(
  * A single bare token ("& MARISOL") still inherits, which is the common shape and the one
  * the inheritance rule was written for.
  */
-function secondParty(
+export function secondParty(
   rollName: string,
   fallback: { first: string; last: string },
 ): { first: string; last: string; certain: boolean } {

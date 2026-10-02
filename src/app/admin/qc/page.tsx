@@ -48,7 +48,7 @@ import { LEDGER_COLUMNS, type LedgerRow as SharedLedgerRow } from '@/components/
 type LedgerRow = SharedLedgerRow;
 
 
-type ReportType = 'already_ours' | 'recapture_log' | 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log';
+type ReportType = 'co_insured_verify' | 'already_ours' | 'recapture_log' | 'cohort_ledger' | 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log';
 
 
 const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: string }[] = [
@@ -81,6 +81,15 @@ const REPORTS: { key: ReportType; label: string; icon: React.ReactNode; blurb: s
       + 'Frank, 1 Oct: "it literally shows the proof of our concept." Most are declined by '
       + 'the carrier that already holds them and still eligible with the other, so the row '
       + 'says which one can write it — these are rewrites, not dead ends.',
+  },
+  {
+    key: 'co_insured_verify',
+    label: 'Co-insured vs WIIP',
+    icon: <PersonSearchIcon />,
+    blurb: 'The co-insured on the card against the name the municipal roll holds — the same '
+      + 'check the insured already gets. WIIP returns the whole deed line, so both people '
+      + 'come from one record. Only rows needing a decision are listed: a different person, '
+      + 'a second owner the card never named, or a near-miss worth a glance.',
   },
   { key: 'recapture_log', label: 'Recapture Log', icon: <HistoryIcon />, blurb: 'Every account that came back into play: when, which renewal week it belongs to, which process returned it, and whether its cohort had already been frozen. A held account is one that arrived after its send list was built, so it is NOT in this cycle — those are the rows that need a decision.' },
 ];
@@ -157,7 +166,7 @@ type PipelineRow = {
 const REPORT_GROUPS: { label: string; keys: ReportType[] }[] = [
   { label: 'Cohort performance', keys: ['cohort', 'reachability'] },
   { label: 'Grading', keys: ['grade_overrides', 'roof_b'] },
-  { label: 'Data quality', keys: ['type_mismatch', 'skiptrace_mismatch', 'owner_verify', 'contact_coverage'] },
+  { label: 'Data quality', keys: ['type_mismatch', 'skiptrace_mismatch', 'owner_verify', 'co_insured_verify', 'contact_coverage'] },
   { label: 'Producer work', keys: ['call_outcome'] },
   { label: 'Outreach', keys: ['emails_insured', 'emails_all', 'referral', 'blast_skiptrace', 'recapture_log', 'keyword'] },
   { label: 'Opportunity', keys: ['already_ours'] },
@@ -266,6 +275,7 @@ function listColumns(
 }
 
 function columnsFor(report: ReportType, rows: QcRow[] = []): QcColumn[] {
+
   const base: QcColumn[] = [
     /**
      * The key every export was missing.
@@ -509,6 +519,32 @@ function columnsFor(report: ReportType, rows: QcRow[] = []): QcColumn[] {
     if (!c) throw new Error(`columnsFor(${report}): no column headed "${h}" — it was renamed or removed`);
     return c;
   };
+
+  /**
+   * Card against roll, in adjacent columns.
+   *
+   * The comparison IS the report — a reader has to see "Kristi Schiavone" next to "Kristi
+   * Graham" to judge it, so neither name belongs inside a Detail sentence.
+   *
+   * Built with take() rather than fresh definitions. The first version wrote its own
+   * Lead ID and Owner columns and they rendered as plain text: the shared ones carry a
+   * `cell` that links to the card, and redefining them silently dropped it. Reusing them
+   * means this report cannot lose a behaviour the others have.
+   */
+  if (report === 'co_insured_verify') {
+    return [
+      take('Lead ID'),
+      take('Owner'),
+      take('Address'),
+      take('City / ZIP'),
+      take('Grade'),
+      { header: 'Co-insured on the card', value: (r: QcRow) => r.coInsuredName ?? '' },
+      { header: 'Co-insured per WIIP', value: (r: QcRow) => r.rollCoInsured ?? '' },
+      { header: 'Verdict', value: (r: QcRow) => r.reason ?? '' },
+      { header: 'Detail', value: (r: QcRow) => r.context ?? '' },
+      { header: 'Checked', value: (r: QcRow) => (r.at ?? '').slice(0, 10) },
+    ];
+  }
 
   /**
    * Grade Changes: the date and the category belong at the FRONT.

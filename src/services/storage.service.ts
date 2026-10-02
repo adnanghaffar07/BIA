@@ -61,6 +61,10 @@ const LEAD_COLS = [
   'indicativeBandLow', 'indicativeBandHigh',
   // Owner-name verification against the municipal tax roll
   'ownerVerifyStatus', 'ownerVerifyName', 'ownerVerifySource', 'ownerVerifyAt', 'ownerVerifyDetail',
+  // The roll returns the whole deed line, so the co-insured is verified from the SAME
+  // record as the insured. Omitted here it would read as undefined and the status would be
+  // silently absent everywhere the card is loaded — the trap this list has sprung before.
+  'coInsuredVerifyStatus', 'coInsuredVerifyName', 'coInsuredVerifyDetail', 'coInsuredVerifyAt',
   'lowPremium', 'expectedPremium', 'highPremium', 'pricingConfidence', 'status',
   'producerEmail', 'posQuoteNumber', 'posCarrier', 'boundPremium', 'boundDate',
   'authorizationDate', 'coastDistanceMiles', 'coastExposure',
@@ -185,6 +189,10 @@ const CRM_ONLY_FIELDS = new Set([
   'indicativeBandLow', 'indicativeBandHigh',
   // Owner-name verification against the municipal tax roll
   'ownerVerifyStatus', 'ownerVerifyName', 'ownerVerifySource', 'ownerVerifyAt', 'ownerVerifyDetail',
+  // The roll returns the whole deed line, so the co-insured is verified from the SAME
+  // record as the insured. Omitted here it would read as undefined and the status would be
+  // silently absent everywhere the card is loaded — the trap this list has sprung before.
+  'coInsuredVerifyStatus', 'coInsuredVerifyName', 'coInsuredVerifyDetail', 'coInsuredVerifyAt',
   'lowPremium', 'expectedPremium', 'highPremium', 'pricingConfidence',
   'producerEmail', 'posQuoteNumber', 'posCarrier', 'boundPremium', 'boundDate', 'authorizationDate',
   'coastDistanceMiles', 'coastExposure', 'varianceNotes', 'varianceReason', 'varianceAmount',

@@ -21,7 +21,7 @@ import { subjectTemplates } from './campaignSubject.service';
  * let Frank/Ruben pull that data back out to spot trends without cross-referencing
  * the Travelers portal by hand.
  */
-export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log' | 'already_ours';
+export type QcReportType = 'referral' | 'grade_overrides' | 'keyword' | 'roof_b' | 'type_mismatch' | 'owner_verify' | 'contact_coverage' | 'skiptrace_mismatch' | 'blast_skiptrace' | 'cohort' | 'reachability' | 'call_outcome' | 'emails_insured' | 'emails_all' | 'recapture_log' | 'already_ours' | 'co_insured_verify';
 
 export interface QcRow {
   propertyId: string;
@@ -82,6 +82,8 @@ export interface QcRow {
    * the trace happened to attach.
    */
   coInsuredName?: string | null;
+  /** The co-insured as the municipal roll writes them, for side-by-side comparison. */
+  rollCoInsured?: string | null;
   /**
    * Grade Changes report only — what the change was FOR (see gradeChangeReason.ts).
    * Lets the downgrades that a better trace could reverse be separated from the ones no
@@ -1172,6 +1174,43 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
         const row = rowOf(r, `${contact}${hasDob ? ' · DOB' : ' · no DOB'}`);
         return { ...row, hasPhone, hasEmail, hasDob, isCondo };
       });
+  }
+
+  /**
+   * The co-insured against the tax roll — the same question the insured already answers.
+   *
+   * Frank, 2 Oct 2026: verify the co-insured name against WIIP as well as the insured.
+   *
+   * The verdict is already on the card (coInsuredVerifyStatus), derived from the deed line
+   * WIIP returns for both people. This is what makes it answerable: before it, "show me
+   * every card where the co-insured disagrees with the roll" meant asking a developer.
+   *
+   * Only the three that need a person are listed. 'match' needs nobody, 'none_on_roll'
+   * and 'entity' are facts about the property rather than work — putting them in would
+   * bury 124 real disagreements inside 500 rows of nothing to do.
+   */
+  if (type === 'co_insured_verify') {
+    rows = await sql`
+      SELECT * FROM "Lead"
+       WHERE "coInsuredVerifyStatus" IN ('mismatch', 'found_on_wiip', 'partial')
+       ORDER BY CASE "coInsuredVerifyStatus"
+                  WHEN 'mismatch' THEN 1 WHEN 'found_on_wiip' THEN 2 ELSE 3 END,
+                "coInsuredVerifyAt" DESC NULLS LAST` as any[];
+    const LABEL: Record<string, string> = {
+      // States the fact, not a conclusion — see coInsuredVerify for why a confident label
+      // was wrong on three of the first four rows anybody looked at.
+      mismatch: 'Card and roll differ',
+      found_on_wiip: 'Found on WIIP — card has none',
+      partial: 'Close, not exact',
+    };
+    return rows
+      .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
+      .map((r: any) => ({
+        ...rowOf(r, r.coInsuredVerifyDetail ?? '', null, iso(r.coInsuredVerifyAt),
+          LABEL[r.coInsuredVerifyStatus] ?? r.coInsuredVerifyStatus),
+        coInsuredName: [r.owner2FirstName, r.owner2LastName].filter(Boolean).join(' ') || null,
+        rollCoInsured: r.coInsuredVerifyName ?? null,
+      }));
   }
 
   if (type === 'owner_verify') {
