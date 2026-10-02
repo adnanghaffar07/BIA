@@ -1084,10 +1084,30 @@ export async function getQcReport(type: QcReportType, params: QcReportParams = {
     //
     // Contactability is carried on every row because the cohort question is always
     // followed by "and how many can we actually email".
+    /**
+     * ── The window is applied in SQL, not after the rows arrive ──────────────
+     *
+     * This read every lead in the book — all 11,127 — with SELECT *, then threw away the
+     * ones outside the range in JavaScript. skipTraceData alone averages 2.1 KB a row, so
+     * the response grew with the book until it crossed the database's 64 MB ceiling and the
+     * report simply stopped: "Failed to run report", with the real reason only in a server
+     * log nobody reads.
+     *
+     * The window has to stay optional — an empty range still means the whole book, which is
+     * what the denominator this report provides is for — so the bounds are applied only when
+     * given. inRange still runs below and is still the authority on what a range means; this
+     * narrows the transfer rather than redefining it, so the two cannot disagree about an
+     * edge date.
+     */
     rows = await sql`
       SELECT * FROM "Lead"
       WHERE "effectiveDate" IS NOT NULL
-      ORDER BY "effectiveDate", "addressCity", "owner1LastName"`;
+        -- effectiveDate is TEXT holding ISO dates ("2026-03-25"), so it is compared as
+        -- text. ISO orders correctly that way; casting to date would be tidier and fails,
+        -- because the column is not one.
+        AND (${effFrom ?? null}::text IS NULL OR "effectiveDate" >= ${effFrom ?? null}::text)
+        AND (${effTo ?? null}::text IS NULL OR "effectiveDate" <= ${effTo ?? null}::text)
+      ORDER BY "effectiveDate", "addressCity", "owner1LastName"` as any[];
     return rows
       .filter((r: any) => inRange(iso(r.effectiveDate), effFrom, effTo))
       .map((r: any) => {

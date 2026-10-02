@@ -1,4 +1,5 @@
 import { sql } from '@/lib/neon';
+import { addActivity } from './storage.service';
 import { parseRollOwners, compareOwnerNames, type NameMatchResult } from './ownerNameMatch.service';
 
 /**
@@ -338,6 +339,41 @@ export async function applyOwnerOverrides(
       VALUES (${crypto.randomUUID()}, ${p.leadId}, ${p.role}, ${p.from.first}, ${p.from.last},
               ${p.to.first}, ${p.to.last}, ${p.rollName},
               ${p.autoApplicable ? 'applied' : 'flagged'}, ${p.reason}, ${p.nameMatch}, ${by})`;
+
+    /**
+     * ── And on the card's own timeline ───────────────────────────────────
+     *
+     * The OwnerOverride row is the audit trail, and it is in a table nobody opens. A
+     * producer looking at a lead that gained a co-insured overnight had no way to see
+     * where the name came from — it simply appeared, which is exactly how people stop
+     * trusting a field. Frank asked the same question of the blast traces in September:
+     * "would that have been noted on the activity log?"
+     *
+     * Written after the override row rather than before, so the timeline cannot show a
+     * change the audit trail has no record of. The reverse would be worse: a card
+     * claiming something happened with nothing behind it.
+     */
+    const who = p.role === 'insured' ? 'Insured' : 'Co-insured';
+    const was = `${p.from.first} ${p.from.last}`.trim();
+    const nowName = `${p.to.first} ${p.to.last}`.trim();
+    await addActivity(
+      p.leadId,
+      'owner_verify',
+      p.autoApplicable
+        ? `${who} ${was ? `changed from "${was}" to` : 'set to'} "${nowName}" `
+          + `from the municipal tax roll — roll reads "${p.rollName}"`
+        : `${who} flagged against the tax roll: ${p.reason}`,
+      {
+        source: 'wiip',
+        role: p.role,
+        from: was || null,
+        to: nowName,
+        rollName: p.rollName,
+        nameMatch: p.nameMatch,
+        applied: p.autoApplicable,
+      },
+      by,
+    );
   }
   return { applied, flagged, skipped };
 }
