@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, CircularProgress, Alert, Chip, Divider,
   Table, TableHead, TableRow, TableCell, TableBody, ToggleButton, ToggleButtonGroup,
@@ -174,19 +174,43 @@ function DailyChart({ data }: { data: Analytics['daily'] }) {
   );
 }
 
-export default function CampaignAnalyticsPanel({ campaignId }: { campaignId: string }) {
+export default function CampaignAnalyticsPanel({ campaignId, contacts, reloadKey = 0 }: {
+  campaignId: string;
+  /**
+   * The campaign's contact records, which the page already holds for its own chips.
+   * Passed in so the reply figure can be checked against them — see the reconciliation
+   * below. Omitting it simply leaves the vendor's own numbers untouched.
+   */
+  contacts?: Array<{ lastReply: string | null; lastContact: string | null }>;
+  /**
+   * Bumped by the page's Refresh button so this panel reloads along with everything else.
+   *
+   * Without it the panel only ever fetched on mount and on a range change, so Refresh
+   * updated the lead chips above while the cards below kept the numbers they were born
+   * with. A reply that arrived after the page opened showed as "1 replied" in the chip
+   * and "Reply rate 0%" in the card, and no amount of refreshing moved it.
+   */
+  reloadKey?: number;
+}) {
   const [data, setData] = useState<Analytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [range, setRange] = useState('30');
+
+  // The window is derived here rather than inside the effect because the reconciliation
+  // below has to measure contact timestamps against exactly the same bounds the figures
+  // were fetched with. Identity only changes when the range does.
+  const period = useMemo(() => {
+    const days = RANGES.find((r) => r.key === range)?.days ?? null;
+    return days ? { start: isoDaysAgo(days), end: new Date().toISOString().slice(0, 10) } : null;
+  }, [range]);
 
   // State lands in the fetch callbacks rather than synchronously in the effect body;
   // `loading` is raised by whatever triggers a reload (mount default, or the range
   // toggle) so the effect itself only subscribes to the result.
   useEffect(() => {
     let cancelled = false;
-    const days = RANGES.find((r) => r.key === range)?.days ?? null;
-    const qs = days ? `?start=${isoDaysAgo(days)}&end=${new Date().toISOString().slice(0, 10)}` : '';
+    const qs = period ? `?start=${period.start}&end=${period.end}` : '';
 
     fetch(`/api/lead-campaigns/${campaignId}/analytics${qs}`)
       .then(async (res) => {
@@ -206,7 +230,7 @@ export default function CampaignAnalyticsPanel({ campaignId }: { campaignId: str
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [campaignId, range]);
+  }, [campaignId, period, reloadKey]);
 
   const changeRange = (next: string) => {
     if (next === range) return;
@@ -229,6 +253,36 @@ export default function CampaignAnalyticsPanel({ campaignId }: { campaignId: str
   if (!data) return null;
 
   const t = data.totals;
+
+  /**
+   * The reply figure, reconciled against the contact records.
+   *
+   * The vendor keeps two sets of books. A contact's own record is written the instant a
+   * reply lands; the /campaigns/analytics/overview counters are batched and trail it by
+   * minutes. On 2 Oct a reply arrived at 18:57:23 and the aggregate still read zero
+   * afterwards, so the card said "Reply rate 0% · 0 replied" directly underneath a chip
+   * saying "1 replied" — the same event, two answers.
+   *
+   * Where the contacts show more replies than the aggregate has caught up with, the
+   * contacts win: they are the record of what actually happened. Timestamps are measured
+   * against the selected window so a reply from two months ago cannot be credited to the
+   * 7-day view, and the denominator falls back to contacts reached when the aggregate has
+   * not counted the send either — a reply over zero sends would otherwise read as a rate
+   * above 100%.
+   *
+   * When the aggregate is level with the contacts, nothing here changes its numbers.
+   */
+  const inPeriod = (ts: string | null | undefined) => (
+    !!ts && (!period || (ts.slice(0, 10) >= period.start && ts.slice(0, 10) <= period.end))
+  );
+  const liveReplies = contacts ? contacts.filter((c) => inPeriod(c.lastReply)).length : 0;
+  const liveContacted = contacts ? contacts.filter((c) => inPeriod(c.lastContact)).length : 0;
+  const replyLag = liveReplies > t.uniqueReplies;
+  const replies = replyLag ? liveReplies : t.uniqueReplies;
+  const replyDenom = replyLag ? Math.max(t.sent, liveContacted, replies) : t.sent;
+  const replyRate = replyLag
+    ? (replyDenom > 0 ? Math.round((replies / replyDenom) * 1000) / 10 : null)
+    : data.rates.reply;
 
   return (
     <Stack spacing={3}>
@@ -262,9 +316,9 @@ export default function CampaignAnalyticsPanel({ campaignId }: { campaignId: str
           muted={data.caveats.includes('link-tracking-off')}
         />
         <Metric
-          label="Reply rate" value={rate(data.rates.reply)}
-          sub={`${t.uniqueReplies.toLocaleString()} replied`}
-          tone={data.rates.reply != null && data.rates.reply > 0 ? 'good' : undefined}
+          label="Reply rate" value={rate(replyRate)}
+          sub={`${replies.toLocaleString()} replied${replyLag ? ' · platform still counting' : ''}`}
+          tone={replyRate != null && replyRate > 0 ? 'good' : undefined}
         />
         <Metric
           label="Bounce rate" value={rate(data.rates.bounce)}

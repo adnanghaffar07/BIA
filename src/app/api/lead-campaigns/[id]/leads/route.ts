@@ -40,6 +40,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       replies: l.email_reply_count ?? 0,
       clicks: l.email_click_count ?? 0,
       lastContact: l.timestamp_last_contact ?? null,
+      // When this contact last replied, which the analytics aggregate does not know yet.
+      // The contact record is written the moment a reply lands; the vendor's
+      // /campaigns/analytics/overview figures are batched and trail it by minutes. The
+      // analytics panel reconciles against this so the two cannot contradict each other.
+      lastReply: l.timestamp_last_reply ?? null,
       // Top level first; payload is the camelCase fallback.
       firstName: l.first_name ?? (l.payload as any)?.firstName ?? null,
       lastName: l.last_name ?? (l.payload as any)?.lastName ?? null,
@@ -51,6 +56,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       count: data.length,
       replied: data.filter((d) => d.replies > 0).length,
       opened: data.filter((d) => d.opens > 0).length,
+      contacted: data.filter((d) => d.lastContact).length,
       data,
     });
   } catch (err) {

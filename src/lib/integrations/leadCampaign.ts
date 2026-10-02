@@ -167,6 +167,12 @@ export type VendorLead = {
   email_reply_count?: number;
   email_click_count?: number;
   timestamp_last_contact?: string | null;
+  /**
+   * When this contact last replied. Written the moment the reply arrives, unlike the
+   * campaign analytics counters, which are batched and trail it by minutes — which is
+   * why the analytics panel reconciles against this field.
+   */
+  timestamp_last_reply?: string | null;
   payload?: Record<string, unknown>;
 };
 

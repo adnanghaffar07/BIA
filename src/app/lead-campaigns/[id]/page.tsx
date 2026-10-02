@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   Container, Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
@@ -48,7 +48,8 @@ type Detail = {
 
 type LeadRow = {
   id: string; email: string; status: number | null; opens: number; replies: number;
-  clicks: number; lastContact: string | null; firstName: string | null; lastName: string | null;
+  clicks: number; lastContact: string | null; lastReply: string | null;
+  firstName: string | null; lastName: string | null;
   propertyId: string | null;
 };
 
@@ -80,6 +81,16 @@ export default function CampaignDetailPage() {
   const [pendingTab, setPendingTab] = useState<number | null>(null);
   /** Bumped on every sequence save, so the copy check re-runs against the new copy. */
   const [copySaved, setCopySaved] = useState(0);
+  /**
+   * Bumped by every load, so the analytics panel reloads with the chips above it.
+   *
+   * The panel used to fetch only on mount and on its own range toggle, which left
+   * Refresh updating the chips and nothing else: a reply that arrived after the page
+   * opened read as "1 replied" in the chip and "0 replied" in the card below it.
+   */
+  const [reloadKey, setReloadKey] = useState(0);
+  /** The mount load must not bump that key; see the finally block in load(). */
+  const firstLoad = useRef(true);
 
   const [addOpen, setAddOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -108,6 +119,10 @@ export default function CampaignDetailPage() {
       setError(err instanceof Error ? err.message : 'Could not load the campaign');
     } finally {
       setLoading(false);
+      // Every load after the first nudges the analytics panel to reload along with us.
+      // The first one is the panel's own mount fetch, which would otherwise run twice.
+      if (firstLoad.current) firstLoad.current = false;
+      else setReloadKey((n) => n + 1);
     }
   }, [id]);
 
@@ -300,7 +315,15 @@ export default function CampaignDetailPage() {
             </Tabs>
           </Box>
 
-          {tab === TAB_ANALYTICS && <CampaignAnalyticsPanel campaignId={detail.id} />}
+          {tab === TAB_ANALYTICS && (
+            <CampaignAnalyticsPanel
+              campaignId={detail.id}
+              // The same contact records the chips above are counted from, so the card
+              // cannot report a different number of replies than the chip beside it.
+              contacts={leads}
+              reloadKey={reloadKey}
+            />
+          )}
 
           {tab === TAB_LEADS && (
             <>
